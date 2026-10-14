@@ -112,6 +112,7 @@ Parked decisions that have been settled, with the date and what follows from eac
 |---|---|---|---|
 | Minimum OS versions | Windows 10 and 11; macOS 13 Ventura or newer; Linux with WebKitGTK 4.1 (Ubuntu 22.04, Fedora 38 or newer) | 2026-10-14 | CI pins `ubuntu-22.04` and `windows-2022` and builds macOS with `MACOSX_DEPLOYMENT_TARGET=13.0`; the bundle declares macOS 13.0. GitHub has no Windows 10 or macOS 13 runners, so those two are checked by hand before a release |
 | Undo scope (APP-10) | Per photo. Each photo has its own history; Ctrl Z undoes the last change to the current photo | 2026-10-14 | The M1 `Undo` and `Redo` commands take the photo they act on. History steps are stored per photo (the catalog's History step entity already is). In M2, library actions such as ratings, flags and labels join the history of the photo they change |
+| HEVC patent position | Ship libde265 (inside a bundled libheif) on every platform, and accept the patent risk. Revisit before the first public release | 2026-10-14 | See `docs/licenses.md`, which also explains how to cut HEIC support |
 | Module state (APP-01) | Not remembered. Zoom, pan and open panels are neither kept per photo nor per module; switching modules or photos starts from the defaults | 2026-10-14 | No view-state store is needed in M1 |
 
 ## Parked decisions, with a deadline
