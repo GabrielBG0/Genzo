@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "IPC the frontend's transport module needs: invoke and events.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

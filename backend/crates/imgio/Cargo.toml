@@ -1,0 +1,16 @@
+[package]
+name = "genzo-imgio"
+description = "Decode and encode RAW, DNG, HEIC, JPEG, TIFF, PNG; read EXIF, XMP, IPTC."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+genzo-model.workspace = true
+thiserror.workspace = true

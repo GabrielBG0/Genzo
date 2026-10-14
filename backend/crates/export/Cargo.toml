@@ -1,0 +1,19 @@
+[package]
+name = "genzo-export"
+description = "Resize, output sharpening, color convert, encode, filename templates."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+genzo-model.workspace = true
+genzo-pipeline.workspace = true
+genzo-imgio.workspace = true
+genzo-color.workspace = true
+thiserror.workspace = true

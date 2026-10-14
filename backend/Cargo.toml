@@ -1,0 +1,43 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+exclude = ["fuzz"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+license = "GPL-3.0-only"
+repository = "https://github.com/GabrielBG0/Genzo"
+publish = false
+
+[workspace.dependencies]
+# Internal crates. Edges point down only:
+#   model <- color, imgio, cache, jobs, catalog
+#   imgio, color <- pipeline
+#   jobs <- ai
+#   pipeline, imgio, color <- export
+#   everything <- engine <- cli
+genzo-model = { path = "crates/model" }
+genzo-imgio = { path = "crates/imgio" }
+genzo-color = { path = "crates/color" }
+genzo-pipeline = { path = "crates/pipeline" }
+genzo-catalog = { path = "crates/catalog" }
+genzo-cache = { path = "crates/cache" }
+genzo-jobs = { path = "crates/jobs" }
+genzo-ai = { path = "crates/ai" }
+genzo-export = { path = "crates/export" }
+genzo-engine = { path = "crates/engine" }
+
+# External crates. Each one is listed in docs/licenses.md and allowed by deny.toml.
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+ts-rs = { version = "12", features = ["serde-compat"] }
+thiserror = "2"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }

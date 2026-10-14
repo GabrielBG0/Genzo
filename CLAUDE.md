@@ -6,7 +6,7 @@ Guidance for Claude Code when working in this repository.
 
 Genzo is a free desktop photo editor modeled on Lightroom Classic: Rust backend, Tauri 2 shell, Svelte 5 + TypeScript frontend. License: GPL-3.0.
 
-The repo is in the planning stage. Before starting work, read [docs/development-plan.md](docs/development-plan.md) to find the current milestone and its steps.
+The repo is in milestone M0. Before starting work, read [docs/development-plan.md](docs/development-plan.md) to find the current milestone and its steps.
 
 ## Sources of truth, in order
 
@@ -24,8 +24,11 @@ backend/    Cargo workspace, zero UI dependencies
 contract/   generated API schema and TypeScript types (generated, checked in)
 shell/      thin Tauri adapter in Rust, maps the engine API to IPC
 frontend/   Svelte 5 + TypeScript (strict) app, built with Vite
-docs/       plan, UI handoff, feature list
+docs/       plan, UI handoff, feature list, license review
+scripts/    CI checks (architecture rules)
 ```
+
+Contract workflow: change the Rust types in `backend/crates/model`, bump `CONTRACT_VERSION`, then run `cargo run -p genzo-cli -- contract write` in `backend/`. The frontend imports the result as `$contract/genzo`.
 
 ## Architecture rules (enforced in CI)
 

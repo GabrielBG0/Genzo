@@ -1,0 +1,29 @@
+/** Stroke icons from the UI handoff, 24×24 view box, drawn with currentColor. */
+export const ICONS = {
+  logo: 'M12 3l3.5 6M21 12h-7M16.5 19.5L13 13.5M7.5 19.5L11 13.5M3 12h7M7.5 4.5L11 10.5',
+  undo: 'M9 14L4 9l5-5M4 9h10a6 6 0 0 1 0 12h-3',
+  redo: 'M15 14l5-5-5-5M20 9H10a6 6 0 0 0 0 12h3',
+  copy: 'M9 9h10v10H9zM5 15V5h10',
+  paste: 'M9 3h6v3H9zM6 5h12v15H6z',
+  beforeAfter: 'M3 5h18v14H3zM12 5v14',
+  reset: 'M4 12a8 8 0 1 0 2.5-5.8M4 4v4h4',
+  export: 'M12 15V4M8 8l4-4 4 4M5 20h14',
+  import: 'M12 4v11M8 11l4 4 4-4M5 20h14',
+  search: 'M11 5a6 6 0 1 0 0 12a6 6 0 1 0 0-12zM20 20l-4.5-4.5',
+  chevronDown: 'M6 9l6 6 6-6',
+  chevronRight: 'M9 6l6 6-6 6',
+  edit: 'M4 7h10M18 7h2M4 17h4M12 17h8M16 5v4M10 15v4',
+  crop: 'M7 3v14h14M3 7h14v14',
+  remove: 'M5 15l10-10 4 4-10 10zM10 10l4 4',
+  masking: 'M12 4a8 8 0 1 0 0 16a8 8 0 1 0 0-16zM12 4v16',
+  star: 'M12 4l2.4 5 5.4.6-4 3.7 1.1 5.3L12 16l-4.9 2.6 1.1-5.3-4-3.7 5.4-.6z',
+  clock: 'M12 8v4l3 2M12 4a8 8 0 1 0 0 16a8 8 0 1 0 0-16z',
+  folder: 'M3 7a1 1 0 0 1 1-1h5l2 2h9a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z',
+  collection: 'M3 8h18v11H3zM6 5h12',
+  collectionSet: 'M4 7h16v12H4zM7 4h10',
+  smart: 'M4 5h16l-6 7v6l-4 2v-8z',
+  photos: 'M4 5h16v14H4zM4 10h16',
+  drive: 'M4 5h16v14H4zM4 10h16',
+} as const;
+
+export type IconName = keyof typeof ICONS;
