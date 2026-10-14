@@ -1,0 +1,16 @@
+[package]
+name = "genzo-ai"
+description = "On-device ONNX inference for masks and denoise. Models downloaded on demand."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+genzo-model.workspace = true
+genzo-jobs.workspace = true

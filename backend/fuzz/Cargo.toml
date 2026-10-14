@@ -1,0 +1,26 @@
+# cargo-fuzz targets for the decoders in genzo-imgio. Needs nightly:
+#   cargo +nightly fuzz run sniff
+# Every new decoder gets a target here.
+
+[package]
+name = "genzo-fuzz"
+version = "0.0.0"
+edition = "2024"
+license = "GPL-3.0-only"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+genzo-imgio = { path = "../crates/imgio" }
+
+[[bin]]
+name = "sniff"
+path = "fuzz_targets/sniff.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]

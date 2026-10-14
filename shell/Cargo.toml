@@ -1,0 +1,32 @@
+# The Tauri shell: a thin adapter that maps the engine API to IPC.
+# It is its own workspace so that `cargo metadata` in backend/ never sees Tauri.
+# Rule: no business logic here. If it needs an if-statement about photos, that
+# code belongs in genzo-engine.
+
+[package]
+name = "genzo-shell"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.90"
+license = "GPL-3.0-only"
+repository = "https://github.com/GabrielBG0/Genzo"
+publish = false
+
+[[bin]]
+name = "genzo"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2.7", features = [] }
+serde_json = "1"
+
+[dependencies]
+genzo-engine = { path = "../backend/crates/engine" }
+tauri = { version = "2.12", features = [] }
+serde_json = "1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
+[workspace]

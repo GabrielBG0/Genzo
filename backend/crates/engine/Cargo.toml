@@ -1,0 +1,25 @@
+[package]
+name = "genzo-engine"
+description = "Service layer and the backend's only public face: commands, queries, events, frames."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+genzo-model.workspace = true
+genzo-imgio.workspace = true
+genzo-color.workspace = true
+genzo-pipeline.workspace = true
+genzo-catalog.workspace = true
+genzo-cache.workspace = true
+genzo-jobs.workspace = true
+genzo-ai.workspace = true
+genzo-export.workspace = true
+thiserror.workspace = true
+serde_json.workspace = true

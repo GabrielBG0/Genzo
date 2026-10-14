@@ -1,0 +1,18 @@
+[package]
+name = "genzo-pipeline"
+description = "Edit graph, WGSL shaders, tile scheduler. One pipeline serves preview and export."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+genzo-model.workspace = true
+genzo-color.workspace = true
+genzo-imgio.workspace = true
+thiserror.workspace = true

@@ -1,0 +1,136 @@
+/*
+ * Carbon Glass design tokens, ported from docs/UI/fixer-ui-handoff.html
+ * (Design system tab). This is the only file allowed to spell out a color;
+ * stylelint and scripts/check-colors.mjs enforce that.
+ *
+ * Names follow the handoff: `text.strong` becomes `--text-strong`, and so on.
+ * A light theme (APP-12, M5) will be a second block under
+ * :root[data-theme='light'] that redefines the same names.
+ */
+:root {
+  color-scheme: dark;
+
+  /* Color */
+  --bg: #121212;
+  --dialog: #161616;
+  --dialog-raised: #1a1a1a;
+  --text-strong: #f0f0f0;
+  --text-body: #d0d0d0;
+  --text-secondary: #9c9c9c;
+  --text-secondary-alt: #a6a6a6;
+  --text-muted: #8e8e8e;
+  --text-dim: #707070;
+  --text-on-lens: #ffffff;
+  --text-on-lens-hint: #b5b5b5;
+  --line: rgba(255, 255, 255, 0.08);
+  --divider: rgba(255, 255, 255, 0.06);
+  --field: rgba(255, 255, 255, 0.1);
+  --separator: rgba(255, 255, 255, 0.14);
+  --accent: #5b9dff;
+  --accent-soft: #9cc3ff;
+  --rating: #ffd27a;
+  --rating-empty: #3a3a3a;
+  --label-red: #ff6b6b;
+  --label-yellow: #ffd25a;
+  --label-green: #5fd38a;
+  --label-blue: #5b9dff;
+  --label-purple: #b98cff;
+  --mask-overlay: rgba(255, 59, 107, 0.42);
+  --danger: #ff8a8a;
+  --marker-inactive: #6b6b6b;
+  --clip-off: #3a3a3a;
+  --clip-shadow: var(--label-blue);
+  --clip-highlight: var(--label-red);
+  --hist-red: var(--label-red);
+  --hist-green: var(--label-green);
+  --hist-blue: var(--accent);
+  --thumb-index: rgba(255, 255, 255, 0.6);
+  --selection-ring: #ffffff;
+  --photo-backdrop: #0d111d;
+
+  /* Wells and troughs: recessed areas behind segmented controls and graphs */
+  --trough: rgba(0, 0, 0, 0.28);
+  --trough-soft: rgba(0, 0, 0, 0.25);
+  --well: rgba(0, 0, 0, 0.35);
+  --well-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.4);
+  --scrim: rgba(0, 0, 0, 0.25);
+  --cell-bg: rgba(255, 255, 255, 0.025);
+  --cell-border: rgba(255, 255, 255, 0.05);
+  --hover: rgba(255, 255, 255, 0.05);
+  --badge-bg: rgba(0, 0, 0, 0.55);
+
+  /* Selected grid cell: a softer Lens */
+  --cell-selected-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.13), rgba(255, 255, 255, 0.05));
+  --cell-selected-border-color: rgba(255, 255, 255, 0.18);
+  --cell-selected-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.3), 0 2px 8px rgba(0, 0, 0, 0.3);
+
+  /* Surface: Pane (flat). Every panel. No blur. */
+  --pane-bg: var(--bg);
+  --pane-border: 1px solid var(--line);
+  --pane-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07);
+
+  /* Surface: Lens (selection). Gradient and border, no blur. */
+  --lens-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.16), rgba(255, 255, 255, 0.07));
+  --lens-border-color: rgba(255, 255, 255, 0.16);
+  --lens-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.32), 0 2px 6px rgba(0, 0, 0, 0.25);
+  --lens-shadow-flat: inset 0 1px 0 rgba(255, 255, 255, 0.32);
+
+  /* Surface: Overlay (over the photo). Flat, near-opaque, NO backdrop blur (spec). */
+  --overlay-bg: rgba(22, 23, 30, 0.92);
+  --overlay-border-color: rgba(255, 255, 255, 0.16);
+  --overlay-shadow: inset 0 1px 0.5px rgba(255, 255, 255, 0.45), 0 12px 30px rgba(0, 0, 0, 0.35);
+
+  /* Menus and dialogs */
+  --menu-border-color: var(--field);
+  --menu-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07), 0 18px 48px rgba(0, 0, 0, 0.6);
+
+  /* Surface: Slider */
+  --slider-track: rgba(255, 255, 255, 0.12);
+  --slider-fill: var(--accent);
+  --slider-handle-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(220, 222, 228, 0.82));
+  --slider-handle-border-color: rgba(255, 255, 255, 0.6);
+  --slider-handle-shadow:
+    inset 0 1px 0 #ffffff, inset 0 -1px 1px rgba(0, 0, 0, 0.18), 0 1px 4px rgba(0, 0, 0, 0.5);
+  --track-temp: linear-gradient(90deg, #5b8cff, #d8d8d8 50%, #ffc35a);
+  --track-tint: linear-gradient(90deg, #5fd38a, #d8d8d8 50%, #ff6bd5);
+  --history-glow: 0 0 6px var(--accent);
+  --thumb-lift: 0 6px 18px rgba(0, 0, 0, 0.5);
+
+  /* Type */
+  --font-ui: 'Public Sans', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
+  --text-base: 12.5px;
+  --text-small: 11.5px;
+  --text-caption: 11px;
+  --text-mono: 11px;
+  --text-mono-small: 10.5px;
+  --text-dialog-title: 15px;
+  --header-tracking: 0.06em;
+
+  /* Layout and sizes */
+  --gap: 6px;
+  --pad: 6px;
+  --topbar-h: 44px;
+  --left-w: 252px;
+  --right-w: 304px;
+  --filmstrip-h: 90px;
+  --statusbar-h: 22px;
+  --row-slider: 22px;
+  --row-header: 28px;
+  --row-menu: 28px;
+  --row-list: 24px;
+  --slider-label-w: 76px;
+  --slider-value-w: 42px;
+
+  /* Radii */
+  --r-pane: 12px;
+  --r-menu: 12px;
+  --r-menu-item: 8px;
+  --r-dialog: 18px;
+  --r-photo: 10px;
+  --r-thumb: 7px;
+  --r-pill: 99px;
+
+  /* Motion */
+  --t-fast: 80ms;
+}

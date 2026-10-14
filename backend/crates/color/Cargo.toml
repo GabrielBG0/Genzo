@@ -1,0 +1,15 @@
+[package]
+name = "genzo-color"
+description = "Camera to working-space matrices, ICC profiles, display transform, CPU reference math."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+genzo-model.workspace = true

@@ -1,0 +1,61 @@
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text-body);
+  font-family: var(--font-ui);
+  font-size: var(--text-base);
+  line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+#app {
+  height: 100%;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+
+/* Shared surfaces, so components do not repeat the token recipes. */
+.pane {
+  background: var(--pane-bg);
+  border: var(--pane-border);
+  box-shadow: var(--pane-shadow);
+  border-radius: var(--r-pane);
+}
+
+.lens {
+  background: var(--lens-bg);
+  border: 1px solid var(--lens-border-color);
+  box-shadow: var(--lens-shadow);
+  color: var(--text-on-lens);
+}
+
+.overlay {
+  background: var(--overlay-bg);
+  border: 1px solid var(--overlay-border-color);
+  box-shadow: var(--overlay-shadow);
+}
