@@ -8,9 +8,12 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
+  MACOSX_DEPLOYMENT_TARGET: "13.0"
 
-# TODO(M0, parked decision "Minimum OS versions"): pin the runner images to the
-# oldest supported Windows, macOS and Linux (WebKitGTK 4.1 baseline) once decided.
+# Minimum OS versions (docs/development-plan.md, Decided): Windows 10 and 11,
+# macOS 13, Linux with WebKitGTK 4.1 (Ubuntu 22.04). Builds run on the oldest
+# runner images GitHub offers; there are no Windows 10 or macOS 13 runners, so
+# macOS builds target 13.0 and those two OSes are checked by hand.
 
 jobs:
   backend:
@@ -19,7 +22,7 @@ jobs:
       fail-fast: false
       matrix:
         # macos-15 is Apple silicon, macos-15-intel is Intel.
-        os: [ubuntu-latest, windows-latest, macos-15, macos-15-intel]
+        os: [ubuntu-22.04, windows-2022, macos-15, macos-15-intel]
     runs-on: ${{ matrix.os }}
     defaults:
       run:
@@ -93,7 +96,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-15]
+        os: [ubuntu-22.04, windows-2022, macos-15]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
