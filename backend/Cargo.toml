@@ -13,13 +13,16 @@ publish = false
 
 [workspace.dependencies]
 # Internal crates. Edges point down only:
+#   heif <- imgio (optional, the `heic` feature)
 #   model <- color, imgio, cache, jobs, catalog
 #   imgio, color <- pipeline
 #   jobs <- ai
 #   pipeline, imgio, color <- export
 #   everything <- engine <- cli
 genzo-model = { path = "crates/model" }
-genzo-imgio = { path = "crates/imgio" }
+# Without default features, so only the engine decides whether HEIC is built in.
+genzo-imgio = { path = "crates/imgio", default-features = false }
+genzo-heif = { path = "crates/heif" }
 genzo-color = { path = "crates/color" }
 genzo-pipeline = { path = "crates/pipeline" }
 genzo-catalog = { path = "crates/catalog" }

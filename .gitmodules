@@ -1,0 +1,6 @@
+[submodule "backend/crates/heif/vendor/libde265"]
+	path = backend/crates/heif/vendor/libde265
+	url = https://github.com/strukturag/libde265.git
+[submodule "backend/crates/heif/vendor/libheif"]
+	path = backend/crates/heif/vendor/libheif
+	url = https://github.com/strukturag/libheif.git

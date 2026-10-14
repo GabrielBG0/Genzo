@@ -17,6 +17,7 @@ use genzo_model::contract::ContractVersion;
 use genzo_model::frame::{Rect, TILE_SIZE, TileHeader};
 
 pub mod contract;
+pub mod files;
 
 /// The contract types, re-exported for the shell and the cli.
 pub mod api {
@@ -38,6 +39,16 @@ const KEPT_FRAMES: usize = 4;
 pub enum EngineError {
     #[error("invalid size {width}×{height}")]
     InvalidSize { width: u32, height: u32 },
+    #[error("{0}")]
+    Io(String),
+    #[error("{0}")]
+    Decode(String),
+}
+
+impl EngineError {
+    fn decode(e: genzo_imgio::DecodeError) -> Self {
+        Self::Decode(e.to_string())
+    }
 }
 
 /// One engine instance. Thread-safe; the shell keeps one for the app's

@@ -4,6 +4,7 @@
 1. No backend crate depends (even transitively) on Tauri, a webview or a UI toolkit.
 2. Backend crates depend only on crates in lower layers.
 3. The cli and the shell reach the backend through genzo-engine alone.
+   Only genzo-imgio may use genzo-heif, the crate with the native code.
 4. The shell stays thin: a line budget on its Rust sources.
 
 Run from anywhere: python3 scripts/check-architecture.py
@@ -24,7 +25,8 @@ FORBIDDEN = {
 
 # Layers, bottom to top. A crate may depend only on crates in lower layers.
 LAYERS = [
-    {"genzo-model"},
+    # genzo-heif wraps the bundled libheif; it is the only crate with unsafe code.
+    {"genzo-model", "genzo-heif"},
     {"genzo-imgio", "genzo-color", "genzo-cache", "genzo-jobs", "genzo-catalog"},
     {"genzo-pipeline", "genzo-ai"},
     {"genzo-export"},
@@ -63,6 +65,9 @@ def main() -> int:
                 continue
             if LAYER_OF.get(dep["name"], 99) >= LAYER_OF[name]:
                 errors.append(f"{name} depends on {dep['name']}, which is not in a lower layer")
+        uses_heif = any(d["name"] == "genzo-heif" for d in pkg["dependencies"])
+        if uses_heif and name != "genzo-imgio":
+            errors.append(f"{name} uses genzo-heif directly; only genzo-imgio may")
         if name == "genzo-cli":
             internal = {d["name"] for d in pkg["dependencies"] if d["name"].startswith("genzo-")}
             if internal != {"genzo-engine"}:

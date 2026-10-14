@@ -9,6 +9,7 @@ env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
   MACOSX_DEPLOYMENT_TARGET: "13.0"
+# libheif and libde265 are git submodules, built with CMake (present on all runners).
 
 # Minimum OS versions (docs/development-plan.md, Decided): Windows 10 and 11,
 # macOS 13, Linux with WebKitGTK 4.1 (Ubuntu 22.04). Builds run on the oldest
@@ -29,6 +30,8 @@ jobs:
         working-directory: backend
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -40,6 +43,11 @@ jobs:
       - run: cargo test --locked
       # The snapshot test covers this too; the cli check gives a clearer message.
       - run: cargo run --locked -q -p genzo-cli -- contract check
+      # HEIC can be cut; keep the build without it compiling.
+      - if: runner.os == 'Linux'
+        run: |
+          cargo check --locked -p genzo-engine --no-default-features
+          cargo test --locked -p genzo-imgio --no-default-features
       # TODO(0.D): GPU golden-image tests on lavapipe (mesa-vulkan-drivers) on every push,
       # real GPUs nightly. No GPU code exists yet.
       # TODO(0.A step 9): compare `genzo-cli bench` p95 against stored baselines and fail
@@ -100,6 +108,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
       - if: runner.os == 'Linux'
         run: |
           sudo apt-get update

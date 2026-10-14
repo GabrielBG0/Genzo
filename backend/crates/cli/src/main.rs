@@ -8,7 +8,7 @@ use std::process::ExitCode;
 use std::time::Instant;
 
 use genzo_engine::api::{Command, Event, PixelFormat};
-use genzo_engine::{Engine, contract};
+use genzo_engine::{Engine, contract, files};
 
 const USAGE: &str = "\
 usage: genzo-cli <command>
@@ -18,7 +18,9 @@ commands:
   info                         print engine info as JSON
   contract write [DIR]         regenerate contract/ (refuses without a version bump)
   contract check [DIR]         fail if contract/ is stale
+  inspect FILE                 decode a file, print what it holds and how long it took
   bench test-pattern [W H N]   render N test-pattern frames of W×H, print p50/p95
+  bench decode FILE [T N]      decode FILE N times with T threads, print p50/p95
 ";
 
 fn default_contract_dir() -> PathBuf {
@@ -70,7 +72,16 @@ fn main() -> ExitCode {
                 .map(|()| println!("contract up to date"))
                 .map_err(|e| e.to_string())
         }
+        ["inspect", file] => files::inspect(file.as_ref())
+            .map(|r| {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&r).expect("serializable")
+                )
+            })
+            .map_err(|e| e.to_string()),
         ["bench", "test-pattern", rest @ ..] => bench_test_pattern(rest),
+        ["bench", "decode", file, rest @ ..] => bench_decode(file, rest),
         _ => Err(USAGE.to_owned()),
     };
     match result {
@@ -80,6 +91,28 @@ fn main() -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+fn parse_num(args: &[&str], i: usize, default: u32) -> Result<u32, String> {
+    args.get(i).map_or(Ok(default), |s| {
+        s.parse().map_err(|_| format!("not a number: {s}"))
+    })
+}
+
+fn percentiles(mut times: Vec<f64>) -> (f64, f64) {
+    times.sort_by(f64::total_cmp);
+    let pct = |p: f64| times[((times.len() - 1) as f64 * p).round() as usize];
+    (pct(0.5), pct(0.95))
+}
+
+/// Full-image decode time for one file, with a given number of decode threads.
+fn bench_decode(file: &str, args: &[&str]) -> Result<(), String> {
+    let threads = parse_num(args, 0, 4)?.clamp(1, 64) as u8;
+    let n = parse_num(args, 1, 10)?.max(1);
+    let times = files::time_decode(file.as_ref(), threads, n).map_err(|e| e.to_string())?;
+    let (p50, p95) = percentiles(times);
+    println!("decode {file}, {threads} threads, {n} runs: p50 {p50:.2} ms, p95 {p95:.2} ms");
+    Ok(())
 }
 
 /// Engine-side cost of one frame: render plus tile encoding. The end-to-end
@@ -110,12 +143,7 @@ fn bench_test_pattern(args: &[&str]) -> Result<(), String> {
         std::hint::black_box(bytes);
         times.push(started.elapsed().as_secs_f64() * 1000.0);
     }
-    times.sort_by(f64::total_cmp);
-    let pct = |p: f64| times[((times.len() - 1) as f64 * p).round() as usize];
-    println!(
-        "test-pattern {width}x{height}, {n} frames: p50 {:.2} ms, p95 {:.2} ms",
-        pct(0.5),
-        pct(0.95)
-    );
+    let (p50, p95) = percentiles(times);
+    println!("test-pattern {width}x{height}, {n} frames: p50 {p50:.2} ms, p95 {p95:.2} ms");
     Ok(())
 }

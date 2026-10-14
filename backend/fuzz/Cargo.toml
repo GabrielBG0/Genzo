@@ -24,3 +24,15 @@ doc = false
 bench = false
 
 [workspace]
+
+# The HEIC decoder: genzo-heif, libheif and libde265. For coverage inside the
+# C code, build them instrumented, e.g.
+#   CFLAGS=-fsanitize=fuzzer-no-link CXXFLAGS=-fsanitize=fuzzer-no-link \
+#     cargo +nightly fuzz run heic_decode
+# Without that, libFuzzer only sees the Rust side and finds shallow crashes.
+[[bin]]
+name = "heic_decode"
+path = "fuzz_targets/heic_decode.rs"
+test = false
+doc = false
+bench = false
