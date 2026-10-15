@@ -125,6 +125,7 @@ Gaps that matter for the pipeline:
 - ProRAW and Samsung DNG are already linear RGB, so the pipeline needs an input path that skips the demosaic.
 - White and black levels are per channel or per CFA position (36 entries for X-Trans). The pipeline must take them as arrays, not scalars.
 - The 4th WB coefficient is NaN on every body. Treat only the first three as valid.
+- **iPhone 16 Pro ProRAW fails in rawler 0.8.0.** The owner's file `IPhone16proRaw.DNG` (28.6 MB, sha256 `97f76203...b5b378`, 12 MP by size) panics inside rawler after 8 s ("index out of bounds: the len is 1024 but the index is 1024"; rawler catches it and returns an error). The iPhone 12 Pro file decodes, so the newer ProRAW encoding is the likely cause. This is the main ProRAW risk: we may need our own DNG reader for Apple files or a rawler fix upstream.
 - Nikon HE is the one mainstream gap. Whether LibRaw can read it is step 3 and is not checked yet.
 
 
