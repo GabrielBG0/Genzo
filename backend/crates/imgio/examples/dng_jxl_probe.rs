@@ -137,6 +137,38 @@ fn main() {
     );
     assert_eq!(offsets.len(), tx * ty);
 
+    // DNG LinearizationTable: stored value -> linear 16-bit. Values past the end of the
+    // table use its last entry (this file stores up to 1029 with a 1024-entry table).
+    let table: Vec<u16> = get(&raw, 50712)
+        .map(|e| tiff.values(e).into_iter().map(|v| v as u16).collect())
+        .unwrap_or_default();
+    let (black, white) = (
+        get(&raw, 50714).map(|e| tiff.values(e)),
+        get(&raw, 50717).map(|e| tiff.values(e)),
+    );
+    println!(
+        "linearization table: {} entries, black {black:?}, white {white:?}",
+        table.len()
+    );
+    println!(
+        "ifd0: ColorMatrix1 {} ColorMatrix2 {} AsShotNeutral {} BaselineExposure {} ForwardMatrix1 {} | OpcodeList1/2/3: {}/{}/{} (ifd0 or raw ifd)",
+        get(&ifd0, 50721).is_some(),
+        get(&ifd0, 50722).is_some(),
+        get(&ifd0, 50728).is_some(),
+        get(&ifd0, 50730).is_some(),
+        get(&ifd0, 50964).is_some(),
+        [51008]
+            .iter()
+            .any(|&t| get(&ifd0, t).is_some() || get(&raw, t).is_some()),
+        [51009]
+            .iter()
+            .any(|&t| get(&ifd0, t).is_some() || get(&raw, t).is_some()),
+        [51022]
+            .iter()
+            .any(|&t| get(&ifd0, t).is_some() || get(&raw, t).is_some()),
+    );
+    let mut clamped = 0u64;
+
     const SHRINK: usize = 8;
     let (mw, mh) = (w.div_ceil(SHRINK), h.div_ceil(SHRINK));
     let mut full = if mode == "full" {
@@ -154,6 +186,12 @@ fn main() {
         let image = JxlImage::builder().read(bytes).expect("jxl header");
         let render = image.render_frame(0).expect("jxl render");
         let mut stream = render.stream_no_alpha();
+        if i == 0 {
+            println!(
+                "jxl bit depth {}",
+                image.image_header().metadata.bit_depth.bits_per_sample()
+            );
+        }
         let (sw, sh, ch) = (
             stream.width() as usize,
             stream.height() as usize,
@@ -165,7 +203,15 @@ fn main() {
         let (x0, y0) = ((i % tx) * tw, (i / tx) * th);
         for y in 0..sh {
             for x in 0..sw {
-                let px = &buf[(y * sw + x) * ch..][..ch];
+                let mut px = [0u16; 3];
+                px[..ch].copy_from_slice(&buf[(y * sw + x) * ch..][..ch]);
+                if !table.is_empty() {
+                    for v in &mut px[..ch] {
+                        clamped += u64::from(usize::from(*v) >= table.len());
+                        *v = table[usize::from(*v).min(table.len() - 1)];
+                    }
+                }
+                let px = &px[..ch];
                 if mode == "full" {
                     full[((y0 + y) * w + x0 + x) * spp..][..spp].copy_from_slice(px);
                 }
@@ -176,7 +222,7 @@ fn main() {
                 mip_n[m] += 1;
             }
         }
-        if i == 0 {
+        {
             let (mn, mx) = buf
                 .iter()
                 .fold((u16::MAX, 0), |(a, b), &v| (a.min(v), b.max(v)));
@@ -186,6 +232,7 @@ fn main() {
             );
         }
     }
+    println!("samples past the end of the table (clamped): {clamped}");
     println!("decoded {} tiles in {:?}", offsets.len(), started.elapsed());
 
     let mean = |c: usize| {

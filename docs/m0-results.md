@@ -140,8 +140,9 @@ Gaps that matter for the pipeline:
 
 - The format is no obstacle. Tiles decode in about 145 ms each; running them in parallel on rayon should cut the 1.8 s a lot. Not measured yet.
 - Streaming tile by tile saves 280 MiB at 48 MP. The 164 MiB peak is the whole file read into memory (28.6 MB) plus decoder working space, and could be lower with a memory-mapped or streamed read.
-- **Sample values only reach 32..536** although the file declares 16 bits. The raw IFD has a **LinearizationTable with 1024 entries** (tag 50712), so the decoded values are table indices, not linear light. The table must be applied before any math. This is probably what rawler tripped on: rawler panics with an index of 1024 into a table of 1024, so a value of 1024 or more reaches it.
-- Still to do for the real DNG path: apply the table, read BlackLevel, WhiteLevel, ColorMatrix, AsShotNeutral and BaselineExposure, and parse the opcode lists (OpcodeList2 GainMap matters for lens shading).
+- **LinearizationTable.** Stored sample values are indices into a 1024-entry table (tag 50712) that maps to linear 16-bit (0 to 65535, WhiteLevel 65535, BlackLevel 0). The decoded values run from 8 to 1029, so **3 samples in the whole 48 MP image fall past the end of the table**. The DNG spec has no rule for that, and clamping to the last entry is the safe choice. This explains the rawler panic: it indexes the table without clamping. With the table applied the mean linear value is about 3900 to 4700 of 65535 per channel (a dark, not yet exposure-corrected image).
+- **Tags this file carries:** ColorMatrix1 and 2, AsShotNeutral 1,1,1 (ProRAW is already white balanced in the camera, so no WB gain is needed), BaselineExposure +0.51 EV, NoiseProfile, DefaultBlackRender. No ForwardMatrix and **no opcode lists** in this file, so the iPhone 16 Pro needs no GainMap or warp opcode handling. Opcode lists still matter for other DNGs (Samsung, Pixel), not tested.
+- Still to do for the real DNG path: parse opcode lists for the files that have them, and the ProfileGainTableMap reader (kept but off by default, see below).
 
 ### Prior art: LightCraft and PhotoCraft (read 2026-10-15)
 
