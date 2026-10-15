@@ -12,6 +12,7 @@ repository = "https://github.com/GabrielBG0/Genzo"
 publish = false
 
 [workspace.dependencies]
+rawler = { version = "=0.8.0", default-features = false }
 # Internal crates. Edges point down only:
 #   heif <- imgio (optional, the `heic` feature)
 #   model <- color, imgio, cache, jobs, catalog

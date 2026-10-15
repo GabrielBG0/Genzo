@@ -17,8 +17,15 @@ default = ["heic"]
 # HEVC). Turning this off removes all native image code from the build; see
 # docs/licenses.md for how to cut HEIC support completely.
 heic = ["dep:genzo-heif"]
+# RAW and DNG decoding through rawler (LGPL-2.1, pure Rust). 0.C spike.
+raw = ["dep:rawler"]
 
 [dependencies]
 genzo-model.workspace = true
 genzo-heif = { workspace = true, optional = true }
+rawler = { workspace = true, optional = true }
 thiserror.workspace = true
+
+[[example]]
+name = "raw_gap_report"
+required-features = ["raw"]

@@ -99,7 +99,34 @@ The criterion benchmark (`cargo bench -p genzo-pipeline --bench spike`, 12 MP, R
 
 ## 0.C ProRAW and RAW decode
 
-Not started. ProRAW files are to be provided by the project owner. Adobe DNG Converter is to be installed for the reference renders.
+In progress (step 2 partly done). Steps 3 to 7 are still open.
+
+### Corpus
+
+`python scripts/fetch-raw-corpus.py` downloads one file per camera body from raw.pixls.us into the gitignored `corpus/raw/` and checks it against `corpus/manifest.json` (sha256). 17 bodies from 13 makers, plus the Z 9 twice (lossless and High Efficiency) and an iPhone 12 Pro ProRAW. There are no 48 MP ProRAW files yet; the owner is adding their own under `corpus/proraw/`.
+
+### rawler 0.8.0 gap report (step 2)
+
+`cargo run -p genzo-imgio --features raw --example raw_gap_report -- ../corpus` (debug build, so times are pessimistic).
+
+**Decodes: 16 of 18 files**, with white and black levels, a camera matrix (D65 and A, or D50 for Leica) and white balance present in all but one. The exception is the Kodak DCS760C, which has no WB coefficients.
+
+| Result | Files |
+|---|---|
+| Fails: Nikon High Efficiency NEF ("compression HighEfficency is not supported") | Z 8, Z 9 HE |
+| Fails: GoPro GPR ("Unsupported DNG compression", probably VC-5) | HERO6 Black |
+| Decodes, LinearRaw (cpp 3, no demosaic) | iPhone 12 Pro ProRAW, Galaxy S23 Ultra DNG |
+| Decodes, X-Trans (6x6 CFA) | Fujifilm X-T5 |
+| Decodes, Bayer | everything else, including Canon R5m2 CR3 (C-RAW), Sony 7RM5 lossless ARW, GFX100S, Hasselblad 3FR, Phase One IIQ (9 s, slowest) |
+
+Gaps that matter for the pipeline:
+
+- `dng_tags` is empty for every DNG, so rawler does not surface OpcodeList1 to 3 or ProfileGainTableMap in a usable form. We need our own TIFF tag reader for those (iPhone and Samsung files carry them).
+- ProRAW and Samsung DNG are already linear RGB, so the pipeline needs an input path that skips the demosaic.
+- White and black levels are per channel or per CFA position (36 entries for X-Trans). The pipeline must take them as arrays, not scalars.
+- The 4th WB coefficient is NaN on every body. Treat only the first three as valid.
+- Nikon HE is the one mainstream gap. Whether LibRaw can read it is step 3 and is not checked yet.
+
 
 ## 0.E Pixels through the webview
 
