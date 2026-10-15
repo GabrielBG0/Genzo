@@ -36,6 +36,7 @@ Signed off 2026-10-14. Each crate is added to `Cargo.toml` when its spike starts
 | Dependency | Version | Use | License (read upstream) | Notes |
 |---|---|---|---|---|
 | rawler | 0.8.0 | RAW and DNG decode (0.C) | LGPL-2.1-only | `LICENSE` in dnglab is the LGPL-2.1 text, and `rawler/Cargo.toml` declares `LGPL-2.1`. The sources carry no "or later" header, so we treat it as 2.1 only. That is still compatible: LGPL-2.1 section 3 lets the recipient apply the GPL instead, and the FSF lists LGPL-2.1 as compatible with GPL-3.0. Pure Rust, with no `-sys` crates and no C build. Static linking into a GPL-3.0 app with full source shipped meets the LGPL. Allowed in `deny.toml` for this crate only |
+| jxl-oxide | 0.12.6 | JPEG XL decode for DNG 1.7 tiles (0.C) | MIT OR Apache-2.0 | Registry metadata. Pure Rust. Pinned exactly because it parses untrusted files. `cargo deny check licenses bans` passes with it added (2026-10-15) |
 | moxcms | 0.9.1 | ICC transforms (0.D, M1) | BSD-3-Clause OR Apache-2.0 | Chosen over lcms2 (2026-10-14): pure Rust, with no C build or FFI. Its one non-dev dependency, pxfm, has the same license |
 
 ## Candidates for later milestones

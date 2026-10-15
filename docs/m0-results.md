@@ -129,6 +129,20 @@ Gaps that matter for the pipeline:
 - Nikon HE is the one mainstream gap. Whether LibRaw can read it is step 3 and is not checked yet.
 
 
+### JPEG XL ProRAW prototype (iPhone 16 Pro, 48 MP)
+
+`cargo run --release -p genzo-imgio --features raw --example dng_jxl_probe -- FILE [full|mip]`. A small TIFF reader finds the raw SubIFD and its 12 tiles of 2016x2016 (4x3 grid), and `jxl-oxide` 0.12.6 decodes each tile. Release build, tiles decoded one after another.
+
+| | Decode time, 48 MP | Peak memory |
+|---|---|---|
+| `full`: assemble the whole image as u16 (279 MiB) | 1.84 s | 445 MiB |
+| `mip`: box-filter each tile to 1/8 size and drop it | 1.77 s | 164 MiB |
+
+- The format is no obstacle. Tiles decode in about 145 ms each; running them in parallel on rayon should cut the 1.8 s a lot. Not measured yet.
+- Streaming tile by tile saves 280 MiB at 48 MP. The 164 MiB peak is the whole file read into memory (28.6 MB) plus decoder working space, and could be lower with a memory-mapped or streamed read.
+- **Sample values only reach 32..536** although the file declares 16 bits. The raw IFD has a **LinearizationTable with 1024 entries** (tag 50712), so the decoded values are table indices, not linear light. The table must be applied before any math. This is probably what rawler tripped on: rawler panics with an index of 1024 into a table of 1024, so a value of 1024 or more reaches it.
+- Still to do for the real DNG path: apply the table, read BlackLevel, WhiteLevel, ColorMatrix, AsShotNeutral and BaselineExposure, and parse the opcode lists (OpcodeList2 GainMap matters for lens shading).
+
 ### Prior art: LightCraft and PhotoCraft (read 2026-10-15)
 
 Two MIT OR Apache-2.0 projects from the same authors (github.com/storytold/lightcraft, a Lightroom reimplementation, and github.com/storytold/photocraft). Both use a clean-room pure-Rust raw crate. Their license lets us read and reuse code with attribution, and is compatible with GPL-3.0. Nothing is copied yet. What they tell us:
