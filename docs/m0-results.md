@@ -144,6 +144,16 @@ Gaps that matter for the pipeline:
 - **Tags this file carries:** ColorMatrix1 and 2, AsShotNeutral 1,1,1 (ProRAW is already white balanced in the camera, so no WB gain is needed), BaselineExposure +0.51 EV, NoiseProfile, DefaultBlackRender. No ForwardMatrix and **no opcode lists** in this file, so the iPhone 16 Pro needs no GainMap or warp opcode handling. Opcode lists still matter for other DNGs (Samsung, Pixel), not tested.
 - Still to do for the real DNG path: parse opcode lists for the files that have them, and the ProfileGainTableMap reader (kept but off by default, see below).
 
+### LibRaw check (step 3) and what it means for the FFI fallback (step 4)
+
+Read from the LibRaw 0.22.2 source (the newest release, 2026), not run:
+
+- **Nikon High Efficiency: not supported.** `src/tables/cameralist.cpp` lists the Z 6III, Z 8, Z 9 and Z f as "HE/HE* formats are not supported yet". LibRaw reads the compression tag and spots the JPEG XS signature, but has no decoder. So neither rawler nor LibRaw reads Nikon HE.
+- **JPEG XL DNG (iPhone 16 Pro ProRAW): not without Adobe's DNG SDK.** LibRaw only decodes DNG 1.7 JPEG XL when built with `-DUSE_DNGSDK`, and it just stops refusing such files at open time otherwise (`jxl_dng_load_raw_placeholder`).
+- **GoPro GPR: not without the GPR SDK**, which also needs a patched Adobe DNG SDK (`README.GoPro.txt`).
+
+So **LibRaw would not fix any of the three files rawler fails on.** The LibRaw FFI prototype from step 4 has no test file in the corpus: nothing exists that rawler can't read and LibRaw can. Two ways forward: (a) skip the FFI crate for now and revisit if a real file turns up that only LibRaw reads, which saves a second unsafe crate and a C++ build; (b) hunt for such a file, first across the rest of raw.pixls.us. Recommendation: (a). The gaps that matter are covered by our own code (JPEG XL DNG with `jxl-oxide`) or by nobody yet (Nikon HE, JPEG XS).
+
 ### Prior art: LightCraft and PhotoCraft (read 2026-10-15)
 
 Two MIT OR Apache-2.0 projects from the same authors (github.com/storytold/lightcraft, a Lightroom reimplementation, and github.com/storytold/photocraft). Both use a clean-room pure-Rust raw crate. Their license lets us read and reuse code with attribution, and is compatible with GPL-3.0. Nothing is copied yet. What they tell us:
