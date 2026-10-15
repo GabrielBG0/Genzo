@@ -122,10 +122,7 @@ fn error(code: c_int, message: *const c_char) -> Error {
             CStr::from_ptr(message).to_string_lossy().into_owned()
         }
     };
-    Error {
-        code,
-        message,
-    }
+    Error { code, message }
 }
 
 fn local(message: &str) -> Error {
@@ -322,7 +319,9 @@ pub fn decode(data: &[u8], options: Options) -> Result<Decoded, Error> {
     let (width, height, decoded_bits) = decode_handle(file.primary, wide, |line| {
         if wide {
             rgba.extend(
-                line.chunks_exact(2)
+                line.as_chunks::<2>()
+                    .0
+                    .iter()
                     .map(|b| u16::from_le_bytes([b[0], b[1]])),
             );
         } else {
@@ -395,10 +394,23 @@ mod tests {
         assert_eq!(img.rgba.len(), 451 * 461 * 4);
         assert!(!img.has_alpha);
         // Opaque: alpha is fully on everywhere.
-        assert!(img.rgba.chunks_exact(4).all(|px| px[3] == u16::MAX));
+        assert!(
+            img.rgba
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .all(|px| px[3] == u16::MAX)
+        );
         // A rainbow has strong reds, greens and blues somewhere.
         for c in 0..3 {
-            let max = img.rgba.chunks_exact(4).map(|px| px[c]).max().unwrap();
+            let max = img
+                .rgba
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|px| px[c])
+                .max()
+                .unwrap();
             assert!(max > 50_000, "channel {c} peaks at {max}");
         }
     }
@@ -407,7 +419,13 @@ mod tests {
     fn decodes_alpha() {
         let img = decode(&sample("with-alpha-512x512.heic"), Options::default()).unwrap();
         assert!(img.has_alpha);
-        assert!(img.rgba.chunks_exact(4).any(|px| px[3] < u16::MAX));
+        assert!(
+            img.rgba
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|px| px[3] < u16::MAX)
+        );
     }
 
     #[test]
