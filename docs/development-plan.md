@@ -2,7 +2,7 @@
 
 Built from these sources:
 
-- **Spec:** *Genzo: Technical Spec (draft 2)*, revision 57. The artifact is still listed as "Photo Editor: Technical Spec (draft 1)".
+- **Spec:** *Genzo: Technical Spec (draft 2)*, revision 64 (revision 57 plus the M0 results recorded on 2026-10-15). The artifact is still listed as "Photo Editor: Technical Spec (draft 1)".
 - **UI handoff:** [`docs/UI/fixer-ui-handoff.html`](UI/fixer-ui-handoff.html). It holds the approved Carbon Glass direction, every mockup screen, the design system and the component list. "Fixer" was the working name before Genzo.
 - **Feature list:** [`docs/UI/FEATURES.md`](UI/FEATURES.md). It gives every UI feature an ID, a priority (P0, P1, P2) and its screens.
 
@@ -246,7 +246,7 @@ These are open questions, not conflicts. Neither source answers them.
 - [ ] ProRAW decodes on every device in the corpus
 - [x] Software adapter runs the spike pipeline (lavapipe job on every push; WARP locally)
 - [x] License review written, fonts included (signed off for M0 in `docs/licenses.md`)
-- [ ] Performance targets confirmed or revised in the spec
+- [x] Performance targets confirmed or revised in the spec (revision 64: GPU time confirmed, input to pixels measured on Windows only, 48 MP GPU memory and 48 MP open time flagged for M1)
 - [x] Tokens, fonts, shared components and app shell running against the fake engine (checked 2026-10-15: the component gallery at `#/gallery` and the app shell match the handoff's layout, tokens and edited-state rules; the right panel is still the latency-spike panel and the filmstrip shows its empty state until M1)
 - [x] The M1 parked decisions are settled (undo scope, module state; see Decided)
 
