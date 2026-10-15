@@ -2,6 +2,8 @@
 
 Raw files for the ProRAW and RAW decode spike. Everything in this folder except this README is gitignored: the files are large, and some are personal photos.
 
+Run `python scripts/fetch-raw-corpus.py` to download the raw.pixls.us files and verify them against `manifest.json`.
+
 ## Layout
 
 ```
