@@ -249,7 +249,17 @@ Implemented as planned. While a slider is dragged at Fit zoom, the engine render
 **The 50 ms gate passes on Windows with a wide margin.** The model estimate of 25 to 30 ms p95 was pessimistic.
 
 Caveats, to settle before this counts as final:
-- **The test scene is synthetic and smooth**, so its JPEGs are tiny (about 150 KB for the whole frame). A real photo with fine detail will be several times larger and slower to encode. The spike can only load a synthetic image today; the check with a real photo belongs to M1's first real viewport, and I expect it to stay well under 50 ms (fetch at 120 MB/s means even 1 MB costs 8 ms).
+- **Real photographs, checked separately.** The spike's own scene is synthetic and compresses far better than a photo, so I took the ten Adobe linear references of the corpus (iPhone 12 and 16 Pro, Galaxy S23 Ultra, Sony 7RM5, Nikon D850, Z 8, Z 9, Canon R5m2, Fujifilm X-T5, Panasonic S5M2), made 1280 px wide previews (the half-size frame a 2560 px viewport sends) and encoded them exactly as the engine does (q80, 4 bands in parallel):
+
+  | | Range over the 10 photos |
+  |---|---|
+  | Preview JPEG size, whole frame | 78 to 254 KB (the synthetic scene was about 150 KB) |
+  | Encode, 4 bands on rayon | 2.4 to 3.6 ms |
+  | Decode all bands and upload to WebGL in the real WebView2 | 3.5 to 5.3 ms p50, 3.9 to 5.3 ms p95 |
+  | Fetch at about 120 MB/s | 0.7 to 2.1 ms (derived from the size) |
+  | For comparison, a full 2560 px JPEG | 220 to 754 KB, encode 9 to 14 ms |
+
+  The app's measured total for the synthetic scene was 18 ms. Real photos add about 2 ms of encode, 1 to 2 ms of fetch and 1 ms of decode, so the expected figure is about 22 to 25 ms p95, which is not measured end to end because the spike cannot load a real image. The conclusion is unchanged: the preview stays well under 50 ms p95 on Windows, and the full-size JPEG alternative would not have (about 40 ms before the probe's queueing).
 - **macOS and Linux are still unmeasured**, and the custom-scheme throughput there is unknown. Compression makes that less of a risk, not zero.
 - **Display P3 previews** are drawn as untagged bitmaps, so their colors are approximate during a drag. The spike only sends sRGB; the color check (step 5) is still open.
 - **At 1:1 zoom** the preview is not used (it would show at the wrong scale), so a 1:1 drag still sends full frames. That case needs its own answer in M1 (send only the visible region).
