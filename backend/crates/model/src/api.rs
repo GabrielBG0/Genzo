@@ -104,6 +104,11 @@ pub enum Command {
         /// cached demosaic. Send `false` once the drag ends for the full
         /// quality render.
         interactive: bool,
+        /// Send a half-size JPEG preview instead of the full frame. Only
+        /// honored together with `interactive`; the frontend shows it scaled
+        /// up. It exists because moving raw pixels into the webview is the
+        /// bottleneck of a drag (0.E).
+        proxy: bool,
     },
 }
 
@@ -182,6 +187,7 @@ mod tests {
             wb: [2.0, 1.0, 1.5],
             format: PixelFormat::Rgba8DisplayP3,
             interactive: true,
+            proxy: true,
         };
         assert_eq!(
             serde_json::to_value(&c).unwrap(),
@@ -192,7 +198,8 @@ mod tests {
                 "exposureEv": 0.5,
                 "wb": [2.0, 1.0, 1.5],
                 "format": "rgba8DisplayP3",
-                "interactive": true
+                "interactive": true,
+                "proxy": true
             })
         );
         let load = Command::LoadSpikeImage {

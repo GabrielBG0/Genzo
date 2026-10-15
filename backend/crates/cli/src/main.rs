@@ -227,42 +227,50 @@ fn bench_gpu(args: &[&str], metrics: &mut Metrics) -> Result<(), String> {
         started.elapsed().as_secs_f64() * 1000.0
     );
 
-    let render =
-        |exposure_ev: f32, wb: [f32; 3], interactive: bool| -> Result<(f64, Option<f64>), String> {
-            let events = engine
-                .execute(Command::RenderSpike {
-                    width: 2560,
-                    height: 2560,
-                    exposure_ev,
-                    wb,
-                    format: PixelFormat::Rgba8Srgb,
-                    interactive,
-                })
-                .map_err(|e| e.to_string())?;
-            match events.first() {
-                Some(Event::RenderFinished {
-                    render_ms, gpu_ms, ..
-                }) => Ok((*render_ms, *gpu_ms)),
-                _ => Err("render produced no frame".into()),
-            }
-        };
+    let render = |exposure_ev: f32,
+                  wb: [f32; 3],
+                  interactive: bool,
+                  proxy: bool|
+     -> Result<(f64, Option<f64>), String> {
+        let events = engine
+            .execute(Command::RenderSpike {
+                width: 2560,
+                height: 2560,
+                exposure_ev,
+                wb,
+                format: PixelFormat::Rgba8Srgb,
+                interactive,
+                proxy,
+            })
+            .map_err(|e| e.to_string())?;
+        match events.first() {
+            Some(Event::RenderFinished {
+                render_ms, gpu_ms, ..
+            }) => Ok((*render_ms, *gpu_ms)),
+            _ => Err("render produced no frame".into()),
+        }
+    };
     // The first render builds everything and warms the shader caches.
-    render(0.0, [1.0; 3], false)?;
+    render(0.0, [1.0; 3], false, false)?;
     // A drag sends interactive renders; the settled render after release
     // re-runs the demosaic.
+    // "preview" is the half-size JPEG frame sent while dragging; its engine time
+    // includes the encode, which the plain drag cases do not have.
     let cases = [
-        ("exposure drag", false, true),
-        ("white balance drag", true, true),
-        ("white balance settled", true, false),
+        ("exposure drag", false, true, false),
+        ("exposure drag preview", false, true, true),
+        ("white balance drag", true, true, false),
+        ("white balance drag preview", true, true, true),
+        ("white balance settled", true, false, false),
     ];
-    for (name, vary_wb, interactive) in cases {
+    for (name, vary_wb, interactive, proxy) in cases {
         let (mut engine_ms, mut gpu_ms) = (Vec::new(), Vec::new());
         for i in 0..n {
             let t = i as f32 / n as f32;
             let (e, g) = if vary_wb {
-                render(0.0, [1.0 + 0.2 * t, 1.0, 1.0 - 0.2 * t], interactive)?
+                render(0.0, [1.0 + 0.2 * t, 1.0, 1.0 - 0.2 * t], interactive, proxy)?
             } else {
-                render(t * 2.0 - 1.0, [1.0; 3], interactive)?
+                render(t * 2.0 - 1.0, [1.0; 3], interactive, proxy)?
             };
             engine_ms.push(e);
             gpu_ms.extend(g);

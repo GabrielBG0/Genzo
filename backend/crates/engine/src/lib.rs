@@ -39,10 +39,20 @@ pub const ENGINE_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// How many finished frames are kept for the frontend to fetch.
 const KEPT_FRAMES: usize = 4;
 
+/// JPEG quality of drag previews. The frame is replaced by a lossless one when
+/// the slider is released, so this trades softness for bytes.
+const PROXY_JPEG_QUALITY: u8 = 80;
+
+/// Most bands a drag preview is split into. Each band is encoded on its own
+/// thread and decoded in its own `createImageBitmap` call in the webview.
+const PROXY_MAX_BANDS: usize = 4;
+
 #[derive(Debug, thiserror::Error)]
 pub enum EngineError {
     #[error("invalid size {width}×{height}")]
     InvalidSize { width: u32, height: u32 },
+    #[error("{0:?} cannot be requested; the engine chooses JPEG itself for previews")]
+    InvalidFormat(PixelFormat),
     #[error("{0}")]
     Io(String),
     #[error("{0}")]
@@ -194,6 +204,7 @@ impl Engine {
                 format,
             } => {
                 check_size(width, height)?;
+                check_format(format)?;
                 let started = Instant::now();
                 let generation = self.generations.next();
                 let Some(tile_count) =
@@ -227,23 +238,41 @@ impl Engine {
                 wb,
                 format,
                 interactive,
+                proxy,
             } => {
                 check_size(width, height)?;
+                check_format(format)?;
                 let started = Instant::now();
                 let generation = self.generations.next();
+                // The preview only makes sense during a drag.
+                let proxy = proxy && interactive;
                 let params = SpikeParams {
                     wb,
                     exposure_ev,
                     space: match format {
-                        PixelFormat::Rgba8Srgb => DisplaySpace::Srgb,
-                        PixelFormat::Rgba8DisplayP3 => DisplaySpace::DisplayP3,
+                        PixelFormat::Rgba8Srgb | PixelFormat::JpegSrgb => DisplaySpace::Srgb,
+                        PixelFormat::Rgba8DisplayP3 | PixelFormat::JpegDisplayP3 => {
+                            DisplaySpace::DisplayP3
+                        }
                     },
                     interactive,
+                    proxy,
                 };
                 // None: a newer render replaced this one on the render thread.
                 let Some(frame) = self.gpu()?.render(params, (width, height))? else {
                     return Ok(Vec::new());
                 };
+                if proxy {
+                    let Some(band_count) = self.store_jpeg_bands(generation, &frame, format) else {
+                        return Ok(Vec::new());
+                    };
+                    return Ok(vec![Event::RenderFinished {
+                        generation,
+                        tile_count: band_count,
+                        render_ms: started.elapsed().as_secs_f64() * 1000.0,
+                        gpu_ms: frame.gpu_ms,
+                    }]);
+                }
                 let row = frame.width as usize * 4;
                 let Some(tile_count) =
                     self.store_frame(generation, frame.width, frame.height, format, |rect| {
@@ -283,7 +312,7 @@ impl Engine {
     ) -> Option<u32> {
         let tiles = genzo_pipeline::tiles::grid(width, height, TILE_SIZE);
         let mut frame = Vec::with_capacity(
-            width as usize * height as usize * format.bytes_per_pixel()
+            width as usize * height as usize * format.bytes_per_pixel().unwrap_or(0)
                 + tiles.len() * genzo_model::frame::TILE_HEADER_LEN,
         );
         for rect in &tiles {
@@ -307,6 +336,69 @@ impl Engine {
         Some(tiles.len() as u32)
     }
 
+    /// Splits a frame into horizontal bands, encodes each as a JPEG on the
+    /// rayon pool and keeps the messages for [`Engine::frame`]. Returns the
+    /// band count, or `None` when a newer generation made this one stale.
+    fn store_jpeg_bands(
+        &self,
+        generation: u64,
+        frame: &genzo_pipeline::gpu::spike::Frame,
+        format: PixelFormat,
+    ) -> Option<u32> {
+        use rayon::prelude::*;
+
+        let (w, h) = (frame.width as usize, frame.height as usize);
+        // Band heights are multiples of the 16-row JPEG block, so no band
+        // pads or blurs across its edge.
+        let bands = rayon::current_num_threads().clamp(1, PROXY_MAX_BANDS);
+        let band_h = (h.div_ceil(bands)).div_ceil(16) * 16;
+        let rows: Vec<(usize, usize)> = (0..h)
+            .step_by(band_h)
+            .map(|y| (y, band_h.min(h - y)))
+            .collect();
+        let encoded: Vec<Vec<u8>> = rows
+            .par_iter()
+            .map(|&(y, rows)| {
+                genzo_imgio::jpeg::encode_rgba(
+                    &frame.rgba[y * w * 4..(y + rows) * w * 4],
+                    w as u32,
+                    rows as u32,
+                    PROXY_JPEG_QUALITY,
+                )
+                .ok()
+            })
+            .collect::<Option<_>>()?;
+        if self.generations.is_stale(generation) {
+            return None;
+        }
+        let mut message = Vec::with_capacity(
+            encoded.iter().map(Vec::len).sum::<usize>()
+                + encoded.len() * genzo_model::frame::TILE_HEADER_LEN,
+        );
+        for (&(y, rows), jpeg) in rows.iter().zip(&encoded) {
+            let header = TileHeader {
+                generation,
+                rect: Rect {
+                    x: 0,
+                    y: y as u32,
+                    width: w as u32,
+                    height: rows as u32,
+                },
+                mip_level: 0,
+                format: format.as_jpeg(),
+                image_width: w as u32,
+                image_height: h as u32,
+            };
+            message.extend_from_slice(&header.encode(jpeg));
+        }
+        let count = rows.len() as u32;
+        self.frames
+            .lock()
+            .expect("frame store poisoned")
+            .put(generation, message);
+        Some(count)
+    }
+
     /// The tile messages of a finished generation, concatenated. Each message
     /// carries its own length, see `api::TileHeader`.
     pub fn frame(&self, generation: u64) -> Option<Vec<u8>> {
@@ -317,6 +409,14 @@ impl Engine {
             .get(&generation)
             .cloned()
     }
+}
+
+/// Callers ask for a color space; JPEG is a transport choice the engine makes.
+fn check_format(format: PixelFormat) -> Result<(), EngineError> {
+    if format.is_jpeg() {
+        return Err(EngineError::InvalidFormat(format));
+    }
+    Ok(())
 }
 
 fn check_size(width: u32, height: u32) -> Result<(), EngineError> {
@@ -429,6 +529,10 @@ mod tests {
     }
 
     fn spike(width: u32, height: u32, interactive: bool) -> Command {
+        spike_with(width, height, interactive, false)
+    }
+
+    fn spike_with(width: u32, height: u32, interactive: bool, proxy: bool) -> Command {
         Command::RenderSpike {
             width,
             height,
@@ -436,7 +540,22 @@ mod tests {
             wb: [1.0; 3],
             format: PixelFormat::Rgba8DisplayP3,
             interactive,
+            proxy,
         }
+    }
+
+    #[test]
+    fn jpeg_cannot_be_requested() {
+        let e = Engine::headless();
+        assert!(matches!(
+            e.execute(Command::RenderTestPattern {
+                width: 8,
+                height: 8,
+                phase: 0.0,
+                format: PixelFormat::JpegSrgb,
+            }),
+            Err(EngineError::InvalidFormat(PixelFormat::JpegSrgb))
+        ));
     }
 
     #[test]
@@ -496,6 +615,61 @@ mod tests {
             tiles
                 .iter()
                 .all(|(h, _)| h.format == PixelFormat::Rgba8DisplayP3 && h.image_width == 600)
+        );
+    }
+
+    #[test]
+    fn drag_preview_is_a_half_size_jpeg() {
+        let e = Engine::new();
+        if e.info().adapter.kind == AdapterKind::None {
+            assert_ne!(
+                std::env::var("GENZO_REQUIRE_GPU").as_deref(),
+                Ok("1"),
+                "no GPU adapter"
+            );
+            return;
+        }
+        e.execute(Command::LoadSpikeImage {
+            source: SpikeSource::Synthetic {
+                width: 1200,
+                height: 800,
+            },
+        })
+        .unwrap();
+        let frame_of = |command| {
+            let events = e.execute(command).unwrap();
+            let [Event::RenderFinished { generation, .. }] = events.as_slice() else {
+                panic!("unexpected events {events:?}");
+            };
+            e.frame(*generation).unwrap()
+        };
+
+        // 1200 × 800 fit into 600 × 600 is 600 × 400, so the preview is 300 × 200.
+        let bytes = frame_of(spike_with(600, 600, true, true));
+        let bands = split_frame(&bytes).unwrap();
+        assert!(!bands.is_empty());
+        assert_eq!(covered_area(&bands), 300 * 200);
+        for (header, jpeg) in &bands {
+            assert_eq!(header.format, PixelFormat::JpegDisplayP3);
+            assert_eq!((header.image_width, header.image_height), (300, 200));
+            assert_eq!((header.rect.x, header.rect.width), (0, 300));
+            assert_eq!(&jpeg[..2], &[0xFF, 0xD8]);
+        }
+        let raw = frame_of(spike_with(600, 600, true, false)).len();
+        assert!(
+            bytes.len() * 10 < raw,
+            "preview is {} of {raw} bytes",
+            bytes.len()
+        );
+
+        // A preview is only for drags: a settled render ignores the flag.
+        let bytes = frame_of(spike_with(600, 600, false, true));
+        let tiles = split_frame(&bytes).unwrap();
+        assert_eq!(covered_area(&tiles), 600 * 400);
+        assert!(
+            tiles
+                .iter()
+                .all(|(h, _)| h.format == PixelFormat::Rgba8DisplayP3)
         );
     }
 }

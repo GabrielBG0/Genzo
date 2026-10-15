@@ -13,6 +13,8 @@ publish = false
 
 [workspace.dependencies]
 rawler = { version = "=0.8.0", default-features = false }
+jpeg-encoder = { version = "=0.7.1", features = ["simd"] }
+rayon = "1.12"
 # Internal crates. Edges point down only:
 #   heif <- imgio (optional, the `heic` feature)
 #   model <- color, imgio, cache, jobs, catalog

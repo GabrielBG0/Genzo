@@ -53,7 +53,12 @@ pub fn generate() -> String {
     ));
     out.push_str(&format!("export const TILE_SIZE = {TILE_SIZE};\n"));
     out.push_str("export const PIXEL_FORMAT_CODES: Record<PixelFormat, number> = {\n");
-    for f in [PixelFormat::Rgba8Srgb, PixelFormat::Rgba8DisplayP3] {
+    for f in [
+        PixelFormat::Rgba8Srgb,
+        PixelFormat::Rgba8DisplayP3,
+        PixelFormat::JpegSrgb,
+        PixelFormat::JpegDisplayP3,
+    ] {
         let name = serde_json::to_string(&f).expect("serializable");
         out.push_str(&format!("  {name}: {},\n", f.code()));
     }

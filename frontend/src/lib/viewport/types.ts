@@ -1,4 +1,11 @@
+import type { TileHeader } from '$contract/genzo';
 import type { Tile } from '../engine/tiles';
+
+/** A decoded JPEG tile: the drag preview arrives this way. */
+export interface DecodedTile {
+  header: TileHeader;
+  image: ImageBitmap;
+}
 
 /** `fit` scales the image into the viewport; a number is device pixels per image pixel. */
 export type Zoom = 'fit' | number;
@@ -23,6 +30,8 @@ export interface Viewport {
    * Returns false when the whole batch was stale.
    */
   putTiles(tiles: Tile[]): boolean;
+  /** Same as `putTiles`, for tiles the page has already decoded from JPEG. */
+  putImages(tiles: DecodedTile[]): boolean;
   setTransform(t: ViewTransform): void;
   /** CSS size of the drawing area and the device pixel ratio. */
   resize(width: number, height: number, dpr: number): void;

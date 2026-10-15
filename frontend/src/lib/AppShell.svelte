@@ -60,6 +60,9 @@
       wb: wb(temp),
       format: 'rgba8Srgb',
       interactive,
+      // While dragging, a half-size JPEG preview is much cheaper to move into
+      // the webview. At 1:1 the preview would show at the wrong scale.
+      proxy: interactive && zoom === 'fit',
     });
   }
 

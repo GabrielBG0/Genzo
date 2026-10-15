@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { TileHeader } from '$contract/genzo';
-import { decodeFrame, encodeTile, TileDecodeError } from './tiles';
+import { decodeFrame, encodeTile, isJpeg, TileDecodeError } from './tiles';
 
 const header: TileHeader = {
   generation: 0x10203040506070, // below 2^53, as all generations are
@@ -36,6 +36,19 @@ describe('tile protocol', () => {
     expect(tiles[0]?.header).toEqual(header);
     expect([...(tiles[0]?.pixels ?? [])]).toEqual(new Array(24).fill(7));
     expect([...(tiles[1]?.pixels ?? [])]).toEqual([1, 2, 3, 4]);
+  });
+
+  it('carries JPEG payloads of any length', () => {
+    // Same bytes as jpeg_payload_has_its_own_length in backend/crates/model/src/frame.rs.
+    const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0xd9, 7]);
+    const jpegHeader: TileHeader = { ...header, format: 'jpegSrgb' };
+    const msg = encodeTile(jpegHeader, jpeg);
+    expect(msg[6]).toBe(3);
+    const [tile] = decodeFrame(msg.slice().buffer);
+    expect(tile?.header).toEqual(jpegHeader);
+    expect([...(tile?.pixels ?? [])]).toEqual([...jpeg]);
+    expect(isJpeg('jpegDisplayP3')).toBe(true);
+    expect(isJpeg('rgba8Srgb')).toBe(false);
   });
 
   it('rejects damaged frames', () => {

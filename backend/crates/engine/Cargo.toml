@@ -26,5 +26,6 @@ genzo-jobs.workspace = true
 genzo-ai.workspace = true
 genzo-export.workspace = true
 thiserror.workspace = true
+rayon.workspace = true
 serde_json.workspace = true
 serde.workspace = true
