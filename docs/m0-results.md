@@ -162,6 +162,21 @@ Adobe DNG Converter 18.6 runs headless: `"Adobe DNG Converter.exe" -c -l -u -d <
 - **Adobe also reads the iPhone 16 Pro file** and writes it as plain 16-bit LinearRaw. rawler reads these outputs in 17 to 72 ms (`raw_gap_report ../corpus/reference`), so they can be loaded as pixel references without any special decoder. Black levels stay in the file (for example 2048 for the Sony), so apply them when comparing.
 - **Not covered: Apple Photos renders.** Those need a Mac. The owner would export the same iPhone files as TIFF or JPEG from Photos into `corpus/reference/<stem>/`.
 
+### Proposed camera priority order (step 7)
+
+Weights are LightCraft's estimate of Lightroom raw users by maker (Canon 33%, Sony 27%, Nikon 16%, Fujifilm 10%, Panasonic 4%, OM 3%, phones 3%, Pentax/Ricoh 1.5%, Leica 1%); they are not our data. "Decodes" means sensor data and levels came out of one corpus file per body, not that colors are right.
+
+| Order | What | Share | Status in our corpus | Work for M1 |
+|---|---|---|---|---|
+| 1 | Canon CR3, Sony ARW, Nikon NEF (lossless and lossy compressed), Fujifilm RAF (Bayer and X-Trans) | ~86% | All decode with rawler 0.8 on the files tested | Verify more bodies per maker; only one Canon CR3 (an APS-C C-RAW) is tested. X-Trans needs its own demosaic |
+| 2 | Phones: Apple ProRAW (all generations), Samsung and other DNG | 3% | iPhone 12 Pro and S23 Ultra decode with rawler. **iPhone 16 Pro (JPEG XL) does not** | Own DNG path with `jxl-oxide`, LinearizationTable with clamping, opcode lists. Gain table map off by default |
+| 3 | Panasonic RW2, OM/Olympus ORF, Leica/Pentax DNG | ~9% | All decode with rawler | Per-body checks only |
+| 4 | Nikon High Efficiency NEF (Z 6III, Z 8, Z 9, Z f in HE mode) | part of Nikon's 16%, only shots taken in HE | Fails in rawler and LibRaw; Adobe reads it | Needs a JPEG XS decoder (est. 20 to 40 h). Until then, show the embedded preview and say why. Decide in M1 whether it is worth the time |
+| 5 | Medium format and legacy: Hasselblad 3FR, Phase One IIQ, Kodak DCR | <1% | Decode with rawler (IIQ is slow: 9 s debug) | Nothing planned |
+| 6 | GoPro GPR | <1% | Fails; needs a wavelet codec (VC-5) | Out for now |
+
+Consequence for the plan: **no LibRaw fallback is wired in M1** (see the LibRaw section). The spec's parked decision "camera priority order" can be closed with this table.
+
 ### Prior art: LightCraft and PhotoCraft (read 2026-10-15)
 
 Two MIT OR Apache-2.0 projects from the same authors (github.com/storytold/lightcraft, a Lightroom reimplementation, and github.com/storytold/photocraft). Both use a clean-room pure-Rust raw crate. Their license lets us read and reuse code with attribution, and is compatible with GPL-3.0. Nothing is copied yet. What they tell us:
