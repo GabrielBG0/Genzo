@@ -164,6 +164,26 @@ fn main() {
         ("windows", "msvc") => {}
         _ => println!("cargo:rustc-link-lib=stdc++"),
     }
+    // libde265's x86 code detects SSE and AVX with __builtin_cpu_supports,
+    // which needs compiler-rt (___cpu_model, ___cpu_indicator_init). rustc
+    // links with -nodefaultlibs, so on Intel Macs clang's runtime has to be
+    // named; elsewhere libgcc or the MSVC runtime already provide it.
+    if target_os == "macos" && std::env::var("CARGO_CFG_TARGET_ARCH").unwrap() == "x86_64" {
+        let compiler = cc::Build::new().get_compiler();
+        let resource_dir = std::process::Command::new(compiler.path())
+            .arg("-print-resource-dir")
+            .output()
+            .expect("run the C compiler for its resource directory");
+        let darwin =
+            PathBuf::from(String::from_utf8_lossy(&resource_dir.stdout).trim()).join("lib/darwin");
+        assert!(
+            darwin.join("libclang_rt.osx.a").exists(),
+            "libclang_rt.osx.a not found in {}",
+            darwin.display()
+        );
+        println!("cargo:rustc-link-search=native={}", darwin.display());
+        println!("cargo:rustc-link-lib=static=clang_rt.osx");
+    }
     // Lets dependents find the headers if they ever need them.
     println!("cargo:include={}", heif.join("include").display());
 }
