@@ -10,7 +10,9 @@ use rawler::decoders::RawDecodeParams;
 use rawler::rawsource::RawSource;
 
 fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(read) = std::fs::read_dir(dir) else { return };
+    let Ok(read) = std::fs::read_dir(dir) else {
+        return;
+    };
     for entry in read.flatten() {
         let path = entry.path();
         if path.is_dir() {
@@ -59,12 +61,24 @@ fn report(path: &Path) -> String {
                 img.photometric,
                 img.wb_coeffs,
                 img.whitelevel.0,
-                img.blacklevel.levels.iter().map(|r| r.as_f32()).collect::<Vec<_>>(),
+                img.blacklevel
+                    .levels
+                    .iter()
+                    .map(|r| r.as_f32())
+                    .collect::<Vec<_>>(),
                 img.color_matrix.keys().collect::<Vec<_>>(),
                 img.active_area.is_some(),
                 img.crop_area.is_some(),
-                { let mut t: Vec<_> = img.dng_tags.keys().collect(); t.sort(); t },
-                if missing.is_empty() { "none".to_string() } else { missing.join(", ") },
+                {
+                    let mut t: Vec<_> = img.dng_tags.keys().collect();
+                    t.sort();
+                    t
+                },
+                if missing.is_empty() {
+                    "none".to_string()
+                } else {
+                    missing.join(", ")
+                },
             )
         }
     }
