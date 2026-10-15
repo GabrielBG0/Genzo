@@ -103,7 +103,7 @@ In progress (step 2 partly done). Steps 3 to 7 are still open.
 
 ### Corpus
 
-`python scripts/fetch-raw-corpus.py` downloads one file per camera body from raw.pixls.us into the gitignored `corpus/raw/` and checks it against `corpus/manifest.json` (sha256). 16 raw.pixls.us bodies (the Z 9 twice, lossless and High Efficiency), plus the iPhone 12 Pro ProRAW. There are no 48 MP ProRAW files yet; the owner is adding their own under `corpus/proraw/`.
+`python scripts/fetch-raw-corpus.py` downloads one file per camera body from raw.pixls.us into the gitignored `corpus/raw/` and checks it against `corpus/manifest.json` (sha256). 16 raw.pixls.us bodies (the Z 9 twice, lossless and High Efficiency), plus the iPhone 12 Pro ProRAW. The owner's iPhone 16 Pro 48 MP ProRAW is in `corpus/proraw/iPhone 16 Pro/`. A 12 MP file from an iPhone 14 or 15 Pro would still help.
 
 ### rawler 0.8.0 gap report (step 2)
 
@@ -125,7 +125,7 @@ Gaps that matter for the pipeline:
 - ProRAW and Samsung DNG are already linear RGB, so the pipeline needs an input path that skips the demosaic.
 - White and black levels are per channel or per CFA position (36 entries for X-Trans). The pipeline must take them as arrays, not scalars.
 - The 4th WB coefficient is NaN on every body. Treat only the first three as valid.
-- **iPhone 16 Pro ProRAW fails in rawler 0.8.0.** The owner's file `IPhone16proRaw.DNG` (28.6 MB, sha256 `97f76203...b5b378`, 12 MP by size) panics inside rawler after 8 s ("index out of bounds: the len is 1024 but the index is 1024"; rawler catches it and returns an error). The iPhone 12 Pro file decodes, so the newer ProRAW encoding is the likely cause. This is the main ProRAW risk: we may need our own DNG reader for Apple files or a rawler fix upstream.
+- **iPhone 16 Pro ProRAW fails in rawler 0.8.0, and the cause is JPEG XL.** The owner's file `IPhone16proRaw.DNG` (28.6 MB, sha256 `97f76203...b5b378`) is **48 MP** (8064x6048, 3 samples per pixel, LinearRaw). Its main image uses compression 52546 (JPEG XL, DNG 1.7), and it carries a ProfileGainTableMap of 3.1 MB. rawler has no JPEG XL decoder, so it panics ("index out of bounds: the len is 1024 but the index is 1024"), after 8 s. The iPhone 12 Pro file uses an older encoding and decodes. So **every ProRAW from the iPhone 16 Pro on is likely unreadable by rawler**, and Samsung Expert RAW will be the same. Our own DNG path with a pure-Rust JPEG XL decoder (`jxl-oxide`, MIT OR Apache-2.0) is the likely fix. PhotoCraft (github.com/storytold/photocraft, `crates/raw`, MIT OR Apache-2.0) does it this way: its DNG reader decodes JPEG XL tiles with `jxl-oxide` pinned exactly, and reports ProfileGainTableMap as "not applied". We can do the same, or go further and apply the gain table map.
 - Nikon HE is the one mainstream gap. Whether LibRaw can read it is step 3 and is not checked yet.
 
 
