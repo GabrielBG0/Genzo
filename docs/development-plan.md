@@ -115,6 +115,7 @@ Parked decisions that have been settled, with the date and what follows from eac
 | HEVC patent position | Ship libde265 (inside a bundled libheif) on every platform, and accept the patent risk. Revisit before the first public release | 2026-10-14 | See `docs/licenses.md`, which also explains how to cut HEIC support |
 | Module state (APP-01) | Not remembered. Zoom, pan and open panels are neither kept per photo nor per module; switching modules or photos starts from the defaults | 2026-10-14 | No view-state store is needed in M1 |
 | ICC library | moxcms (pure Rust), not lcms2 | 2026-10-14 | No C build for color management. lcms2 stays the fallback; see `docs/licenses.md` |
+| Working space | Linear light on the ACES AP1 primaries with a D65 white | 2026-10-14 | Rec. 2020 does not fully contain Display P3 (its red is just outside), so it fails the spec's requirement. AP1 contains both. The D65 white matches the display spaces, so no chromatic adaptation is needed. See `docs/m0-results.md` |
 
 ## Parked decisions, with a deadline
 

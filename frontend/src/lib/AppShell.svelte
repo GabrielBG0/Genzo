@@ -22,25 +22,69 @@
   const registry = provideRegistry();
   let module: Module = $state('develop');
 
-  // M0 spike 0.E: drive the test pattern from a slider and time it to the screen.
+  // M0 spikes 0.D and 0.E: drive the GPU pipeline (or the CPU test pattern)
+  // from sliders and time input to pixels on screen.
   const SIZES = { '2560 × 1440': [2560, 1440], '1280 × 720': [1280, 720] } as const;
+  const SOURCES = {
+    'GPU · 48 MP raw': [8064, 6048],
+    'GPU · 12 MP raw': [4032, 3024],
+    'Test pattern': null,
+  } as const;
+  type Source = keyof typeof SOURCES;
   let size: keyof typeof SIZES = $state('2560 × 1440');
+  // Picked once at startup: a real engine without a GPU can only draw the test pattern.
+  function initialSource(): Source {
+    return engine.kind === 'tauri' && info.adapter.kind === 'none' ? 'Test pattern' : 'GPU · 48 MP raw';
+  }
+  let source: Source = $state(initialSource());
   let phase = $state(0);
+  let exposure = $state(0);
+  let temp = $state(0);
   let zoom: Zoom = $state('fit');
   let stats = $state({ p50: null as number | null, p95: null as number | null, n: 0 });
-  const probe = new LatencyProbe<number>((p) => {
+  let gpuMs: number | null = $state(null);
+
+  const wb = (t: number): [number, number, number] => [1 + t * 0.004, 1, 1 - t * 0.004];
+
+  function render(interactive: boolean): Promise<void> {
     const [width, height] = SIZES[size];
-    return engine.execute({ type: 'renderTestPattern', width, height, phase: p / 100, format: 'rgba8Srgb' });
-  });
+    if (SOURCES[source] === null) {
+      return engine.execute({ type: 'renderTestPattern', width, height, phase: phase / 100, format: 'rgba8Srgb' });
+    }
+    return engine.execute({
+      type: 'renderSpike',
+      width,
+      height,
+      exposureEv: exposure,
+      wb: wb(temp),
+      format: 'rgba8Srgb',
+      interactive,
+    });
+  }
+
+  // While dragging: interactive renders, timed by the probe.
+  const probe = new LatencyProbe<null>(() => render(true));
+  // At the end of a gesture: one full-quality render, not timed.
+  const settle = () => void render(false).catch(() => {});
 
   function ondraw() {
     probe.drawn();
     stats = { p50: probe.percentile(0.5), p95: probe.percentile(0.95), n: probe.count };
   }
 
+  async function load() {
+    probe.reset();
+    const dims = SOURCES[source];
+    if (dims) await engine.execute({ type: 'loadSpikeImage', source: { type: 'synthetic', width: dims[0], height: dims[1] } });
+    probe.input(null);
+  }
+
   $effect(() => {
-    // First frame, so the viewport is not empty.
-    probe.input(0);
+    // The first frame, so the viewport is not empty.
+    void load();
+    return engine.onEvent((e) => {
+      if (e.type === 'renderFinished') gpuMs = e.gpuMs;
+    });
   });
 
   const ms = (v: number | null) => (v === null ? '–' : `${v.toFixed(1)} ms`);
@@ -64,9 +108,28 @@
     </div>
     <aside class="right pane" aria-label="Right panel">
       <Histogram />
-      <PanelHeader heading="Latency spike" meta="M0 · 0.E" edited={stats.n > 0} />
-      <SliderRow label="Phase" bind:value={phase} min={0} max={100} oninput={(v) => probe.input(v)} />
+      <PanelHeader heading="Latency spike" meta="M0 · 0.D, 0.E" edited={stats.n > 0} />
+      {#if SOURCES[source] === null}
+        <SliderRow label="Phase" bind:value={phase} min={0} max={100} oninput={() => probe.input(null)} />
+      {:else}
+        <SliderRow
+          label="Exposure"
+          bind:value={exposure}
+          min={-3}
+          max={3}
+          step={0.01}
+          oninput={() => probe.input(null)}
+          onchange={settle}
+        />
+        <SliderRow label="Temp" bind:value={temp} track="temp" oninput={() => probe.input(null)} onchange={settle} />
+      {/if}
       <dl class="readout mono">
+        <dt>Source</dt>
+        <dd>
+          <select bind:value={source} onchange={() => void load()}>
+            {#each Object.keys(SOURCES) as s (s)}<option>{s}</option>{/each}
+          </select>
+        </dd>
         <dt>Frame</dt>
         <dd>
           <select bind:value={size} onchange={() => probe.reset()}>
@@ -84,6 +147,8 @@
         <dd>{ms(stats.p50)}</dd>
         <dt>Input → pixels p95</dt>
         <dd class={[stats.p95 !== null && stats.p95 > 50 && 'over']}>{ms(stats.p95)}</dd>
+        <dt>GPU, last frame</dt>
+        <dd>{ms(gpuMs)}</dd>
         <dt>Samples</dt>
         <dd>{stats.n}</dd>
       </dl>

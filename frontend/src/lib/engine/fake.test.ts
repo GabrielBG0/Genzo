@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { CONTRACT_VERSION, type Event } from '$contract/genzo';
-import { FakeEngine, isCompatible } from './fake';
+import { FakeEngine, fit, isCompatible } from './fake';
 import { decodeFrame } from './tiles';
 
 describe('FakeEngine', () => {
@@ -28,5 +28,29 @@ describe('FakeEngine', () => {
     const tiles = decodeFrame(await engine.fetchFrame(event.generation));
     const area = tiles.reduce((n, t) => n + t.header.rect.width * t.header.rect.height, 0);
     expect(area).toBe(600 * 300);
+  });
+
+  it('fits like the Rust pipeline', () => {
+    expect(fit([8064, 6048], [2560, 2560])).toEqual([2560, 1920]);
+    expect(fit([100, 50], [2560, 1440])).toEqual([100, 50]);
+  });
+
+  it('renders the spike image fitted to the viewport', async () => {
+    const engine = new FakeEngine();
+    const events: Event[] = [];
+    engine.onEvent((e) => events.push(e));
+    await expect(
+      engine.execute({ type: 'renderSpike', width: 10, height: 10, exposureEv: 0, wb: [1, 1, 1], format: 'rgba8Srgb', interactive: true }),
+    ).rejects.toThrow('no image loaded');
+    await engine.execute({ type: 'loadSpikeImage', source: { type: 'synthetic', width: 1201, height: 800 } });
+    await engine.execute({ type: 'renderSpike', width: 600, height: 600, exposureEv: 1, wb: [1, 1, 1], format: 'rgba8Srgb', interactive: true });
+    await new Promise((r) => setTimeout(r));
+    expect(events[0]).toEqual({ type: 'spikeImageLoaded', width: 1200, height: 800 });
+    const done = events[1];
+    if (done?.type !== 'renderFinished') throw new Error('no render');
+    expect(done.gpuMs).toBeNull();
+    const tiles = decodeFrame(await engine.fetchFrame(done.generation));
+    expect(tiles[0]?.header.imageWidth).toBe(600);
+    expect(tiles[0]?.header.imageHeight).toBe(400);
   });
 });

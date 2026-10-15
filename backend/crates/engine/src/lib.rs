@@ -5,16 +5,20 @@
 //! contract types so callers never depend on `genzo-model` directly.
 
 use std::collections::{BTreeMap, VecDeque};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use genzo_jobs::Generations;
 use genzo_model::api::{
     AdapterInfo, AdapterKind, Command, EngineInfo, Event, Handshake, HandshakeResult, Query,
-    QueryResult,
+    QueryResult, SpikeSource,
 };
 use genzo_model::contract::ContractVersion;
+use genzo_model::frame::PixelFormat;
 use genzo_model::frame::{Rect, TILE_SIZE, TileHeader};
+use genzo_pipeline::gpu::spike::{DisplaySpace, SpikeParams};
+use genzo_pipeline::gpu::thread::RenderThread;
+use genzo_pipeline::gpu::{AdapterChoice, GpuError};
 
 pub mod contract;
 pub mod files;
@@ -43,6 +47,16 @@ pub enum EngineError {
     Io(String),
     #[error("{0}")]
     Decode(String),
+    #[error("no GPU: {0}")]
+    NoGpu(String),
+    #[error("{0}")]
+    Gpu(String),
+}
+
+impl From<GpuError> for EngineError {
+    fn from(e: GpuError) -> Self {
+        Self::Gpu(e.to_string())
+    }
 }
 
 impl EngineError {
@@ -56,6 +70,8 @@ impl EngineError {
 #[derive(Debug)]
 pub struct Engine {
     adapter: AdapterInfo,
+    /// The render thread, if a GPU adapter (hardware or software) opened.
+    gpu: Option<RenderThread>,
     generations: Generations,
     /// Finished frames by generation: the concatenated tile messages.
     frames: Mutex<FrameStore>,
@@ -86,15 +102,51 @@ impl Default for Engine {
 }
 
 impl Engine {
+    /// Starts the engine and its render thread. `GENZO_ADAPTER=software`
+    /// forces the software adapter.
     pub fn new() -> Self {
+        Self::start(Some(AdapterChoice::from_env()))
+    }
+
+    /// An engine without a render thread, for work that never renders on the
+    /// GPU (contract tooling, decoding, the test pattern).
+    pub fn headless() -> Self {
+        Self::start(None)
+    }
+
+    fn start(choice: Option<AdapterChoice>) -> Self {
+        let spawned = match choice {
+            Some(choice) => RenderThread::spawn(choice),
+            None => Err(GpuError::Device("headless engine, no GPU started".into())),
+        };
+        let (gpu, adapter) = match spawned {
+            Ok(thread) => {
+                let info = thread.info();
+                let adapter = AdapterInfo {
+                    kind: if info.software {
+                        AdapterKind::Software
+                    } else {
+                        AdapterKind::Hardware
+                    },
+                    name: info.name.clone(),
+                    backend: info.backend.clone(),
+                    fallback_reason: info.fallback_reason.clone(),
+                };
+                (Some(thread), adapter)
+            }
+            Err(e) => (
+                None,
+                AdapterInfo {
+                    kind: AdapterKind::None,
+                    name: "none".into(),
+                    backend: "none".into(),
+                    fallback_reason: Some(e.to_string()),
+                },
+            ),
+        };
         Self {
-            // The wgpu render thread and its adapter self-test are the 0.D spike.
-            adapter: AdapterInfo {
-                kind: AdapterKind::None,
-                name: "CPU test pattern".into(),
-                backend: "none".into(),
-                fallback_reason: Some("GPU pipeline not built yet (M0 spike 0.D)".into()),
-            },
+            adapter,
+            gpu,
             generations: Generations::new(),
             frames: Mutex::new(FrameStore::default()),
         }
@@ -126,6 +178,12 @@ impl Engine {
         }
     }
 
+    fn gpu(&self) -> Result<&RenderThread, EngineError> {
+        self.gpu.as_ref().ok_or_else(|| {
+            EngineError::NoGpu(self.adapter.fallback_reason.clone().unwrap_or_default())
+        })
+    }
+
     /// Runs a command and returns the events it produced.
     pub fn execute(&self, command: Command) -> Result<Vec<Event>, EngineError> {
         match command {
@@ -135,44 +193,118 @@ impl Engine {
                 phase,
                 format,
             } => {
-                if width == 0 || height == 0 || width > 16384 || height > 16384 {
-                    return Err(EngineError::InvalidSize { width, height });
-                }
+                check_size(width, height)?;
                 let started = Instant::now();
                 let generation = self.generations.next();
-                let tiles = genzo_pipeline::tiles::grid(width, height, TILE_SIZE);
-                let mut frame = Vec::with_capacity(
-                    width as usize * height as usize * format.bytes_per_pixel()
-                        + tiles.len() * genzo_model::frame::TILE_HEADER_LEN,
-                );
-                for rect in &tiles {
-                    // Latest wins: a newer request makes this one stale.
-                    if self.generations.is_stale(generation) {
-                        return Ok(Vec::new());
-                    }
-                    let pixels =
-                        genzo_pipeline::test_pattern::render_tile(width, height, *rect, phase);
-                    let header = TileHeader {
-                        generation,
-                        rect: *rect,
-                        mip_level: 0,
-                        format,
-                        image_width: width,
-                        image_height: height,
-                    };
-                    frame.extend_from_slice(&header.encode(&pixels));
-                }
-                self.frames
-                    .lock()
-                    .expect("frame store poisoned")
-                    .put(generation, frame);
+                let Some(tile_count) =
+                    self.store_frame(generation, width, height, format, |rect| {
+                        genzo_pipeline::test_pattern::render_tile(width, height, rect, phase)
+                    })
+                else {
+                    return Ok(Vec::new());
+                };
                 Ok(vec![Event::RenderFinished {
                     generation,
-                    tile_count: tiles.len() as u32,
+                    tile_count,
                     render_ms: started.elapsed().as_secs_f64() * 1000.0,
+                    gpu_ms: None,
+                }])
+            }
+            Command::LoadSpikeImage {
+                source: SpikeSource::Synthetic { width, height },
+            } => {
+                check_size(width, height)?;
+                // The CFA pattern repeats every two pixels; keep it whole.
+                let image = genzo_pipeline::gpu::synthetic::scene_mosaic(width & !1, height & !1);
+                let (width, height) = (image.width, image.height);
+                self.gpu()?.set_image(Arc::new(image))?;
+                Ok(vec![Event::SpikeImageLoaded { width, height }])
+            }
+            Command::RenderSpike {
+                width,
+                height,
+                exposure_ev,
+                wb,
+                format,
+                interactive,
+            } => {
+                check_size(width, height)?;
+                let started = Instant::now();
+                let generation = self.generations.next();
+                let params = SpikeParams {
+                    wb,
+                    exposure_ev,
+                    space: match format {
+                        PixelFormat::Rgba8Srgb => DisplaySpace::Srgb,
+                        PixelFormat::Rgba8DisplayP3 => DisplaySpace::DisplayP3,
+                    },
+                    interactive,
+                };
+                // None: a newer render replaced this one on the render thread.
+                let Some(frame) = self.gpu()?.render(params, (width, height))? else {
+                    return Ok(Vec::new());
+                };
+                let row = frame.width as usize * 4;
+                let Some(tile_count) =
+                    self.store_frame(generation, frame.width, frame.height, format, |rect| {
+                        let mut out =
+                            Vec::with_capacity(rect.width as usize * rect.height as usize * 4);
+                        for y in rect.y..rect.y + rect.height {
+                            let start = y as usize * row + rect.x as usize * 4;
+                            out.extend_from_slice(
+                                &frame.rgba[start..start + rect.width as usize * 4],
+                            );
+                        }
+                        out
+                    })
+                else {
+                    return Ok(Vec::new());
+                };
+                Ok(vec![Event::RenderFinished {
+                    generation,
+                    tile_count,
+                    render_ms: started.elapsed().as_secs_f64() * 1000.0,
+                    gpu_ms: frame.gpu_ms,
                 }])
             }
         }
+    }
+
+    /// Splits a `width` × `height` frame into tiles, encodes them and keeps
+    /// the result for [`Engine::frame`]. Returns the tile count, or `None`
+    /// when a newer generation made this one stale (latest wins).
+    fn store_frame(
+        &self,
+        generation: u64,
+        width: u32,
+        height: u32,
+        format: PixelFormat,
+        mut tile_pixels: impl FnMut(Rect) -> Vec<u8>,
+    ) -> Option<u32> {
+        let tiles = genzo_pipeline::tiles::grid(width, height, TILE_SIZE);
+        let mut frame = Vec::with_capacity(
+            width as usize * height as usize * format.bytes_per_pixel()
+                + tiles.len() * genzo_model::frame::TILE_HEADER_LEN,
+        );
+        for rect in &tiles {
+            if self.generations.is_stale(generation) {
+                return None;
+            }
+            let header = TileHeader {
+                generation,
+                rect: *rect,
+                mip_level: 0,
+                format,
+                image_width: width,
+                image_height: height,
+            };
+            frame.extend_from_slice(&header.encode(&tile_pixels(*rect)));
+        }
+        self.frames
+            .lock()
+            .expect("frame store poisoned")
+            .put(generation, frame);
+        Some(tiles.len() as u32)
     }
 
     /// The tile messages of a finished generation, concatenated. Each message
@@ -185,6 +317,13 @@ impl Engine {
             .get(&generation)
             .cloned()
     }
+}
+
+fn check_size(width: u32, height: u32) -> Result<(), EngineError> {
+    if width == 0 || height == 0 || width > 16384 || height > 16384 {
+        return Err(EngineError::InvalidSize { width, height });
+    }
+    Ok(())
 }
 
 /// Splits a concatenated frame into its tiles.
@@ -239,7 +378,7 @@ mod tests {
 
     #[test]
     fn handshake_checks_version() {
-        let e = Engine::new();
+        let e = Engine::headless();
         let ok = e.handshake(&Handshake {
             contract_version: genzo_model::CONTRACT_VERSION.into(),
         });
@@ -256,7 +395,7 @@ mod tests {
 
     #[test]
     fn test_pattern_frame_covers_image() {
-        let e = Engine::new();
+        let e = Engine::headless();
         let generation = render(&e, 600, 300);
         let bytes = e.frame(generation).unwrap();
         let tiles = split_frame(&bytes).unwrap();
@@ -267,7 +406,7 @@ mod tests {
 
     #[test]
     fn keeps_only_recent_frames() {
-        let e = Engine::new();
+        let e = Engine::headless();
         let first = render(&e, 8, 8);
         for _ in 0..KEPT_FRAMES {
             render(&e, 8, 8);
@@ -277,7 +416,7 @@ mod tests {
 
     #[test]
     fn rejects_empty_size() {
-        let e = Engine::new();
+        let e = Engine::headless();
         assert!(
             e.execute(Command::RenderTestPattern {
                 width: 0,
@@ -286,6 +425,77 @@ mod tests {
                 format: PixelFormat::Rgba8Srgb,
             })
             .is_err()
+        );
+    }
+
+    fn spike(width: u32, height: u32, interactive: bool) -> Command {
+        Command::RenderSpike {
+            width,
+            height,
+            exposure_ev: 0.0,
+            wb: [1.0; 3],
+            format: PixelFormat::Rgba8DisplayP3,
+            interactive,
+        }
+    }
+
+    #[test]
+    fn headless_engine_refuses_gpu_work() {
+        let e = Engine::headless();
+        assert_eq!(e.info().adapter.kind, AdapterKind::None);
+        assert!(matches!(
+            e.execute(spike(64, 64, false)),
+            Err(EngineError::NoGpu(_))
+        ));
+    }
+
+    #[test]
+    fn spike_renders_through_the_gpu_as_tiles() {
+        let e = Engine::new();
+        if e.info().adapter.kind == AdapterKind::None {
+            assert_ne!(
+                std::env::var("GENZO_REQUIRE_GPU").as_deref(),
+                Ok("1"),
+                "no GPU adapter"
+            );
+            return;
+        }
+        let loaded = e
+            .execute(Command::LoadSpikeImage {
+                source: SpikeSource::Synthetic {
+                    width: 1201,
+                    height: 800,
+                },
+            })
+            .unwrap();
+        // Odd sizes are trimmed to keep the CFA pattern whole.
+        assert_eq!(
+            loaded,
+            vec![Event::SpikeImageLoaded {
+                width: 1200,
+                height: 800
+            }]
+        );
+        let events = e.execute(spike(600, 600, false)).unwrap();
+        let [
+            Event::RenderFinished {
+                generation,
+                tile_count,
+                ..
+            },
+        ] = events.as_slice()
+        else {
+            panic!("unexpected events {events:?}");
+        };
+        let bytes = e.frame(*generation).unwrap();
+        let tiles = split_frame(&bytes).unwrap();
+        assert_eq!(tiles.len() as u32, *tile_count);
+        // 1200 × 800 fit into 600 × 600 is 600 × 400.
+        assert_eq!(covered_area(&tiles), 600 * 400);
+        assert!(
+            tiles
+                .iter()
+                .all(|(h, _)| h.format == PixelFormat::Rgba8DisplayP3 && h.image_width == 600)
         );
     }
 }

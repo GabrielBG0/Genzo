@@ -6,6 +6,7 @@ import {
   type Event,
   type Handshake,
   type HandshakeResult,
+  type PixelFormat,
   type Query,
   type QueryResult,
   type TileHeader,
@@ -41,6 +42,7 @@ export class FakeEngine implements Engine {
   private listeners = new Set<(e: Event) => void>();
   private frames = new Map<number, ArrayBuffer>();
   private generation = 0;
+  private spikeSize: [number, number] | null = null;
 
   constructor(private readonly contractVersion = CONTRACT_VERSION) {}
 
@@ -69,40 +71,59 @@ export class FakeEngine implements Engine {
   async execute(command: Command): Promise<void> {
     switch (command.type) {
       case 'renderTestPattern': {
-        const started = performance.now();
-        const generation = ++this.generation;
         const { width, height, phase, format } = command;
-        const parts: Uint8Array[] = [];
-        for (let y = 0; y < height; y += TILE_SIZE) {
-          for (let x = 0; x < width; x += TILE_SIZE) {
-            const rect = {
-              x,
-              y,
-              width: Math.min(TILE_SIZE, width - x),
-              height: Math.min(TILE_SIZE, height - y),
-            };
-            const header: TileHeader = {
-              generation,
-              rect,
-              mipLevel: 0,
-              format,
-              imageWidth: width,
-              imageHeight: height,
-            };
-            parts.push(encodeTile(header, testPatternTile(width, height, rect, phase)));
-          }
-        }
-        this.frames.set(generation, concat(parts));
-        this.frames.delete(generation - 4);
-        this.emit({
-          type: 'renderFinished',
-          generation,
-          tileCount: parts.length,
-          renderMs: performance.now() - started,
-        });
+        this.renderPattern(width, height, phase, format);
+        return;
+      }
+      case 'loadSpikeImage': {
+        // The fake has no GPU: it remembers the size and renders the test pattern.
+        const { width, height } = command.source;
+        this.spikeSize = [width & ~1, height & ~1];
+        this.emit({ type: 'spikeImageLoaded', width: this.spikeSize[0], height: this.spikeSize[1] });
+        return;
+      }
+      case 'renderSpike': {
+        if (!this.spikeSize) throw new Error('no image loaded');
+        const [w, h] = fit(this.spikeSize, [command.width, command.height]);
+        // Exposure moves the pattern, so a stale frame is easy to spot.
+        this.renderPattern(w, h, (command.exposureEv + 3) / 6, command.format);
         return;
       }
     }
+  }
+
+  private renderPattern(width: number, height: number, phase: number, format: PixelFormat) {
+    const started = performance.now();
+    const generation = ++this.generation;
+    const parts: Uint8Array[] = [];
+    for (let y = 0; y < height; y += TILE_SIZE) {
+      for (let x = 0; x < width; x += TILE_SIZE) {
+        const rect = {
+          x,
+          y,
+          width: Math.min(TILE_SIZE, width - x),
+          height: Math.min(TILE_SIZE, height - y),
+        };
+        const header: TileHeader = {
+          generation,
+          rect,
+          mipLevel: 0,
+          format,
+          imageWidth: width,
+          imageHeight: height,
+        };
+        parts.push(encodeTile(header, testPatternTile(width, height, rect, phase)));
+      }
+    }
+    this.frames.set(generation, concat(parts));
+    this.frames.delete(generation - 4);
+    this.emit({
+      type: 'renderFinished',
+      generation,
+      tileCount: parts.length,
+      renderMs: performance.now() - started,
+      gpuMs: null,
+    });
   }
 
   onEvent(listener: (event: Event) => void): () => void {
@@ -120,6 +141,12 @@ export class FakeEngine implements Engine {
     // Async, like real engine events.
     queueMicrotask(() => this.listeners.forEach((l) => l(event)));
   }
+}
+
+/** Mirrors genzo_pipeline::gpu::spike::fit: fit inside bounds, never enlarge. */
+export function fit([w, h]: [number, number], [bw, bh]: [number, number]): [number, number] {
+  const s = Math.min(bw / w, bh / h, 1);
+  return [Math.max(1, Math.round(w * s)), Math.max(1, Math.round(h * s))];
 }
 
 /** Mirrors genzo_pipeline::test_pattern::render_tile. */

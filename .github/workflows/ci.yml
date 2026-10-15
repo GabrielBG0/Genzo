@@ -48,10 +48,35 @@ jobs:
         run: |
           cargo check --locked -p genzo-engine --no-default-features
           cargo test --locked -p genzo-imgio --no-default-features
-      # TODO(0.D): GPU golden-image tests on lavapipe (mesa-vulkan-drivers) on every push,
-      # real GPUs nightly. No GPU code exists yet.
+      # GPU tests run here on whatever adapter the runner has (WARP on Windows,
+      # Metal on macOS) and are skipped without one; the gpu job below requires
+      # the reference device.
       # TODO(0.A step 9): compare `genzo-cli bench` p95 against stored baselines and fail
       # on a regression above 10 percent.
+
+  gpu:
+    name: GPU tests (lavapipe)
+    runs-on: ubuntu-22.04
+    env:
+      # lavapipe is the golden-image reference device. Fail instead of skipping
+      # if it is missing.
+      GENZO_ADAPTER: software
+      GENZO_REQUIRE_GPU: "1"
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - run: sudo apt-get update && sudo apt-get install -y mesa-vulkan-drivers vulkan-tools
+      - run: vulkaninfo --summary
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend
+      - run: cargo test --locked -p genzo-pipeline -p genzo-engine -- --nocapture
+      - run: cargo run --locked --release -q -p genzo-cli -- bench gpu 4032 3024 5
 
   architecture:
     name: Architecture rules

@@ -19,6 +19,10 @@ Genzo is GPL-3.0-only. A dependency is acceptable when its license is compatible
 | libheif 1.23.6 | backend (`genzo-heif`), bundled | LGPL-3.0-or-later | Read from `COPYING` and the source headers in the pinned submodule. Built from source and linked statically, with only the libde265 decoder enabled. Compatible with GPL-3.0: the combined work is distributed under GPL-3.0 with full source, which meets the LGPL's relinking terms |
 | libde265 1.1.3 | backend (`genzo-heif`), bundled | LGPL-3.0-or-later | Same as libheif. HEVC decoder; see the HEVC position below |
 | cc, cmake (build tools) | backend build only | MIT OR Apache-2.0 | Not distributed |
+| wgpu 30.0.1 | backend (`pipeline`) | MIT OR Apache-2.0 | GPU pipeline (0.D). Built with the Vulkan, Metal and D3D12 backends only. Its tree adds Apache-2.0-only crates (spirv, codespan-reporting) |
+| pollster 1.0.1 | backend (`pipeline`) | Apache-2.0 OR MIT | |
+| bytemuck 1 | backend (`pipeline`) | Zlib OR Apache-2.0 OR MIT | Already in wgpu's tree |
+| criterion 0.8.2 | backend (`pipeline`), benchmarks only | Apache-2.0 OR MIT | Not distributed |
 | @tauri-apps/api | frontend | Apache-2.0 OR MIT | |
 | Public Sans (`@fontsource/public-sans`) | frontend, bundled | OFL-1.1 | Checked in `node_modules/@fontsource/public-sans/LICENSE`. OFL allows bundling with any software; the font may not be sold on its own |
 | JetBrains Mono (`@fontsource/jetbrains-mono`) | frontend, bundled | OFL-1.1 | Same as Public Sans |
@@ -27,15 +31,12 @@ The other 400-odd transitive Rust crates use the licenses allowed in `deny.toml`
 
 ## Cleared for the M0 spikes
 
-Signed off 2026-10-14. Each crate is added to `Cargo.toml` when its spike starts, at the version below. Their combined dependency tree (about 270 crates, normal and build dependencies) was resolved and every license in it checked against `deny.toml`. The only license outside the allow list is rawler's, which has a per-crate exception.
+Signed off 2026-10-14. Each crate is added to `Cargo.toml` when its spike starts, at the version below, and then moves to the Adopted table (wgpu, pollster and criterion did with 0.D). Their combined dependency tree (about 270 crates, normal and build dependencies) was resolved and every license in it checked against `deny.toml`. The only license outside the allow list is rawler's, which has a per-crate exception.
 
 | Dependency | Version | Use | License (read upstream) | Notes |
 |---|---|---|---|---|
 | rawler | 0.8.0 | RAW and DNG decode (0.C) | LGPL-2.1-only | `LICENSE` in dnglab is the LGPL-2.1 text, and `rawler/Cargo.toml` declares `LGPL-2.1`. The sources carry no "or later" header, so we treat it as 2.1 only. That is still compatible: LGPL-2.1 section 3 lets the recipient apply the GPL instead, and the FSF lists LGPL-2.1 as compatible with GPL-3.0. Pure Rust, with no `-sys` crates and no C build. Static linking into a GPL-3.0 app with full source shipped meets the LGPL. Allowed in `deny.toml` for this crate only |
-| wgpu | 30.0.1 | GPU pipeline (0.D) | MIT OR Apache-2.0 | Its tree adds Apache-2.0-only crates (spirv, codespan-reporting, gl_generator, khronos_api), all compatible with GPL-3.0 |
-| pollster | 1.0.1 | Blocking on wgpu's adapter and device futures (0.D) | Apache-2.0 OR MIT | |
 | moxcms | 0.9.1 | ICC transforms (0.D, M1) | BSD-3-Clause OR Apache-2.0 | Chosen over lcms2 (2026-10-14): pure Rust, with no C build or FFI. Its one non-dev dependency, pxfm, has the same license |
-| criterion | 0.8.2 | Stage benchmarks (0.A step 9), dev only | Apache-2.0 OR MIT | Not distributed. Its tree adds ciborium (Apache-2.0) |
 
 ## Candidates for later milestones
 

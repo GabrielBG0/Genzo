@@ -10,13 +10,23 @@ test('app shell renders against the fake engine', async ({ page }) => {
   await expect(page.getByText('No photo open')).toBeHidden();
 });
 
-test('slider drives the latency probe', async ({ page }) => {
+test('exposure slider drives the latency probe through the spike pipeline', async ({ page }) => {
   await page.goto('/?engine=fake');
+  const slider = page.getByRole('slider', { name: 'Exposure' });
+  await slider.focus();
+  for (let i = 0; i < 5; i++) await page.keyboard.press('ArrowRight');
+  await expect(slider).toHaveAttribute('aria-valuenow', '0.05');
+  await expect(page.getByText(/Input → pixels p95/)).toBeVisible();
+  await expect(page.getByText('No photo open')).toBeHidden();
+});
+
+test('test pattern source drives the phase slider', async ({ page }) => {
+  await page.goto('/?engine=fake');
+  await page.getByRole('combobox').first().selectOption('Test pattern');
   const slider = page.getByRole('slider', { name: 'Phase' });
   await slider.focus();
   for (let i = 0; i < 5; i++) await page.keyboard.press('ArrowRight');
   await expect(slider).toHaveAttribute('aria-valuenow', '5');
-  await expect(page.getByText(/Input → pixels p95/)).toBeVisible();
 });
 
 test('gallery shows every shared component', async ({ page }) => {
