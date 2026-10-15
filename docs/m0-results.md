@@ -207,4 +207,23 @@ Two MIT OR Apache-2.0 projects from the same authors (github.com/storytold/light
 
 ## 0.E Pixels through the webview
 
-The tile protocol, the `genzo-frame` URI scheme, the WebGL2 viewport and the in-app latency probe exist from the M0 foundation. The app's Exposure and Temp sliders now drive the real GPU pipeline (`renderSpike`), sending interactive renders while dragging and one settled render on release. **End-to-end numbers per OS are not measured yet.**
+The tile protocol, the `genzo-frame` URI scheme, the WebGL2 viewport and the in-app latency probe exist from the M0 foundation. The app's Exposure and Temp sliders now drive the real GPU pipeline (`renderSpike`), sending interactive renders while dragging and one settled render on release. **Windows is measured (below). macOS and Linux are not.**
+
+### Windows 11, WebView2 155 (RTX 3060), release build
+
+Measured with `frontend/scripts/measure-latency.mjs`, which attaches to the real app's webview over the DevTools protocol (WebView2 started with `--remote-debugging-port`) and drags the Exposure slider with real mouse events at about 120 Hz, 4 to 6 drags of 120 steps. The numbers are the app's own probe: input to pixels on screen, "latest input wins", as the user feels it during a drag. 12 MP synthetic raw.
+
+| Frame | Probe p50 | Probe p95 | Frame fetch p50 | Frame size |
+|---|---|---|---|---|
+| 2560 px wide (gate case) | 197 to 218 ms | 220 to 236 ms | 83 to 91 ms | 11.1 MB |
+| 1280 px wide | 53 ms | 70 ms | 24 ms | 2.8 MB |
+
+**The gate (under 50 ms p95 at 2560 px) fails on Windows by about 4x.** The GPU is not the cost: 1.3 ms per frame. The time goes into moving the pixels to the page.
+
+- Reading the frame through the `genzo-frame` custom URI scheme runs at about 120 to 130 MB/s on WebView2, so cost is linear in bytes: 24 ms for 2.8 MB, 85 ms for 11 MB. That is about 40 percent of the total.
+- The rest is the IPC call (render, readback, tile split: about 10 ms engine side in the 0.D numbers), the WebGL upload and draw, and queueing. While dragging, the probe measures from the oldest input that has not been served, so a request that takes T ms shows up as between T and 2 T. A single isolated input would measure nearer 100 to 115 ms, which still fails.
+- Halving the frame (ladder step 1, a proxy while dragging) lands at 53 ms p50 and 70 ms p95. That is close but still over at p95.
+
+**Consequence:** ladder step 1 alone is not enough on Windows. Next experiments, in order: (1) a proxy of about 1280 px while dragging with the full frame on release, combined with (2) a compressed frame (JPEG or QOI, decoded in the page) so a 2560 px frame is around 1 MB instead of 11 MB. Not built yet. The native wgpu surface (step 3) stays the last resort.
+
+**Not measured:** macOS (WKWebView) and Linux (WebKitGTK 4.1 on two distros) have no DevTools attach, so the script does not work there. On those the numbers have to be read off the "Input → pixels" rows in the app's right panel while dragging the slider by hand, on a release build (`pnpm app:build --no-bundle`). Color handling (sRGB and Display P3 tagged frames, step 5) is also open.
