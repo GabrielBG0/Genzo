@@ -1,2 +1,6 @@
 .DS_Store
 *.log
+
+# The raw test corpus (M0 step 0.C) stays out of git; only its README is tracked.
+/corpus/*
+!/corpus/README.md
