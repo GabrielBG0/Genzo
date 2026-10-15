@@ -154,6 +154,14 @@ Read from the LibRaw 0.22.2 source (the newest release, 2026), not run:
 
 So **LibRaw would not fix any of the three files rawler fails on.** The LibRaw FFI prototype from step 4 has no test file in the corpus: nothing exists that rawler can't read and LibRaw can. Two ways forward: (a) skip the FFI crate for now and revisit if a real file turns up that only LibRaw reads, which saves a second unsafe crate and a C++ build; (b) hunt for such a file, first across the rest of raw.pixls.us. Recommendation: (a). The gaps that matter are covered by our own code (JPEG XL DNG with `jxl-oxide`) or by nobody yet (Nikon HE, JPEG XS).
 
+### Adobe DNG Converter references (step 5)
+
+Adobe DNG Converter 18.6 runs headless: `"Adobe DNG Converter.exe" -c -l -u -d <outdir> <file>` writes a **linear, uncompressed, demosaiced DNG** in 2 to 6 s per file. `scripts/make-dng-references.ps1` wraps it and writes `corpus/reference/<stem>/<stem>.dng` (gitignored, 58 to 350 MB each). Made for 10 files: D850, Z 9 (lossless), Z 8 (HE), Sony 7RM5, X-T5, Canon R5m2 (C-RAW), Panasonic S5M2, iPhone 12 Pro, iPhone 16 Pro and Galaxy S23 Ultra.
+
+- **Adobe reads Nikon High Efficiency**: the Z 8 HE file converted fine. So we have an Adobe reference for a file neither rawler nor LibRaw can decode, which is also proof that a correct decoder exists.
+- **Adobe also reads the iPhone 16 Pro file** and writes it as plain 16-bit LinearRaw. rawler reads these outputs in 17 to 72 ms (`raw_gap_report ../corpus/reference`), so they can be loaded as pixel references without any special decoder. Black levels stay in the file (for example 2048 for the Sony), so apply them when comparing.
+- **Not covered: Apple Photos renders.** Those need a Mac. The owner would export the same iPhone files as TIFF or JPEG from Photos into `corpus/reference/<stem>/`.
+
 ### Prior art: LightCraft and PhotoCraft (read 2026-10-15)
 
 Two MIT OR Apache-2.0 projects from the same authors (github.com/storytold/lightcraft, a Lightroom reimplementation, and github.com/storytold/photocraft). Both use a clean-room pure-Rust raw crate. Their license lets us read and reuse code with attribution, and is compatible with GPL-3.0. Nothing is copied yet. What they tell us:
