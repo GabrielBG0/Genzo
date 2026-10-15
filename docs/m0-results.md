@@ -129,6 +129,16 @@ Gaps that matter for the pipeline:
 - Nikon HE is the one mainstream gap. Whether LibRaw can read it is step 3 and is not checked yet.
 
 
+### Prior art: LightCraft and PhotoCraft (read 2026-10-15)
+
+Two MIT OR Apache-2.0 projects from the same authors (github.com/storytold/lightcraft, a Lightroom reimplementation, and github.com/storytold/photocraft). Both use a clean-room pure-Rust raw crate. Their license lets us read and reuse code with attribution, and is compatible with GPL-3.0. Nothing is copied yet. What they tell us:
+
+- **ProRAW gain table map: leave it off by default.** LightCraft reads and keeps `ProfileGainTableMap` (tags 52525 and 52544) but does not apply it, because Lightroom Classic renders ProRAW without it: with the map on, their ΔE00 against Lightroom was 19. It offers "camera local tone mapping" as an opt-in. Their `crates/raw/src/gaintable.rs` documents the interpolation. For Genzo, which is modeled on Lightroom, this likely settles the default.
+- **JPEG XL DNG works with `jxl-oxide`** (pinned exactly), including real lossless and lossy files, so the iPhone 16 Pro failure is solvable in pure Rust. They also read iPhone semantic mattes from the DNG for subject and sky masks.
+- **Nikon High Efficiency is JPEG XS, not decodable in pure Rust today.** They treat it as preview-only and estimate 20 to 40 hours for a decoder, worth about 1.1 points of coverage (only shots taken in HE; lossless works on the same bodies). This supports treating HE as a LibRaw question, not a blocker.
+- **Camera priority input** (`docs/raw/usage-weights.tsv` there, their estimate from 2025 market data and their issue tracker): Canon 33%, Sony 27%, Nikon 16%, Fujifilm 10%, Panasonic 4%, OM/Olympus 3%, phones 3%, Pentax/Ricoh 1.5%, Leica 1%. Their biggest raw gaps by gain per hour were compressed ORF and CR3 variants, then Nikon HE. Treat as a starting point for step 7, not data of ours.
+- **Docs worth mining:** `docs/raw-parity.md` (per-format support and how they verify it), `docs/raw/coverage.tsv`, `docs/gaps.md`, `docs/cr3.md`, `docs/raf-compression.md`, `docs/arw6-compression.md`.
+
 ## 0.E Pixels through the webview
 
 The tile protocol, the `genzo-frame` URI scheme, the WebGL2 viewport and the in-app latency probe exist from the M0 foundation. The app's Exposure and Temp sliders now drive the real GPU pipeline (`renderSpike`), sending interactive renders while dragging and one settled render on release. **End-to-end numbers per OS are not measured yet.**
