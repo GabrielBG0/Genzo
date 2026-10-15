@@ -104,16 +104,26 @@ Every item below has been resolved with these two rules. No open conflicts remai
 - Edit in an external editor (TIFF round trip).
 - Spec items in Later with no mockup: HDR and panorama merge, soft proofing, lens blur, point color, adaptive presets, raw details, super resolution.
 
+## Decided
+
+Parked decisions that have been settled, with the date and what follows from each.
+
+| Decision | Outcome | Decided | Consequences |
+|---|---|---|---|
+| Minimum OS versions | Windows 10 and 11; macOS 13 Ventura or newer; Linux with WebKitGTK 4.1 (Ubuntu 22.04, Fedora 38 or newer) | 2026-10-14 | CI pins `ubuntu-22.04` and `windows-2022` and builds macOS with `MACOSX_DEPLOYMENT_TARGET=13.0`; the bundle declares macOS 13.0. GitHub has no Windows 10 or macOS 13 runners, so those two are checked by hand before a release |
+| Undo scope (APP-10) | Per photo. Each photo has its own history; Ctrl Z undoes the last change to the current photo | 2026-10-14 | The M1 `Undo` and `Redo` commands take the photo they act on. History steps are stored per photo (the catalog's History step entity already is). In M2, library actions such as ratings, flags and labels join the history of the photo they change |
+| HEVC patent position | Ship libde265 (inside a bundled libheif) on every platform, and accept the patent risk. Revisit before the first public release | 2026-10-14 | See `docs/licenses.md`, which also explains how to cut HEIC support |
+| Module state (APP-01) | Not remembered. Zoom, pan and open panels are neither kept per photo nor per module; switching modules or photos starts from the defaults | 2026-10-14 | No view-state store is needed in M1 |
+| ICC library | moxcms (pure Rust), not lcms2 | 2026-10-14 | No C build for color management. lcms2 stays the fallback; see `docs/licenses.md` |
+| Working space | Linear light on the ACES AP1 primaries with a D65 white | 2026-10-14 | Rec. 2020 does not fully contain Display P3 (its red is just outside), so it fails the spec's requirement. AP1 contains both. The D65 white matches the display spaces, so no chromatic adaptation is needed. See `docs/m0-results.md` |
+
 ## Parked decisions, with a deadline
 
 These are open questions, not conflicts. Neither source answers them.
 
 | Decision | Source | Decide by | Why then |
 |---|---|---|---|
-| Minimum OS versions | Spec | Start of M0 | The CI matrix and the WebView2/WebKitGTK baseline depend on it |
 | Camera priority order | Spec | During M0 (the rawler gap check) | It sets which LibRaw fallbacks are wired in M1 |
-| Undo scope: global across library and develop actions, or per photo | APP-10 | Before M1 | The shape of the `Undo` command and the history model are fixed in the M1 contract |
-| Remember module state per photo or per module | APP-01 | Before M1 | View state store design |
 | Offline only (no accounts, no cloud) | Spec | Before M2 | Affects the catalog and the AI model download policy |
 | Multiple catalogs | Spec | Before M2 schema work | Catalog path handling in engine |
 | Ctrl K: command search or Add keywords | APP-04, MET-02 | Before M2 | Shortcut registry defaults |
@@ -233,10 +243,10 @@ These are open questions, not conflicts. Neither source answers them.
 - [ ] Latency gate passed, or a ladder step chosen, on all three OSes.
 - [ ] ProRAW decodes on every device in the corpus
 - [ ] Software adapter runs the spike pipeline
-- [ ] License review written, fonts included
+- [x] License review written, fonts included (signed off for M0 in `docs/licenses.md`)
 - [ ] Performance targets confirmed or revised in the spec
 - [ ] Tokens, fonts, shared components and app shell running against the fake engine
-- [ ] The M1 parked decisions are settled (undo scope, module state)
+- [x] The M1 parked decisions are settled (undo scope, module state; see Decided)
 
 ---
 
@@ -572,7 +582,7 @@ The **Source** column says where a row's milestone comes from:
 | APP-07 | Status bar | P2 | M1 | added |
 | APP-08 | Panel visibility | P1 | M1 | added |
 | APP-09 | Screen modes, Lights Out | P2 | M5 | added |
-| APP-10 | Undo and redo | P0 | M1 edits, M2 library actions | spec (history); added (global scope) |
+| APP-10 | Undo and redo | P0 | M1 edits, M2 library actions, per photo (decided) | spec (history) |
 | APP-11 | Preferences, catalog settings | P1 | M2 | added |
 | APP-12 | Light theme | P2 | M5 | spec |
 | CAT-01 | Catalog database | P0 | M2 | spec |

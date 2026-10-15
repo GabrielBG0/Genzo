@@ -1,11 +1,12 @@
 //! Decoding and encoding of image files.
 //!
-//! The decoders (rawler, LibRaw, libheif, zune-jpeg) are not adopted yet:
-//! the M0 license review (docs/licenses.md) has to clear them first. Until
-//! then this crate only identifies file formats, which is enough for folder
-//! listing and gives the fuzzer a first target.
+//! Every decoder returns the same normalized [`DecodedImage`], so the
+//! pipeline never sees a file format. HEIC and HEIF decode through the
+//! bundled libheif (the `heic` feature). The RAW decoders (rawler, LibRaw)
+//! and JPEG, TIFF and PNG are still to come: the RAW ones with the 0.C spike,
+//! after their license review in docs/licenses.md.
 
-use genzo_model::frame::Rect;
+mod heic;
 
 /// A file format Genzo recognizes from its first bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -33,6 +34,10 @@ pub enum DecodeError {
     UnknownFormat,
     #[error("decoding {0:?} is not implemented yet")]
     Unsupported(FileFormat),
+    #[error("{0:?} support is not included in this build (the `{1}` feature is off)")]
+    NotBuiltIn(FileFormat, &'static str),
+    #[error("corrupt or unreadable {format:?} file: {message}")]
+    Corrupt { format: FileFormat, message: String },
 }
 
 /// Identifies a file from its first bytes. Never panics, whatever the input.
@@ -66,14 +71,88 @@ pub fn sniff(head: &[u8]) -> Option<FileFormat> {
     None
 }
 
-/// The normalized decode output every decoder will produce. The pipeline
-/// never sees a file format. Filled in by the 0.C decode spike.
-#[derive(Debug)]
+/// How the pixel values of a decoded image are encoded.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ColorEncoding {
+    /// sRGB primaries and transfer function.
+    Srgb,
+    /// Display P3: DCI-P3 primaries, D65 white, sRGB transfer function.
+    /// What iPhones tag their HEIC photos with.
+    DisplayP3,
+    /// ITU-T H.273 code points with no shortcut above.
+    Nclx {
+        primaries: u16,
+        transfer: u16,
+        matrix: u16,
+        full_range: bool,
+    },
+    /// An embedded ICC profile, applied by the color crate.
+    Icc(Vec<u8>),
+}
+
+/// Pixel data of a decoded image.
+#[derive(Debug, Clone)]
+pub enum Pixels {
+    /// Interleaved RGBA, 16 bits per channel over the full 0..=65535 range,
+    /// encoded per the image's [`ColorEncoding`] (not linear). Non-RAW
+    /// formats decode to this.
+    Rgba16(Vec<u16>),
+}
+
+/// The normalized decode output every decoder produces.
+#[derive(Debug, Clone)]
 pub struct DecodedImage {
+    pub format: FileFormat,
     pub width: u32,
     pub height: u32,
-    /// Area of the sensor that holds image data.
-    pub active_area: Rect,
+    /// Bits per channel in the file, before widening to 16.
+    pub source_bits: u8,
+    pub has_alpha: bool,
+    pub color: ColorEncoding,
+    pub pixels: Pixels,
+    /// Raw EXIF (TIFF structure), for metadata. Its orientation tag is
+    /// already reflected in the pixels and must not be applied again.
+    pub exif: Option<Vec<u8>>,
+}
+
+/// A small embedded preview, shown while the full image decodes.
+#[derive(Debug, Clone)]
+pub struct Preview {
+    pub width: u32,
+    pub height: u32,
+    /// Interleaved RGBA, 8 bits per channel.
+    pub rgba: Vec<u8>,
+}
+
+/// Decode settings.
+#[derive(Debug, Clone, Copy)]
+pub struct DecodeOptions {
+    /// Threads a decoder may use inside one file (HEIC tiles). Use 1 for
+    /// batch work on the rayon pool, more to open one photo quickly.
+    pub threads: u8,
+}
+
+impl Default for DecodeOptions {
+    fn default() -> Self {
+        Self { threads: 4 }
+    }
+}
+
+/// Decodes a file's full image.
+pub fn decode(data: &[u8], options: DecodeOptions) -> Result<DecodedImage, DecodeError> {
+    match sniff(data).ok_or(DecodeError::UnknownFormat)? {
+        FileFormat::Heif => heic::decode(data, options),
+        other => Err(DecodeError::Unsupported(other)),
+    }
+}
+
+/// Decodes a file's embedded preview, if it has one. Fast enough for the
+/// "first pixels within one frame" budget.
+pub fn decode_preview(data: &[u8]) -> Result<Option<Preview>, DecodeError> {
+    match sniff(data).ok_or(DecodeError::UnknownFormat)? {
+        FileFormat::Heif => heic::decode_preview(data),
+        other => Err(DecodeError::Unsupported(other)),
+    }
 }
 
 #[cfg(test)]
@@ -91,6 +170,18 @@ mod tests {
         assert_eq!(sniff(b"FUJIFILMCCD-RAW 0201"), Some(FileFormat::Raf));
         assert_eq!(sniff(b"IIU\0"), Some(FileFormat::Rw2));
         assert_eq!(sniff(b"IIRO"), Some(FileFormat::Orf));
+    }
+
+    #[test]
+    fn unsupported_formats_say_so() {
+        assert!(matches!(
+            decode(b"GIF89a", DecodeOptions::default()),
+            Err(DecodeError::UnknownFormat)
+        ));
+        assert!(matches!(
+            decode(&[0xFF, 0xD8, 0xFF, 0xE1], DecodeOptions::default()),
+            Err(DecodeError::Unsupported(FileFormat::Jpeg))
+        ));
     }
 
     #[test]

@@ -8,9 +8,13 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUSTFLAGS: -D warnings
+  MACOSX_DEPLOYMENT_TARGET: "13.0"
+# libheif and libde265 are git submodules, built with CMake (present on all runners).
 
-# TODO(M0, parked decision "Minimum OS versions"): pin the runner images to the
-# oldest supported Windows, macOS and Linux (WebKitGTK 4.1 baseline) once decided.
+# Minimum OS versions (docs/development-plan.md, Decided): Windows 10 and 11,
+# macOS 13, Linux with WebKitGTK 4.1 (Ubuntu 22.04). Builds run on the oldest
+# runner images GitHub offers; there are no Windows 10 or macOS 13 runners, so
+# macOS builds target 13.0 and those two OSes are checked by hand.
 
 jobs:
   backend:
@@ -19,13 +23,15 @@ jobs:
       fail-fast: false
       matrix:
         # macos-15 is Apple silicon, macos-15-intel is Intel.
-        os: [ubuntu-latest, windows-latest, macos-15, macos-15-intel]
+        os: [ubuntu-22.04, windows-2022, macos-15, macos-15-intel]
     runs-on: ${{ matrix.os }}
     defaults:
       run:
         working-directory: backend
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -37,10 +43,40 @@ jobs:
       - run: cargo test --locked
       # The snapshot test covers this too; the cli check gives a clearer message.
       - run: cargo run --locked -q -p genzo-cli -- contract check
-      # TODO(0.D): GPU golden-image tests on lavapipe (mesa-vulkan-drivers) on every push,
-      # real GPUs nightly. No GPU code exists yet.
+      # HEIC can be cut; keep the build without it compiling.
+      - if: runner.os == 'Linux'
+        run: |
+          cargo check --locked -p genzo-engine --no-default-features
+          cargo test --locked -p genzo-imgio --no-default-features
+      # GPU tests run here on whatever adapter the runner has (WARP on Windows,
+      # Metal on macOS) and are skipped without one; the gpu job below requires
+      # the reference device.
       # TODO(0.A step 9): compare `genzo-cli bench` p95 against stored baselines and fail
       # on a regression above 10 percent.
+
+  gpu:
+    name: GPU tests (lavapipe)
+    runs-on: ubuntu-22.04
+    env:
+      # lavapipe is the golden-image reference device. Fail instead of skipping
+      # if it is missing.
+      GENZO_ADAPTER: software
+      GENZO_REQUIRE_GPU: "1"
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - run: sudo apt-get update && sudo apt-get install -y mesa-vulkan-drivers vulkan-tools
+      - run: vulkaninfo --summary
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: backend
+      - run: cargo test --locked -p genzo-pipeline -p genzo-engine -- --nocapture
+      - run: cargo run --locked --release -q -p genzo-cli -- bench gpu 4032 3024 5
 
   architecture:
     name: Architecture rules
@@ -93,10 +129,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-15]
+        os: [ubuntu-22.04, windows-2022, macos-15]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: true
       - if: runner.os == 'Linux'
         run: |
           sudo apt-get update

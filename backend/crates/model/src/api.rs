@@ -60,6 +60,18 @@ pub struct EngineInfo {
     pub adapter: AdapterInfo,
 }
 
+/// Where the raw image of the 0.D GPU spike comes from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum SpikeSource {
+    /// A generated Bayer scene of this size, standing in for a raw file.
+    Synthetic { width: u32, height: u32 },
+}
+
 /// Requests that change engine state.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(
@@ -76,6 +88,22 @@ pub enum Command {
         /// Changes the pattern, standing in for a slider value.
         phase: f32,
         format: PixelFormat,
+    },
+    /// M0 spike 0.D: load the raw image the GPU pipeline renders.
+    LoadSpikeImage { source: SpikeSource },
+    /// M0 spike 0.D: render the loaded raw image through the GPU pipeline
+    /// into a viewport that fits `width` × `height`, and stream it as tiles.
+    RenderSpike {
+        width: u32,
+        height: u32,
+        exposure_ev: f32,
+        /// White balance gains for red, green and blue.
+        wb: [f32; 3],
+        format: PixelFormat,
+        /// A slider is being dragged: white balance is applied after the
+        /// cached demosaic. Send `false` once the drag ends for the full
+        /// quality render.
+        interactive: bool,
     },
 }
 
@@ -113,7 +141,11 @@ pub enum Event {
         tile_count: u32,
         /// Engine-side render time, for the latency harness.
         render_ms: f64,
+        /// GPU time of the stages that ran, when the adapter can measure it.
+        gpu_ms: Option<f64>,
     },
+    /// The spike's raw image is loaded; renders now show it.
+    SpikeImageLoaded { width: u32, height: u32 },
 }
 
 #[cfg(test)]
@@ -137,6 +169,43 @@ mod tests {
                 "height": 1440,
                 "phase": 0.5,
                 "format": "rgba8Srgb"
+            })
+        );
+    }
+
+    #[test]
+    fn render_spike_json_shape() {
+        let c = Command::RenderSpike {
+            width: 2560,
+            height: 1440,
+            exposure_ev: 0.5,
+            wb: [2.0, 1.0, 1.5],
+            format: PixelFormat::Rgba8DisplayP3,
+            interactive: true,
+        };
+        assert_eq!(
+            serde_json::to_value(&c).unwrap(),
+            serde_json::json!({
+                "type": "renderSpike",
+                "width": 2560,
+                "height": 1440,
+                "exposureEv": 0.5,
+                "wb": [2.0, 1.0, 1.5],
+                "format": "rgba8DisplayP3",
+                "interactive": true
+            })
+        );
+        let load = Command::LoadSpikeImage {
+            source: SpikeSource::Synthetic {
+                width: 8064,
+                height: 6048,
+            },
+        };
+        assert_eq!(
+            serde_json::to_value(&load).unwrap(),
+            serde_json::json!({
+                "type": "loadSpikeImage",
+                "source": { "type": "synthetic", "width": 8064, "height": 6048 }
             })
         );
     }

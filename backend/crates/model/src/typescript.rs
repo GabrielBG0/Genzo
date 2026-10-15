@@ -7,7 +7,7 @@ use ts_rs::{Config, TS};
 
 use crate::api::{
     AdapterInfo, AdapterKind, Command, EngineInfo, Event, Handshake, HandshakeResult, Query,
-    QueryResult,
+    QueryResult, SpikeSource,
 };
 use crate::contract::{CONTRACT_VERSION, ContractVersion};
 use crate::frame::{PixelFormat, Rect, TILE_HEADER_LEN, TILE_MAGIC, TILE_SIZE, TileHeader};
@@ -31,6 +31,7 @@ pub fn generate() -> String {
         decl::<PixelFormat>(&cfg),
         decl::<Rect>(&cfg),
         decl::<TileHeader>(&cfg),
+        decl::<SpikeSource>(&cfg),
         decl::<Command>(&cfg),
         decl::<Query>(&cfg),
         decl::<QueryResult>(&cfg),

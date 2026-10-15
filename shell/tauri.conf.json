@@ -6,8 +6,15 @@
   "build": {
     "devUrl": "http://localhost:5173",
     "frontendDist": "../frontend/dist",
-    "beforeDevCommand": { "script": "pnpm dev", "cwd": "../frontend", "wait": false },
-    "beforeBuildCommand": { "script": "pnpm build", "cwd": "../frontend" }
+    "beforeDevCommand": {
+      "script": "pnpm dev",
+      "cwd": "../frontend",
+      "wait": false
+    },
+    "beforeBuildCommand": {
+      "script": "pnpm build",
+      "cwd": "../frontend"
+    }
   },
   "app": {
     "windows": [
@@ -30,6 +37,15 @@
     "license": "GPL-3.0-only",
     "category": "Photography",
     "shortDescription": "A free desktop photo editor",
-    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"]
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "macOS": {
+      "minimumSystemVersion": "13.0"
+    }
   }
 }

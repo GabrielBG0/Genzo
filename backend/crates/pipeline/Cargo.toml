@@ -16,3 +16,13 @@ genzo-model.workspace = true
 genzo-color.workspace = true
 genzo-imgio.workspace = true
 thiserror.workspace = true
+wgpu.workspace = true
+pollster.workspace = true
+bytemuck.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+
+[[bench]]
+name = "spike"
+harness = false

@@ -17,7 +17,8 @@ No generative AI. AI is used only to assist selection and masking and for denois
 
 ```
 backend/    Cargo workspace (model, imgio, color, pipeline, catalog, cache,
-            jobs, ai, export, engine, cli). No UI dependencies.
+            jobs, ai, export, engine, cli, and heif for the bundled
+            libheif). No UI dependencies.
 contract/   API schema and TypeScript types generated from the Rust types
 shell/      Thin Tauri 2 adapter that maps the engine API to IPC
 frontend/   Svelte 5 + TypeScript app. Never imports Rust code.
@@ -30,7 +31,15 @@ docs/       Development plan, UI handoff and feature list
 
 ## Development
 
-Requirements: Rust 1.90 or newer, Node 24 with pnpm, and on Linux the WebKitGTK 4.1 development packages (`libwebkit2gtk-4.1-dev`, `libsoup-3.0-dev`).
+Requirements: Rust 1.90 or newer, CMake 3.16 or newer and a C++17 compiler (for the bundled libheif), Node 24 with pnpm, and on Linux the WebKitGTK 4.1 development packages (`libwebkit2gtk-4.1-dev`, `libsoup-3.0-dev`).
+
+Clone with submodules, which hold the libheif and libde265 sources:
+
+```sh
+git clone --recursive https://github.com/GabrielBG0/Genzo
+# or, in an existing clone:
+git submodule update --init --recursive
+```
 
 ```sh
 # Backend: tests, the contract snapshot, and the engine-side benchmark
@@ -38,6 +47,8 @@ cd backend
 cargo test
 cargo run -p genzo-cli -- contract write   # after changing a contract type (bump CONTRACT_VERSION first)
 cargo run --release -p genzo-cli -- bench test-pattern 2560 1440 60
+cargo run --release -p genzo-cli -- inspect photo.heic
+cargo run --release -p genzo-cli -- bench decode photo.heic 4 20   # threads, runs
 
 # Frontend against the fake engine, in a browser
 cd frontend

@@ -20,7 +20,8 @@ Resolution rule: where the spec and the UI documents conflict, the spec wins. Wh
 
 ```
 backend/    Cargo workspace, zero UI dependencies
-  crates/   model, imgio, color, pipeline, catalog, cache, jobs, ai, export, engine, cli
+  crates/   model, imgio, color, pipeline, catalog, cache, jobs, ai, export, engine, cli,
+            heif (bundled libheif + libde265, the only crate with unsafe code; git submodules)
 contract/   generated API schema and TypeScript types (generated, checked in)
 shell/      thin Tauri adapter in Rust, maps the engine API to IPC
 frontend/   Svelte 5 + TypeScript (strict) app, built with Vite

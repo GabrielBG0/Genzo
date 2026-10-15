@@ -1,14 +1,15 @@
 //! `genzo-cli`: drives the engine without a UI.
 //!
 //! The cli must be able to do everything the UI does except draw. In M0 that
-//! is the contract tooling, engine info and the test-pattern benchmark.
+//! is the contract tooling, engine info, decoding, and the benchmarks for the
+//! test pattern and the GPU spike pipeline.
 
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Instant;
 
-use genzo_engine::api::{Command, Event, PixelFormat};
-use genzo_engine::{Engine, contract};
+use genzo_engine::api::{Command, Event, PixelFormat, SpikeSource};
+use genzo_engine::{Engine, contract, files};
 
 const USAGE: &str = "\
 usage: genzo-cli <command>
@@ -18,7 +19,11 @@ commands:
   info                         print engine info as JSON
   contract write [DIR]         regenerate contract/ (refuses without a version bump)
   contract check [DIR]         fail if contract/ is stale
+  inspect FILE                 decode a file, print what it holds and how long it took
   bench test-pattern [W H N]   render N test-pattern frames of W×H, print p50/p95
+  bench decode FILE [T N]      decode FILE N times with T threads, print p50/p95
+  bench gpu [W H N]            render a W×H synthetic raw into a 2560 px viewport,
+                               N steps per slider, print GPU and engine p50/p95
 ";
 
 fn default_contract_dir() -> PathBuf {
@@ -30,7 +35,7 @@ fn main() -> ExitCode {
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     let result = match args.as_slice() {
         ["version"] => {
-            let info = Engine::new().info();
+            let info = Engine::headless().info();
             println!(
                 "engine {} contract {}",
                 info.engine_version, info.contract_version
@@ -70,7 +75,17 @@ fn main() -> ExitCode {
                 .map(|()| println!("contract up to date"))
                 .map_err(|e| e.to_string())
         }
+        ["inspect", file] => files::inspect(file.as_ref())
+            .map(|r| {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&r).expect("serializable")
+                )
+            })
+            .map_err(|e| e.to_string()),
         ["bench", "test-pattern", rest @ ..] => bench_test_pattern(rest),
+        ["bench", "decode", file, rest @ ..] => bench_decode(file, rest),
+        ["bench", "gpu", rest @ ..] => bench_gpu(rest),
         _ => Err(USAGE.to_owned()),
     };
     match result {
@@ -82,6 +97,28 @@ fn main() -> ExitCode {
     }
 }
 
+fn parse_num(args: &[&str], i: usize, default: u32) -> Result<u32, String> {
+    args.get(i).map_or(Ok(default), |s| {
+        s.parse().map_err(|_| format!("not a number: {s}"))
+    })
+}
+
+fn percentiles(mut times: Vec<f64>) -> (f64, f64) {
+    times.sort_by(f64::total_cmp);
+    let pct = |p: f64| times[((times.len() - 1) as f64 * p).round() as usize];
+    (pct(0.5), pct(0.95))
+}
+
+/// Full-image decode time for one file, with a given number of decode threads.
+fn bench_decode(file: &str, args: &[&str]) -> Result<(), String> {
+    let threads = parse_num(args, 0, 4)?.clamp(1, 64) as u8;
+    let n = parse_num(args, 1, 10)?.max(1);
+    let times = files::time_decode(file.as_ref(), threads, n).map_err(|e| e.to_string())?;
+    let (p50, p95) = percentiles(times);
+    println!("decode {file}, {threads} threads, {n} runs: p50 {p50:.2} ms, p95 {p95:.2} ms");
+    Ok(())
+}
+
 /// Engine-side cost of one frame: render plus tile encoding. The end-to-end
 /// latency (IPC, upload, screen) is measured in the app, see 0.E.
 fn bench_test_pattern(args: &[&str]) -> Result<(), String> {
@@ -91,7 +128,7 @@ fn bench_test_pattern(args: &[&str]) -> Result<(), String> {
         })
     };
     let (width, height, n) = (num(0, 2560)?, num(1, 1440)?, num(2, 30)?.max(1));
-    let engine = Engine::new();
+    let engine = Engine::headless();
     let mut times = Vec::with_capacity(n as usize);
     for i in 0..n {
         let started = Instant::now();
@@ -110,12 +147,87 @@ fn bench_test_pattern(args: &[&str]) -> Result<(), String> {
         std::hint::black_box(bytes);
         times.push(started.elapsed().as_secs_f64() * 1000.0);
     }
-    times.sort_by(f64::total_cmp);
-    let pct = |p: f64| times[((times.len() - 1) as f64 * p).round() as usize];
-    println!(
-        "test-pattern {width}x{height}, {n} frames: p50 {:.2} ms, p95 {:.2} ms",
-        pct(0.5),
-        pct(0.95)
+    let (p50, p95) = percentiles(times);
+    println!("test-pattern {width}x{height}, {n} frames: p50 {p50:.2} ms, p95 {p95:.2} ms");
+    Ok(())
+}
+
+/// The 0.D measurement: what one slider step costs on the GPU at 2560 px.
+/// An exposure drag re-runs only the output stage; a white balance drag
+/// re-runs everything from the raw data (linearize, demosaic, mips).
+fn bench_gpu(args: &[&str]) -> Result<(), String> {
+    let (width, height, n) = (
+        parse_num(args, 0, 8064)?,
+        parse_num(args, 1, 6048)?,
+        parse_num(args, 2, 50)?.max(2),
     );
+    let engine = Engine::new();
+    let info = engine.info().adapter;
+    println!("adapter: {} ({}, {:?})", info.name, info.backend, info.kind);
+    if let Some(reason) = &info.fallback_reason {
+        println!("fallback: {reason}");
+    }
+    let started = Instant::now();
+    engine
+        .execute(Command::LoadSpikeImage {
+            source: SpikeSource::Synthetic { width, height },
+        })
+        .map_err(|e| e.to_string())?;
+    println!(
+        "load {width}x{height}: {:.0} ms",
+        started.elapsed().as_secs_f64() * 1000.0
+    );
+
+    let render =
+        |exposure_ev: f32, wb: [f32; 3], interactive: bool| -> Result<(f64, Option<f64>), String> {
+            let events = engine
+                .execute(Command::RenderSpike {
+                    width: 2560,
+                    height: 2560,
+                    exposure_ev,
+                    wb,
+                    format: PixelFormat::Rgba8Srgb,
+                    interactive,
+                })
+                .map_err(|e| e.to_string())?;
+            match events.first() {
+                Some(Event::RenderFinished {
+                    render_ms, gpu_ms, ..
+                }) => Ok((*render_ms, *gpu_ms)),
+                _ => Err("render produced no frame".into()),
+            }
+        };
+    // The first render builds everything and warms the shader caches.
+    render(0.0, [1.0; 3], false)?;
+    // A drag sends interactive renders; the settled render after release
+    // re-runs the demosaic.
+    let cases = [
+        ("exposure drag", false, true),
+        ("white balance drag", true, true),
+        ("white balance settled", true, false),
+    ];
+    for (name, vary_wb, interactive) in cases {
+        let (mut engine_ms, mut gpu_ms) = (Vec::new(), Vec::new());
+        for i in 0..n {
+            let t = i as f32 / n as f32;
+            let (e, g) = if vary_wb {
+                render(0.0, [1.0 + 0.2 * t, 1.0, 1.0 - 0.2 * t], interactive)?
+            } else {
+                render(t * 2.0 - 1.0, [1.0; 3], interactive)?
+            };
+            engine_ms.push(e);
+            gpu_ms.extend(g);
+        }
+        let (e50, e95) = percentiles(engine_ms);
+        let gpu = if gpu_ms.is_empty() {
+            "GPU n/a (no timestamp queries)".to_owned()
+        } else {
+            let (g50, g95) = percentiles(gpu_ms);
+            format!("GPU p50 {g50:.2} ms, p95 {g95:.2} ms")
+        };
+        println!(
+            "{name}, {n} steps: {gpu}; engine (render, readback, tiles) p50 {e50:.2} ms, p95 {e95:.2} ms"
+        );
+    }
     Ok(())
 }

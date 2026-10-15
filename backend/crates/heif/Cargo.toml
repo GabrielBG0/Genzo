@@ -1,0 +1,25 @@
+[package]
+name = "genzo-heif"
+description = "HEIC and HEIF decoding through a bundled, statically linked libheif and libde265."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+# Exactly one crate in the graph may link libheif.
+links = "heif"
+
+# Not `workspace = true`: this crate is the one place allowed to use unsafe
+# (FFI), and Cargo cannot override a single inherited lint. Keep the rest in
+# step with the workspace table in backend/Cargo.toml.
+[lints.rust]
+unsafe_code = "deny"
+missing_debug_implementations = "warn"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }
+
+[build-dependencies]
+cc = "1"
+cmake = "0.1"
