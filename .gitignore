@@ -1,2 +1,7 @@
 .DS_Store
 *.log
+
+# The raw test corpus (M0 step 0.C) stays out of git; only its README and manifest.json (sha256 of each fetched file) are tracked.
+/corpus/*
+!/corpus/README.md
+!/corpus/manifest.json
