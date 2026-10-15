@@ -24,6 +24,9 @@ commands:
   bench decode FILE [T N]      decode FILE N times with T threads, print p50/p95
   bench gpu [W H N]            render a W×H synthetic raw into a 2560 px viewport,
                                N steps per slider, print GPU and engine p50/p95
+
+Every bench command also takes `--json FILE`: it writes the p50/p95 of each
+metric there, for scripts/check-bench.py to compare against a stored baseline.
 ";
 
 fn default_contract_dir() -> PathBuf {
@@ -31,8 +34,10 @@ fn default_contract_dir() -> PathBuf {
 }
 
 fn main() -> ExitCode {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    let json_out = take_json_flag(&mut args);
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let mut metrics = Metrics::default();
     let result = match args.as_slice() {
         ["version"] => {
             let info = Engine::headless().info();
@@ -83,11 +88,15 @@ fn main() -> ExitCode {
                 )
             })
             .map_err(|e| e.to_string()),
-        ["bench", "test-pattern", rest @ ..] => bench_test_pattern(rest),
-        ["bench", "decode", file, rest @ ..] => bench_decode(file, rest),
-        ["bench", "gpu", rest @ ..] => bench_gpu(rest),
+        ["bench", "test-pattern", rest @ ..] => bench_test_pattern(rest, &mut metrics),
+        ["bench", "decode", file, rest @ ..] => bench_decode(file, rest, &mut metrics),
+        ["bench", "gpu", rest @ ..] => bench_gpu(rest, &mut metrics),
         _ => Err(USAGE.to_owned()),
     };
+    let result = result.and_then(|()| match &json_out {
+        Some(path) => metrics.write(path),
+        None => Ok(()),
+    });
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(msg) => {
@@ -103,6 +112,44 @@ fn parse_num(args: &[&str], i: usize, default: u32) -> Result<u32, String> {
     })
 }
 
+/// Removes `--json FILE` from the arguments and returns FILE.
+fn take_json_flag(args: &mut Vec<String>) -> Option<PathBuf> {
+    let i = args.iter().position(|a| a == "--json")?;
+    let path = args.get(i + 1)?.clone();
+    args.drain(i..=i + 1);
+    Some(path.into())
+}
+
+/// The p50 and p95 of each benchmarked metric, in milliseconds.
+#[derive(Default)]
+struct Metrics(Vec<(String, f64, f64)>);
+
+impl Metrics {
+    fn add(&mut self, name: impl Into<String>, p50: f64, p95: f64) {
+        self.0.push((name.into(), p50, p95));
+    }
+
+    fn write(&self, path: &PathBuf) -> Result<(), String> {
+        let rows: serde_json::Map<String, serde_json::Value> = self
+            .0
+            .iter()
+            .map(|(name, p50, p95)| {
+                (
+                    name.clone(),
+                    serde_json::json!({ "p50_ms": p50, "p95_ms": p95 }),
+                )
+            })
+            .collect();
+        let text = serde_json::to_string_pretty(&rows).map_err(|e| e.to_string())?;
+        std::fs::write(
+            path,
+            text + "
+",
+        )
+        .map_err(|e| format!("{}: {e}", path.display()))
+    }
+}
+
 fn percentiles(mut times: Vec<f64>) -> (f64, f64) {
     times.sort_by(f64::total_cmp);
     let pct = |p: f64| times[((times.len() - 1) as f64 * p).round() as usize];
@@ -110,18 +157,19 @@ fn percentiles(mut times: Vec<f64>) -> (f64, f64) {
 }
 
 /// Full-image decode time for one file, with a given number of decode threads.
-fn bench_decode(file: &str, args: &[&str]) -> Result<(), String> {
+fn bench_decode(file: &str, args: &[&str], metrics: &mut Metrics) -> Result<(), String> {
     let threads = parse_num(args, 0, 4)?.clamp(1, 64) as u8;
     let n = parse_num(args, 1, 10)?.max(1);
     let times = files::time_decode(file.as_ref(), threads, n).map_err(|e| e.to_string())?;
     let (p50, p95) = percentiles(times);
+    metrics.add(format!("decode/{threads} threads"), p50, p95);
     println!("decode {file}, {threads} threads, {n} runs: p50 {p50:.2} ms, p95 {p95:.2} ms");
     Ok(())
 }
 
 /// Engine-side cost of one frame: render plus tile encoding. The end-to-end
 /// latency (IPC, upload, screen) is measured in the app, see 0.E.
-fn bench_test_pattern(args: &[&str]) -> Result<(), String> {
+fn bench_test_pattern(args: &[&str], metrics: &mut Metrics) -> Result<(), String> {
     let num = |i: usize, default: u32| -> Result<u32, String> {
         args.get(i).map_or(Ok(default), |s| {
             s.parse().map_err(|_| format!("not a number: {s}"))
@@ -148,6 +196,7 @@ fn bench_test_pattern(args: &[&str]) -> Result<(), String> {
         times.push(started.elapsed().as_secs_f64() * 1000.0);
     }
     let (p50, p95) = percentiles(times);
+    metrics.add(format!("test-pattern/{width}x{height}"), p50, p95);
     println!("test-pattern {width}x{height}, {n} frames: p50 {p50:.2} ms, p95 {p95:.2} ms");
     Ok(())
 }
@@ -155,7 +204,7 @@ fn bench_test_pattern(args: &[&str]) -> Result<(), String> {
 /// The 0.D measurement: what one slider step costs on the GPU at 2560 px.
 /// An exposure drag re-runs only the output stage; a white balance drag
 /// re-runs everything from the raw data (linearize, demosaic, mips).
-fn bench_gpu(args: &[&str]) -> Result<(), String> {
+fn bench_gpu(args: &[&str], metrics: &mut Metrics) -> Result<(), String> {
     let (width, height, n) = (
         parse_num(args, 0, 8064)?,
         parse_num(args, 1, 6048)?,
@@ -219,10 +268,12 @@ fn bench_gpu(args: &[&str]) -> Result<(), String> {
             gpu_ms.extend(g);
         }
         let (e50, e95) = percentiles(engine_ms);
+        metrics.add(format!("gpu/{name}/engine"), e50, e95);
         let gpu = if gpu_ms.is_empty() {
             "GPU n/a (no timestamp queries)".to_owned()
         } else {
             let (g50, g95) = percentiles(gpu_ms);
+            metrics.add(format!("gpu/{name}/gpu"), g50, g95);
             format!("GPU p50 {g50:.2} ms, p95 {g95:.2} ms")
         };
         println!(

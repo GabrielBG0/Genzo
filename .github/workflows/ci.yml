@@ -51,8 +51,7 @@ jobs:
       # GPU tests run here on whatever adapter the runner has (WARP on Windows,
       # Metal on macOS) and are skipped without one; the gpu job below requires
       # the reference device.
-      # TODO(0.A step 9): compare `genzo-cli bench` p95 against stored baselines and fail
-      # on a regression above 10 percent.
+      # The performance gate runs in the gpu job below, on the reference device.
 
   gpu:
     name: GPU tests (lavapipe)
@@ -76,7 +75,26 @@ jobs:
         with:
           workspaces: backend
       - run: cargo test --locked -p genzo-pipeline -p genzo-engine -- --nocapture
-      - run: cargo run --locked --release -q -p genzo-cli -- bench gpu 4032 3024 5
+      # Performance gate: p95 of each stage against benchmarks/baseline-lavapipe.json,
+      # fail on a regression above 10 percent. Three runs, lowest p95 wins, to filter
+      # out noise from the shared runner. Without a baseline the step only warns.
+      - name: Benchmark (3 runs)
+        run: |
+          for i in 1 2 3; do
+            cargo run --locked --release -q -p genzo-cli -- bench gpu 4032 3024 30 --json "$RUNNER_TEMP/bench-$i.json"
+          done
+      - name: Compare with the baseline
+        working-directory: .
+        run: python3 scripts/check-bench.py benchmarks/baseline-lavapipe.json "$RUNNER_TEMP"/bench-?.json
+      - name: Merge runs into a candidate baseline
+        if: always()
+        working-directory: .
+        run: python3 scripts/check-bench.py --update "$RUNNER_TEMP/baseline-candidate.json" "$RUNNER_TEMP"/bench-?.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bench-lavapipe
+          path: ${{ runner.temp }}/baseline-candidate.json
 
   architecture:
     name: Architecture rules
