@@ -1,9 +1,10 @@
 // Fails when a color literal appears outside the token file. Covers inline
 // styles in Svelte markup and colors in TypeScript, which stylelint misses.
 import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { join, relative, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const ROOT = new URL('../src', import.meta.url).pathname;
+const ROOT = fileURLToPath(new URL('../src', import.meta.url));
 const ALLOWED = new Set(['styles/tokens.css']);
 const COLOR = /#[0-9a-fA-F]{3,8}\b|\b(?:rgba?|hsla?|oklch|oklab)\(/g;
 
@@ -16,7 +17,7 @@ function walk(dir) {
   }
 }
 function check(path) {
-  const rel = relative(ROOT, path);
+  const rel = relative(ROOT, path).split(sep).join('/');
   if (ALLOWED.has(rel)) return;
   readFileSync(path, 'utf8')
     .split('\n')
