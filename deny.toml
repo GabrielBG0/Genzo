@@ -42,6 +42,10 @@ exceptions = [
   # LGPL-2.1-only, compatible with GPL-3.0 (section 3); pure Rust, linked
   # statically with full source shipped. Signed off in docs/licenses.md.
   { name = "rawler", allow = ["LGPL-2.1"] },
+  # (MIT OR Apache-2.0) AND IJG. The IJG license is on the FSF's list of
+  # GPL-compatible licenses; binaries must acknowledge the Independent JPEG
+  # Group (see docs/licenses.md).
+  { name = "jpeg-encoder", allow = ["IJG"] },
 ]
 
 [licenses.private]

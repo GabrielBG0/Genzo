@@ -18,6 +18,10 @@
 //! |     36 |    4 | image height   |
 //! |     40 |    4 | payload length |
 //!
+//! For the raw formats the payload is `width * height * 4` bytes. For the JPEG
+//! formats it is one baseline JPEG of exactly `width` × `height` pixels, so its
+//! length varies; the header's payload length is the only way to know it.
+//!
 //! `x`, `y`, `width` and `height` are in pixels of the given mip level.
 //! `image width` and `image height` are the full image at that mip level.
 //! Readers skip `header length` bytes before the payload, so the header can
@@ -40,6 +44,11 @@ pub enum PixelFormat {
     Rgba8Srgb,
     /// 8-bit RGBA, Display P3 encoded, straight alpha.
     Rgba8DisplayP3,
+    /// A baseline JPEG, sRGB encoded. Used for drag previews, where a small
+    /// payload matters more than exact pixels.
+    JpegSrgb,
+    /// A baseline JPEG, Display P3 encoded (no ICC profile inside).
+    JpegDisplayP3,
 }
 
 impl PixelFormat {
@@ -47,6 +56,8 @@ impl PixelFormat {
         match self {
             PixelFormat::Rgba8Srgb => 1,
             PixelFormat::Rgba8DisplayP3 => 2,
+            PixelFormat::JpegSrgb => 3,
+            PixelFormat::JpegDisplayP3 => 4,
         }
     }
 
@@ -54,13 +65,29 @@ impl PixelFormat {
         match code {
             1 => Some(PixelFormat::Rgba8Srgb),
             2 => Some(PixelFormat::Rgba8DisplayP3),
+            3 => Some(PixelFormat::JpegSrgb),
+            4 => Some(PixelFormat::JpegDisplayP3),
             _ => None,
         }
     }
 
-    pub const fn bytes_per_pixel(self) -> usize {
+    /// Bytes per pixel of an uncompressed format, `None` for the JPEG ones.
+    pub const fn bytes_per_pixel(self) -> Option<usize> {
         match self {
-            PixelFormat::Rgba8Srgb | PixelFormat::Rgba8DisplayP3 => 4,
+            PixelFormat::Rgba8Srgb | PixelFormat::Rgba8DisplayP3 => Some(4),
+            PixelFormat::JpegSrgb | PixelFormat::JpegDisplayP3 => None,
+        }
+    }
+
+    pub const fn is_jpeg(self) -> bool {
+        self.bytes_per_pixel().is_none()
+    }
+
+    /// The same color space as a JPEG payload.
+    pub const fn as_jpeg(self) -> Self {
+        match self {
+            PixelFormat::Rgba8Srgb | PixelFormat::JpegSrgb => PixelFormat::JpegSrgb,
+            PixelFormat::Rgba8DisplayP3 | PixelFormat::JpegDisplayP3 => PixelFormat::JpegDisplayP3,
         }
     }
 }
@@ -112,16 +139,21 @@ impl std::fmt::Display for TileDecodeError {
 impl std::error::Error for TileDecodeError {}
 
 impl TileHeader {
-    /// Payload size implied by the rectangle and format.
-    pub fn payload_len(&self) -> usize {
-        self.rect.width as usize * self.rect.height as usize * self.format.bytes_per_pixel()
+    /// Payload size implied by the rectangle and format, or `None` for the
+    /// JPEG formats, whose payload length varies.
+    pub fn payload_len(&self) -> Option<usize> {
+        self.format
+            .bytes_per_pixel()
+            .map(|bpp| self.rect.width as usize * self.rect.height as usize * bpp)
     }
 
     /// Writes the header followed by `payload` into one message.
     ///
     /// Panics if `payload` does not match [`TileHeader::payload_len`].
     pub fn encode(&self, payload: &[u8]) -> Vec<u8> {
-        assert_eq!(payload.len(), self.payload_len(), "tile payload size");
+        if let Some(expected) = self.payload_len() {
+            assert_eq!(payload.len(), expected, "tile payload size");
+        }
         let mut out = Vec::with_capacity(TILE_HEADER_LEN + payload.len());
         out.extend_from_slice(&TILE_MAGIC);
         out.extend_from_slice(&(TILE_HEADER_LEN as u16).to_le_bytes());
@@ -174,7 +206,7 @@ impl TileHeader {
         };
         let payload = &msg[header_len..];
         let declared = u32_at(40) as usize;
-        let expected = header.payload_len();
+        let expected = header.payload_len().unwrap_or(declared);
         if declared != expected || payload.len() != expected {
             return Err(TileDecodeError::PayloadLength {
                 expected,
@@ -208,7 +240,7 @@ mod tests {
     #[test]
     fn round_trip() {
         let h = header();
-        let payload: Vec<u8> = (0..h.payload_len() as u8).collect();
+        let payload: Vec<u8> = (0..h.payload_len().unwrap() as u8).collect();
         let msg = h.encode(&payload);
         assert_eq!(msg.len(), TILE_HEADER_LEN + 24);
         let (back, body) = TileHeader::decode(&msg).unwrap();
@@ -225,6 +257,24 @@ mod tests {
         assert_eq!(msg[7], 1);
         assert_eq!(&msg[8..16], &0x0102_0304_0506_0708u64.to_le_bytes());
         assert_eq!(&msg[40..44], &24u32.to_le_bytes());
+    }
+
+    #[test]
+    fn jpeg_payload_has_its_own_length() {
+        let h = TileHeader {
+            format: PixelFormat::JpegSrgb,
+            ..header()
+        };
+        assert_eq!(h.payload_len(), None);
+        let jpeg = [0xFF, 0xD8, 0xFF, 0xD9, 7];
+        let msg = h.encode(&jpeg);
+        let (back, body) = TileHeader::decode(&msg).unwrap();
+        assert_eq!(back, h);
+        assert_eq!(body, &jpeg[..]);
+        assert!(matches!(
+            TileHeader::decode(&msg[..msg.len() - 1]),
+            Err(TileDecodeError::PayloadLength { .. })
+        ));
     }
 
     #[test]

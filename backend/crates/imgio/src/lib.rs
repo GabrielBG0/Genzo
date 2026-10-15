@@ -7,6 +7,7 @@
 //! after their license review in docs/licenses.md.
 
 mod heic;
+pub mod jpeg;
 
 /// A file format Genzo recognizes from its first bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

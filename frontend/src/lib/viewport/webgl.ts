@@ -1,5 +1,6 @@
+import type { TileHeader } from '$contract/genzo';
 import type { Tile } from '../engine/tiles';
-import type { ViewTransform, Viewport } from './types';
+import type { DecodedTile, ViewTransform, Viewport } from './types';
 
 const VERTEX = `#version 300 es
 in vec2 a_pos;
@@ -93,18 +94,36 @@ export class WebGLViewport implements Viewport {
     const gl = this.gl;
     let accepted = false;
     for (const { header, pixels } of tiles) {
-      if (header.generation < this.generation) continue;
-      if (header.generation > this.generation) this.generation = header.generation;
+      if (!this.accept(header)) continue;
       accepted = true;
-      this.setColorSpace(header.format === 'rgba8DisplayP3' ? 'display-p3' : 'srgb');
-      if (header.imageWidth !== this.image.width || header.imageHeight !== this.image.height) {
-        this.image = { width: header.imageWidth, height: header.imageHeight };
-        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, header.imageWidth, header.imageHeight, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
-      }
       const { x, y, width, height } = header.rect;
       gl.texSubImage2D(gl.TEXTURE_2D, 0, x, y, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
     }
     return accepted;
+  }
+
+  putImages(tiles: DecodedTile[]): boolean {
+    const gl = this.gl;
+    let accepted = false;
+    for (const { header, image } of tiles) {
+      if (!this.accept(header)) continue;
+      accepted = true;
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, header.rect.x, header.rect.y, gl.RGBA, gl.UNSIGNED_BYTE, image);
+    }
+    return accepted;
+  }
+
+  /** Drops stale tiles; otherwise prepares the texture for the tile's frame. */
+  private accept(header: TileHeader): boolean {
+    const gl = this.gl;
+    if (header.generation < this.generation) return false;
+    if (header.generation > this.generation) this.generation = header.generation;
+    this.setColorSpace(header.format === 'rgba8DisplayP3' || header.format === 'jpegDisplayP3' ? 'display-p3' : 'srgb');
+    if (header.imageWidth !== this.image.width || header.imageHeight !== this.image.height) {
+      this.image = { width: header.imageWidth, height: header.imageHeight };
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, header.imageWidth, header.imageHeight, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    }
+    return true;
   }
 
   private setColorSpace(space: PredefinedColorSpace) {

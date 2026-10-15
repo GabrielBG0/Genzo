@@ -235,4 +235,25 @@ Measured with `frontend/scripts/measure-latency.mjs`, which attaches to the real
 
 The test image is synthetic (gradients, texture, noise), so real photos will be larger and slower to encode. Estimated cost of one drag frame (render and readback, encode, fetch at about 120 MB/s, decode, upload): about 39 ms for a full 2560 px JPEG, about 15 ms for a 1280 px JPEG. The probe reads between 1x and 2x of that under continuous input (observed 1.8x today), so only the **1280 px proxy as JPEG** is expected to pass 50 ms p95 with margin (about 25 to 30 ms); a full-size JPEG is not (about 70 ms). Encoding the tiles in parallel on rayon should cut the 2560 px encode to about 5 ms. These are model numbers built from measured parts, not an end-to-end measurement.
 
+### After the fix: half-size JPEG preview while dragging (Windows, 2026-10-15)
+
+Implemented as planned. While a slider is dragged at Fit zoom, the engine renders as before, a small GPU pass (`shrink`) halves the finished frame, only that is read back, and up to four horizontal bands are JPEG-encoded in parallel on rayon (quality 80, `jpeg-encoder`). The webview decodes the bands with `createImageBitmap` and draws them scaled up. On release a full lossless frame is sent as before. The contract moved to 0.3.0 (new `JpegSrgb` and `JpegDisplayP3` pixel formats, and `proxy` on `renderSpike`).
+
+| Windows 11, WebView2 155, RTX 3060, release build, 12 MP synthetic raw, 2560 px frame | Before | After |
+|---|---|---|
+| Input to pixels p50 (real app, probe) | 197 to 218 ms | **17.8 to 17.9 ms** |
+| Input to pixels p95 (real app, probe) | 220 to 236 ms | **18.4 ms** (two runs) |
+| Frame fetch p50 | 83 to 91 ms (11.1 MB) | 1.6 to 1.7 ms (about 30 to 40 KB per band) |
+| Engine time per exposure drag frame (`genzo-cli bench gpu`, 12 MP) | 11.8 ms p50 | 4.1 ms p50, p95 4.6 ms, JPEG encode included |
+
+**The 50 ms gate passes on Windows with a wide margin.** The model estimate of 25 to 30 ms p95 was pessimistic.
+
+Caveats, to settle before this counts as final:
+- **The test scene is synthetic and smooth**, so its JPEGs are tiny (about 150 KB for the whole frame). A real photo with fine detail will be several times larger and slower to encode. The spike can only load a synthetic image today; the check with a real photo belongs to M1's first real viewport, and I expect it to stay well under 50 ms (fetch at 120 MB/s means even 1 MB costs 8 ms).
+- **macOS and Linux are still unmeasured**, and the custom-scheme throughput there is unknown. Compression makes that less of a risk, not zero.
+- **Display P3 previews** are drawn as untagged bitmaps, so their colors are approximate during a drag. The spike only sends sRGB; the color check (step 5) is still open.
+- **At 1:1 zoom** the preview is not used (it would show at the wrong scale), so a 1:1 drag still sends full frames. That case needs its own answer in M1 (send only the visible region).
+- **The settled frame** still moves 11 MB raw, about 90 ms. Nobody waits on it during a drag, but it is the next thing to compress if the pause after release feels slow.
+- The CI bench gate has no baseline for the new `... preview` cases yet; they are reported as new until the baseline is refreshed.
+
 **Not measured:** macOS (WKWebView) and Linux (WebKitGTK 4.1 on two distros) have no DevTools attach, so the script does not work there. On those the numbers have to be read off the "Input → pixels" rows in the app's right panel while dragging the slider by hand, on a release build (`pnpm app:build --no-bundle`). Color handling (sRGB and Display P3 tagged frames, step 5) is also open.

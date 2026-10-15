@@ -40,10 +40,10 @@ describe('FakeEngine', () => {
     const events: Event[] = [];
     engine.onEvent((e) => events.push(e));
     await expect(
-      engine.execute({ type: 'renderSpike', width: 10, height: 10, exposureEv: 0, wb: [1, 1, 1], format: 'rgba8Srgb', interactive: true }),
+      engine.execute({ type: 'renderSpike', width: 10, height: 10, exposureEv: 0, wb: [1, 1, 1], format: 'rgba8Srgb', interactive: true, proxy: false }),
     ).rejects.toThrow('no image loaded');
     await engine.execute({ type: 'loadSpikeImage', source: { type: 'synthetic', width: 1201, height: 800 } });
-    await engine.execute({ type: 'renderSpike', width: 600, height: 600, exposureEv: 1, wb: [1, 1, 1], format: 'rgba8Srgb', interactive: true });
+    await engine.execute({ type: 'renderSpike', width: 600, height: 600, exposureEv: 1, wb: [1, 1, 1], format: 'rgba8Srgb', interactive: true, proxy: false });
     await new Promise((r) => setTimeout(r));
     expect(events[0]).toEqual({ type: 'spikeImageLoaded', width: 1200, height: 800 });
     const done = events[1];

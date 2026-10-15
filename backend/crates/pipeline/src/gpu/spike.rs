@@ -5,6 +5,7 @@
 //! 3. the mip pyramid of the demosaiced image
 //! 4. resample to the viewport and apply the camera matrix (viewport size)
 //! 5. exposure and the output transform to 8-bit sRGB or Display P3
+//! 6. optionally, a half-size copy of the result for drag previews
 //!
 //! Each step's result is cached. A render re-runs from the earliest step whose
 //! inputs changed ([`Stage`]); an exposure change only re-runs step 5.
@@ -51,6 +52,11 @@ pub struct SpikeParams {
     /// with, instead of re-running the demosaic. The settled render (false)
     /// re-runs it.
     pub interactive: bool,
+    /// Read back a half-size frame instead of the full viewport frame. The
+    /// stages and their caches are unchanged; a small extra pass shrinks the
+    /// finished frame, so the readback and everything after it moves a
+    /// quarter of the bytes.
+    pub proxy: bool,
 }
 
 impl Default for SpikeParams {
@@ -60,6 +66,7 @@ impl Default for SpikeParams {
             exposure_ev: 0.0,
             space: DisplaySpace::Srgb,
             interactive: false,
+            proxy: false,
         }
     }
 }
@@ -205,6 +212,7 @@ struct Passes {
     downsample: Pass,
     viewport: Pass,
     output: Pass,
+    shrink: Pass,
 }
 
 impl Passes {
@@ -273,6 +281,12 @@ impl Passes {
                 device,
                 "output",
                 include_str!("shaders/output.wgsl"),
+                &[FLOAT, store(Rgba8Unorm)],
+            ),
+            shrink: pass(
+                device,
+                "shrink",
+                include_str!("shaders/shrink.wgsl"),
                 &[FLOAT, store(Rgba8Unorm)],
             ),
         }
@@ -391,6 +405,17 @@ struct ViewState {
     mip_level: u32,
     viewport: Dispatch,
     output: Dispatch,
+    display: wgpu::Texture,
+    readback: wgpu::Buffer,
+    padded_row: u32,
+    proxy: ProxyState,
+}
+
+/// The half-size copy of the display frame, for drag previews.
+#[derive(Debug)]
+struct ProxyState {
+    size: (u32, u32),
+    shrink: Dispatch,
     display: wgpu::Texture,
     readback: wgpu::Buffer,
     padded_row: u32,
@@ -657,6 +682,23 @@ impl SpikePipeline {
             mapped_at_creation: false,
         });
         let (mips_v, working_v, display_v) = (view(&image.mips), view(&working), view(&display));
+        let proxy_size = (size.0.div_ceil(2), size.1.div_ceil(2));
+        let proxy_display = texture(
+            device,
+            "proxy display",
+            proxy_size,
+            wgpu::TextureFormat::Rgba8Unorm,
+            1,
+        );
+        let proxy_padded_row = (proxy_size.0 * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
+            * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let proxy_readback = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("proxy readback"),
+            size: proxy_padded_row as u64 * proxy_size.1 as u64,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let proxy_v = view(&proxy_display);
         let p = &self.passes;
         let u = &self.uniforms;
         self.view = Some(ViewState {
@@ -684,6 +726,17 @@ impl SpikePipeline {
             display,
             readback,
             padded_row,
+            proxy: ProxyState {
+                size: proxy_size,
+                shrink: Dispatch {
+                    pass: p.shrink.name,
+                    group: bind(device, &p.shrink, u, &[&r(&display_v), &r(&proxy_v)]),
+                    size: proxy_size,
+                },
+                display: proxy_display,
+                readback: proxy_readback,
+                padded_row: proxy_padded_row,
+            },
         });
         Ok(())
     }
@@ -701,6 +754,7 @@ impl SpikePipeline {
             &p.downsample,
             &p.viewport,
             &p.output,
+            &p.shrink,
         ]
         .into_iter()
         .find(|pass| pass.name == name)
@@ -763,6 +817,16 @@ impl SpikePipeline {
             dispatches.push(&view.viewport);
         }
         dispatches.push(&view.output);
+        if params.proxy {
+            dispatches.push(&view.proxy.shrink);
+        }
+        // What gets read back: the full frame or the half-size one.
+        let (out_tex, out_buf, out_row, (w, h)) = if params.proxy {
+            let p = &view.proxy;
+            (&p.display, &p.readback, p.padded_row, p.size)
+        } else {
+            (&view.display, &view.readback, view.padded_row, view.size)
+        };
 
         let mut encoder = gpu.device.create_command_encoder(&Default::default());
         {
@@ -785,22 +849,22 @@ impl SpikePipeline {
         }
         encoder.copy_texture_to_buffer(
             wgpu::TexelCopyTextureInfo {
-                texture: &view.display,
+                texture: out_tex,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
             wgpu::TexelCopyBufferInfo {
-                buffer: &view.readback,
+                buffer: out_buf,
                 layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
-                    bytes_per_row: Some(view.padded_row),
-                    rows_per_image: Some(view.size.1),
+                    bytes_per_row: Some(out_row),
+                    rows_per_image: Some(h),
                 },
             },
             wgpu::Extent3d {
-                width: view.size.0,
-                height: view.size.1,
+                width: w,
+                height: h,
                 depth_or_array_layers: 1,
             },
         );
@@ -813,7 +877,7 @@ impl SpikePipeline {
         gpu.queue.submit([encoder.finish()]);
         let (tx, rx) = mpsc::channel();
         let tx2 = tx.clone();
-        view.readback.map_async(wgpu::MapMode::Read, .., move |r| {
+        out_buf.map_async(wgpu::MapMode::Read, .., move |r| {
             let _ = tx.send(r);
         });
         if let Some(t) = &self.timer {
@@ -832,18 +896,16 @@ impl SpikePipeline {
         }
 
         let read_started = Instant::now();
-        let (w, h) = view.size;
         let mut rgba = Vec::with_capacity(w as usize * h as usize * 4);
         {
-            let mapped = view
-                .readback
+            let mapped = out_buf
                 .get_mapped_range(..)
                 .map_err(|e| GpuError::Readback(e.to_string()))?;
-            for row in mapped.chunks(view.padded_row as usize) {
+            for row in mapped.chunks(out_row as usize) {
                 rgba.extend_from_slice(&row[..w as usize * 4]);
             }
         }
-        view.readback.unmap();
+        out_buf.unmap();
         let readback_ms = read_started.elapsed().as_secs_f64() * 1000.0;
 
         let gpu_ms = match &self.timer {

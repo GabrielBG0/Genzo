@@ -25,6 +25,7 @@ genzo-model.workspace = true
 genzo-heif = { workspace = true, optional = true }
 rawler = { workspace = true, optional = true }
 thiserror.workspace = true
+jpeg-encoder.workspace = true
 # Pure-Rust JPEG XL decoder for DNG 1.7 tiles (iPhone 16 Pro ProRAW, Samsung Expert RAW). Pinned exactly: it parses untrusted files.
 jxl-oxide = { version = "=0.12.6", default-features = false, features = ["rayon"], optional = true }
 

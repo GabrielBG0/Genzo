@@ -14,6 +14,11 @@ export interface Tile {
 
 export class TileDecodeError extends Error {}
 
+/** Whether a tile's payload is a JPEG (a drag preview) rather than raw RGBA. */
+export function isJpeg(format: PixelFormat): boolean {
+  return format === 'jpegSrgb' || format === 'jpegDisplayP3';
+}
+
 const FORMAT_BY_CODE = new Map<number, PixelFormat>(
   Object.entries(PIXEL_FORMAT_CODES).map(([name, code]) => [code, name as PixelFormat]),
 );
@@ -48,7 +53,7 @@ export function decodeFrame(buffer: ArrayBuffer): Tile[] {
       imageHeight: u32(36),
     };
     const payloadLen = u32(40);
-    if (payloadLen !== header.rect.width * header.rect.height * 4) {
+    if (!isJpeg(format) && payloadLen !== header.rect.width * header.rect.height * 4) {
       throw new TileDecodeError('tile payload length does not match its rectangle');
     }
     const start = offset + headerLen;

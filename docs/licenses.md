@@ -22,6 +22,8 @@ Genzo is GPL-3.0-only. A dependency is acceptable when its license is compatible
 | wgpu 30.0.1 | backend (`pipeline`) | MIT OR Apache-2.0 | GPU pipeline (0.D). Built with the Vulkan, Metal and D3D12 backends only. Its tree adds Apache-2.0-only crates (spirv, codespan-reporting) |
 | pollster 1.0.1 | backend (`pipeline`) | Apache-2.0 OR MIT | |
 | bytemuck 1 | backend (`pipeline`) | Zlib OR Apache-2.0 OR MIT | Already in wgpu's tree |
+| jpeg-encoder 0.7.1 | backend (`imgio`) | (MIT OR Apache-2.0) AND IJG | Drag-preview frames (0.E). Read from the registry metadata. The IJG license is on the FSF's list of GPL-compatible licenses. It requires that documentation shipped with binaries states that the software is based in part on the work of the Independent JPEG Group: add that line to the About box and the README when the first release is built. `deny.toml` allows `IJG` for this crate only |
+| rayon 1.12 | backend (`engine`) | MIT OR Apache-2.0 | CPU parallelism, as the architecture rules prescribe. Already in the tree through jxl-oxide and rawler |
 | criterion 0.8.2 | backend (`pipeline`), benchmarks only | Apache-2.0 OR MIT | Not distributed |
 | @tauri-apps/api | frontend | Apache-2.0 OR MIT | |
 | Public Sans (`@fontsource/public-sans`) | frontend, bundled | OFL-1.1 | Checked in `node_modules/@fontsource/public-sans/LICENSE`. OFL allows bundling with any software; the font may not be sold on its own |
@@ -48,7 +50,6 @@ These licenses come from each project's upstream license file or its registry me
 | LibRaw | RAW fallback through FFI (0.C prototype, M1) | LGPL-2.1 or CDDL-1.0, at our choice | Upstream `README.md` | Use under LGPL-2.1. The README warns that licensing may change in future versions, so re-read it at the pinned version. A C++ build on all three OSes, like `genzo-heif`, so it would be the second crate allowed unsafe code. The only Rust bindings (libraw-rs 0.0.4, MIT OR Apache-2.0) are immature; write our own shim as `genzo-heif` does |
 | lcms2 (Little CMS) | ICC transforms | MIT | Registry | Not chosen; moxcms is used instead. Kept as the fallback if moxcms falls short |
 | zune-jpeg | JPEG decode (M1) | MIT OR Apache-2.0 OR Zlib | Registry | Already in rawler's tree |
-| jpeg-encoder | JPEG encode (M1) | (MIT OR Apache-2.0) AND IJG | Registry | The IJG license is GPL-compatible (FSF list). Adding it needs `IJG` in `deny.toml` |
 | rusqlite and SQLite | Catalog (M2) | MIT; SQLite is public domain | Registry | |
 | lensfun library | Lens profiles (M3) | LGPL-3.0 | Upstream `README.md` | Or read the database only and implement the models in Rust |
 | lensfun database | Lens profiles (M3) | CC BY-SA 3.0 | Upstream `README.md` | Data, not code. Shipping it needs attribution and share-alike for the data files; it does not affect the code license |
