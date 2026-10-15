@@ -57,7 +57,7 @@ Contract workflow: change the Rust types in `backend/crates/model`, bump `CONTRA
 
 - Every new pipeline stage gets golden-image tests (ΔE2000 and PSNR tolerances, lavapipe as the reference device) and a criterion benchmark.
 - Every new decoder gets a `cargo-fuzz` target.
-- Performance budgets are enforced in CI: a p95 regression above 10 percent fails the build.
+- Performance budgets are enforced in CI: a p95 regression above 10 percent fails the build. On the shared lavapipe runner the baseline uses a 25 percent threshold against the slowest run seen, because that hardware varies by about 2x between runs; see `benchmarks/README.md`. A private runner with a real GPU gets the 10 percent rule.
 - Check the license of every native dependency before adopting it (`cargo-deny`).
 - Before building a feature, its spec in `docs/UI/FEATURES.md` must be written using the template there.
 
