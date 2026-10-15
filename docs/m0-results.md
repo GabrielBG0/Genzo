@@ -226,4 +226,13 @@ Measured with `frontend/scripts/measure-latency.mjs`, which attaches to the real
 
 **Consequence:** ladder step 1 alone is not enough on Windows. Next experiments, in order: (1) a proxy of about 1280 px while dragging with the full frame on release, combined with (2) a compressed frame (JPEG or QOI, decoded in the page) so a 2560 px frame is around 1 MB instead of 11 MB. Not built yet. The native wgpu surface (step 3) stays the last resort.
 
+**Measured parts of the fix (Windows, 2026-10-15).** A JPEG frame instead of raw RGBA8:
+
+| Frame | Encode (jpeg-encoder 0.7, 1 thread, q80) | JPEG size | Decode + WebGL upload in the webview (p50) |
+|---|---|---|---|
+| 2560 x 1080 | 19 ms (35 ms at q90) | 405 KB (821 KB at q90), vs 10.8 MB raw | 13.6 + 3.1 = 16.7 ms |
+| 1280 x 540 | 4.8 ms (8.6 ms at q90) | 103 KB (209 KB at q90), vs 2.7 MB raw | 3.8 + 0.7 = 4.5 ms |
+
+The test image is synthetic (gradients, texture, noise), so real photos will be larger and slower to encode. Estimated cost of one drag frame (render and readback, encode, fetch at about 120 MB/s, decode, upload): about 39 ms for a full 2560 px JPEG, about 15 ms for a 1280 px JPEG. The probe reads between 1x and 2x of that under continuous input (observed 1.8x today), so only the **1280 px proxy as JPEG** is expected to pass 50 ms p95 with margin (about 25 to 30 ms); a full-size JPEG is not (about 70 ms). Encoding the tiles in parallel on rayon should cut the 2560 px encode to about 5 ms. These are model numbers built from measured parts, not an end-to-end measurement.
+
 **Not measured:** macOS (WKWebView) and Linux (WebKitGTK 4.1 on two distros) have no DevTools attach, so the script does not work there. On those the numbers have to be read off the "Input → pixels" rows in the app's right panel while dragging the slider by hand, on a release build (`pnpm app:build --no-bundle`). Color handling (sRGB and Display P3 tagged frames, step 5) is also open.
