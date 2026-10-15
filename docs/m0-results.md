@@ -109,7 +109,7 @@ In progress (step 2 partly done). Steps 3 to 7 are still open.
 
 `cargo run -p genzo-imgio --features raw --example raw_gap_report -- ../corpus` (debug build, so times are pessimistic).
 
-**Decodes: 15 of 18 files**, with white and black levels, a camera matrix (D65 and A, or D50 for Leica) and white balance present in all but one. The exception is the Kodak DCS760C, which has no WB coefficients.
+**Decodes: 16 of 19 files** (the corpus without the owner's iPhone 16 Pro file; with it, 16 of 20), with white and black levels, a camera matrix (D65 and A, or D50 for Leica) and white balance present in all but one. The exception is the Kodak DCS760C, which has no WB coefficients.
 
 | Result | Files |
 |---|---|
@@ -176,6 +176,24 @@ Weights are LightCraft's estimate of Lightroom raw users by maker (Canon 33%, So
 | 6 | GoPro GPR | <1% | Fails; needs a wavelet codec (VC-5) | Out for now |
 
 Consequence for the plan: **no LibRaw fallback is wired in M1** (see the LibRaw section). The spec's parked decision "camera priority order" can be closed with this table.
+
+### LightCraft's raw crate on our corpus (run 2026-10-15)
+
+Built `lightcraft-raw` from github.com/storytold/lightcraft (shallow clone of main) and ran its `rawinfo` example on all 20 files. **It decodes 13 of 20. rawler decodes 16 of 20.**
+
+| File | rawler 0.8 | LightCraft raw |
+|---|---|---|
+| iPhone 16 Pro ProRAW (JPEG XL) | fails | **decodes** (0.89 s, 55 MP/s) |
+| Olympus E-M1 II and OM-3 compressed ORF | decodes | fails (preview only) |
+| Phase One IIQ | decodes | fails |
+| Kodak DCR | decodes | fails |
+| Nikon Z 8 and Z 9 High Efficiency | fails | fails (preview only) |
+| GoPro GPR | fails | fails |
+| The other 12 (Canon CR3, Sony ARW, Nikon lossless, Fujifilm RAF both, Panasonic, Leica, Pentax, Hasselblad 3FR, iPhone 12 Pro, S23 Ultra) | decodes | decodes |
+
+So LightCraft handles exactly **one** of our problem files better, the JPEG XL one, which `jxl-oxide` also gives us. It handles none of the others and loses four formats rawler has (compressed ORF, IIQ, DCR). It reads the opcode lists (Samsung has a 4-entry OpcodeList2, Fuji and Leica have some) and DNG metadata, which rawler leaves empty. Its decode is also faster on the 48 MP file (0.89 s against our sequential 1.8 s), probably from parallel tiles.
+
+Conclusion: don't replace rawler with it. Use rawler for the formats it covers, and take the DNG pieces from LightCraft (JPEG XL tile decode, LinearizationTable, opcode lists, gain table map reader), with attribution, since its license (MIT OR Apache-2.0) allows it.
 
 ### Prior art: LightCraft and PhotoCraft (read 2026-10-15)
 
