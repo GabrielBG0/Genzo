@@ -2,7 +2,7 @@
 
 Built from these sources:
 
-- **Spec:** *Genzo: Technical Spec (draft 2)*, revision 57. The artifact is still listed as "Photo Editor: Technical Spec (draft 1)".
+- **Spec:** *Genzo: Technical Spec (draft 2)*, revision 64 (revision 57 plus the M0 results recorded on 2026-10-15). The artifact is still listed as "Photo Editor: Technical Spec (draft 1)".
 - **UI handoff:** [`docs/UI/fixer-ui-handoff.html`](UI/fixer-ui-handoff.html). It holds the approved Carbon Glass direction, every mockup screen, the design system and the component list. "Fixer" was the working name before Genzo.
 - **Feature list:** [`docs/UI/FEATURES.md`](UI/FEATURES.md). It gives every UI feature an ID, a priority (P0, P1, P2) and its screens.
 
@@ -116,6 +116,9 @@ Parked decisions that have been settled, with the date and what follows from eac
 | Module state (APP-01) | Not remembered. Zoom, pan and open panels are neither kept per photo nor per module; switching modules or photos starts from the defaults | 2026-10-14 | No view-state store is needed in M1 |
 | ICC library | moxcms (pure Rust), not lcms2 | 2026-10-14 | No C build for color management. lcms2 stays the fallback; see `docs/licenses.md` |
 | Working space | Linear light on the ACES AP1 primaries with a D65 white | 2026-10-14 | Rec. 2020 does not fully contain Display P3 (its red is just outside), so it fails the spec's requirement. AP1 contains both. The D65 white matches the display spaces, so no chromatic adaptation is needed. See `docs/m0-results.md` |
+| Camera priority order | Canon CR3, Sony ARW, Nikon NEF (lossless and lossy compressed) and Fujifilm RAF first (about 86 percent of users); then phone DNG including Apple ProRAW; then Panasonic, OM and Leica or Pentax DNG; then Nikon High Efficiency; medium format and legacy last; GoPro GPR out for now | 2026-10-15 | The table and its sources are in `docs/m0-results.md`. Based on a market estimate from a prior-art project, not our data. rawler stays the main decoder (it reads 16 of 19 corpus files against 13 of 20 for LightCraft's crate) |
+| LibRaw fallback | Not wired in M1. The FFI crate and its second unsafe crate are not built | 2026-10-15 | LibRaw 0.22.2 does not decode Nikon High Efficiency. JPEG XL DNG decodes only when LibRaw is built with Adobe's DNG SDK, and GoPro GPR needs the GPR SDK plus a patched Adobe DNG SDK. Without those SDKs it fixes none of the files rawler fails on. Revisit if a real file turns up that only LibRaw reads |
+| Viewport fallback ladder on Windows | Step 1 plus step 2: while a slider is dragged at Fit zoom, a half-size JPEG preview; the full lossless frame on release | 2026-10-15 | Measured 18 ms p95 against the 50 ms gate (was 230 ms), on the spike's synthetic scene; real photos are estimated at 19 to 26 ms from measured parts and not yet measured in the app. Contract 0.3.0. macOS and Linux still to measure, and 1:1 zoom drags still send full frames. See `docs/m0-results.md` |
 
 ## Parked decisions, with a deadline
 
@@ -123,7 +126,6 @@ These are open questions, not conflicts. Neither source answers them.
 
 | Decision | Source | Decide by | Why then |
 |---|---|---|---|
-| Camera priority order | Spec | During M0 (the rawler gap check) | It sets which LibRaw fallbacks are wired in M1 |
 | Offline only (no accounts, no cloud) | Spec | Before M2 | Affects the catalog and the AI model download policy |
 | Multiple catalogs | Spec | Before M2 schema work | Catalog path handling in engine |
 | Ctrl K: command search or Add keywords | APP-04, MET-02 | Before M2 | Shortcut registry defaults |
@@ -242,10 +244,10 @@ These are open questions, not conflicts. Neither source answers them.
 **Exit checklist**
 - [ ] Latency gate passed, or a ladder step chosen, on all three OSes.
 - [ ] ProRAW decodes on every device in the corpus
-- [ ] Software adapter runs the spike pipeline
+- [x] Software adapter runs the spike pipeline (lavapipe job on every push; WARP locally)
 - [x] License review written, fonts included (signed off for M0 in `docs/licenses.md`)
-- [ ] Performance targets confirmed or revised in the spec
-- [ ] Tokens, fonts, shared components and app shell running against the fake engine
+- [x] Performance targets confirmed or revised in the spec (revision 64: GPU time confirmed, input to pixels measured on Windows only, 48 MP GPU memory and 48 MP open time flagged for M1)
+- [x] Tokens, fonts, shared components and app shell running against the fake engine (checked 2026-10-15: the component gallery at `#/gallery` and the app shell match the handoff's layout, tokens and edited-state rules; the right panel is still the latency-spike panel and the filmstrip shows its empty state until M1)
 - [x] The M1 parked decisions are settled (undo scope, module state; see Decided)
 
 ---

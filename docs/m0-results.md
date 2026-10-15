@@ -243,13 +243,28 @@ Implemented as planned. While a slider is dragged at Fit zoom, the engine render
 |---|---|---|
 | Input to pixels p50 (real app, probe) | 197 to 218 ms | **17.8 to 17.9 ms** |
 | Input to pixels p95 (real app, probe) | 220 to 236 ms | **18.4 ms** (two runs) |
-| Frame fetch p50 | 83 to 91 ms (11.1 MB) | 1.6 to 1.7 ms (about 30 to 40 KB per band) |
+| Frame fetch p50 | 83 to 91 ms (11.1 MB) | 1.6 to 1.7 ms (28 to 42 KB per frame: all four bands arrive as one message) |
 | Engine time per exposure drag frame (`genzo-cli bench gpu`, 12 MP) | 11.8 ms p50 | 4.1 ms p50, p95 4.6 ms, JPEG encode included |
 
 **The 50 ms gate passes on Windows with a wide margin.** The model estimate of 25 to 30 ms p95 was pessimistic.
 
 Caveats, to settle before this counts as final:
-- **The test scene is synthetic and smooth**, so its JPEGs are tiny (about 150 KB for the whole frame). A real photo with fine detail will be several times larger and slower to encode. The spike can only load a synthetic image today; the check with a real photo belongs to M1's first real viewport, and I expect it to stay well under 50 ms (fetch at 120 MB/s means even 1 MB costs 8 ms).
+- **Real photographs, checked separately.** The spike's own scene is synthetic and compresses far better than a photo, so I took the ten Adobe linear references of the corpus (iPhone 12 and 16 Pro, Galaxy S23 Ultra, Sony 7RM5, Nikon D850, Z 8, Z 9, Canon R5m2, Fujifilm X-T5, Panasonic S5M2), made 1280 px wide previews (the half-size frame a 2560 px viewport sends) and encoded them exactly as the engine does (q80, 4 bands in parallel):
+
+  | | Range over the 10 photos |
+  |---|---|
+  | Preview JPEG size, whole frame | 78 to 254 KB (the app's synthetic frame was 28 to 42 KB) |
+  | Encode, 4 bands on rayon | 2.4 to 3.6 ms |
+  | Decode all bands and upload to WebGL in the real WebView2 | 3.5 to 5.3 ms p50, 3.9 to 5.3 ms p95 |
+  | Fetch at about 120 MB/s | 0.7 to 2.1 ms (derived from the size) |
+  | For comparison, a full 2560 px JPEG | 220 to 754 KB, encode 9 to 14 ms |
+
+  The 18.4 ms p95 measured in the app is for the synthetic scene, whose frame was only 28 to 42 KB. Real photos cost more in three places, compared with that frame:
+  - Fetch: 36 to 226 KB more at about 120 MB/s, so 0.3 to 1.9 ms more.
+  - Encode: 2.4 to 3.6 ms on photos. The synthetic frame's encode was not timed on its own, but the whole engine step (render, readback, encode) took 4.1 ms, so the extra is at most about 3 ms.
+  - Decode and upload: 3.5 to 5.3 ms on photos, against an unmeasured but smaller figure for the smooth frame, so at most about 2 ms more.
+
+  That adds at most about 7 ms, so the expected figure is about 19 to 26 ms p95. It is an estimate from measured parts, not an end-to-end measurement: the spike cannot load a real image, so real-photo latency in the app has not been measured. The conclusion is unchanged: the preview stays well under 50 ms p95 on Windows, and the full-size JPEG alternative would not have (about 40 ms before the probe's queueing).
 - **macOS and Linux are still unmeasured**, and the custom-scheme throughput there is unknown. Compression makes that less of a risk, not zero.
 - **Display P3 previews** are drawn as untagged bitmaps, so their colors are approximate during a drag. The spike only sends sRGB; the color check (step 5) is still open.
 - **At 1:1 zoom** the preview is not used (it would show at the wrong scale), so a 1:1 drag still sends full frames. That case needs its own answer in M1 (send only the visible region).
