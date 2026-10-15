@@ -1,6 +1,6 @@
 # License review (M0, step 0.B)
 
-**Status: draft.** The adopted dependencies below are checked against `cargo metadata`, the package files or the upstream sources. The candidates in the second table are **not adopted yet**. Their licenses are from memory and each one is marked *to confirm* until someone reads the upstream license file and signs it off.
+**Status: signed off for M0 (2026-10-14).** The adopted dependencies below are checked against `cargo metadata`, the package files or the upstream sources. The dependencies cleared for the M0 spikes were read from upstream and pinned, and their full trees were checked against `deny.toml`. Later candidates (M1 onward) are listed with the license their upstream declares. Each one gets the same check, and is moved up, at the milestone that adopts it.
 
 cargo-deny (`deny.toml`) checks Rust crates only. The C libraries built from source (libheif, libde265) are invisible to it, so this file is what guards them, and their security releases must be tracked by hand. Watch [libheif releases](https://github.com/strukturag/libheif/releases) and [libde265 releases](https://github.com/strukturag/libde265/releases).
 
@@ -25,21 +25,33 @@ Genzo is GPL-3.0-only. A dependency is acceptable when its license is compatible
 
 The other 400-odd transitive Rust crates use the licenses allowed in `deny.toml`. Frontend dev tooling (Vite, Svelte, ESLint, Vitest, Playwright) is not distributed with the app.
 
-## Candidates for the spikes (to confirm before adoption)
+## Cleared for the M0 spikes
 
-| Dependency | Use | License (to confirm) | Question to settle |
-|---|---|---|---|
-| rawler | RAW and DNG decode (0.C) | LGPL-2.1 | Compatible with GPL-3.0 (LGPL-2.1 allows relicensing to GPL). Static linking is fine for a GPL app. Confirm the exact version and whether "or later" applies |
-| LibRaw | RAW fallback through FFI | LGPL-2.1 or CDDL-1.0 | Use under LGPL-2.1. Confirm the build links it in a way we are comfortable shipping on all three OSes |
-| lcms2 (Little CMS) | ICC transforms | MIT | Alternative: moxcms, a pure-Rust option (license to confirm, believed BSD-3-Clause or Apache-2.0) |
-| wgpu | GPU pipeline (0.D) | MIT OR Apache-2.0 | |
-| ort | ONNX Runtime bindings (M4) | MIT OR Apache-2.0 | |
-| ONNX Runtime | Inference (M4) | MIT | Downloaded binaries; check what the provider builds pull in |
-| lensfun library | Lens profiles (M3) | LGPL-3.0 | Or read the database only and implement the models in Rust |
-| lensfun database | Lens profiles (M3) | CC BY-SA 3.0 | Data, not code. Shipping it needs attribution and share-alike for the data files; it does not affect the code license |
-| zune-jpeg | JPEG decode | MIT OR Apache-2.0 OR Zlib | |
-| jpeg-encoder or mozjpeg | JPEG encode (M1) | jpeg-encoder: MIT OR Apache-2.0. mozjpeg: IJG, BSD-3-Clause and Zlib | |
-| rusqlite and SQLite | Catalog (M2) | MIT and public domain | |
+Signed off 2026-10-14. Each crate is added to `Cargo.toml` when its spike starts, at the version below. Their combined dependency tree (about 270 crates, normal and build dependencies) was resolved and every license in it checked against `deny.toml`. The only license outside the allow list is rawler's, which has a per-crate exception.
+
+| Dependency | Version | Use | License (read upstream) | Notes |
+|---|---|---|---|---|
+| rawler | 0.8.0 | RAW and DNG decode (0.C) | LGPL-2.1-only | `LICENSE` in dnglab is the LGPL-2.1 text, and `rawler/Cargo.toml` declares `LGPL-2.1`. The sources carry no "or later" header, so we treat it as 2.1 only. That is still compatible: LGPL-2.1 section 3 lets the recipient apply the GPL instead, and the FSF lists LGPL-2.1 as compatible with GPL-3.0. Pure Rust, with no `-sys` crates and no C build. Static linking into a GPL-3.0 app with full source shipped meets the LGPL. Allowed in `deny.toml` for this crate only |
+| wgpu | 30.0.1 | GPU pipeline (0.D) | MIT OR Apache-2.0 | Its tree adds Apache-2.0-only crates (spirv, codespan-reporting, gl_generator, khronos_api), all compatible with GPL-3.0 |
+| pollster | 1.0.1 | Blocking on wgpu's adapter and device futures (0.D) | Apache-2.0 OR MIT | |
+| moxcms | 0.9.1 | ICC transforms (0.D, M1) | BSD-3-Clause OR Apache-2.0 | Chosen over lcms2 (2026-10-14): pure Rust, with no C build or FFI. Its one non-dev dependency, pxfm, has the same license |
+| criterion | 0.8.2 | Stage benchmarks (0.A step 9), dev only | Apache-2.0 OR MIT | Not distributed. Its tree adds ciborium (Apache-2.0) |
+
+## Candidates for later milestones
+
+These licenses come from each project's upstream license file or its registry metadata, as noted. The exact version is pinned, and the tree checked, when the milestone adopts the dependency.
+
+| Dependency | Use | License | Source | Notes |
+|---|---|---|---|---|
+| LibRaw | RAW fallback through FFI (0.C prototype, M1) | LGPL-2.1 or CDDL-1.0, at our choice | Upstream `README.md` | Use under LGPL-2.1. The README warns that licensing may change in future versions, so re-read it at the pinned version. A C++ build on all three OSes, like `genzo-heif`, so it would be the second crate allowed unsafe code. The only Rust bindings (libraw-rs 0.0.4, MIT OR Apache-2.0) are immature; write our own shim as `genzo-heif` does |
+| lcms2 (Little CMS) | ICC transforms | MIT | Registry | Not chosen; moxcms is used instead. Kept as the fallback if moxcms falls short |
+| zune-jpeg | JPEG decode (M1) | MIT OR Apache-2.0 OR Zlib | Registry | Already in rawler's tree |
+| jpeg-encoder | JPEG encode (M1) | (MIT OR Apache-2.0) AND IJG | Registry | The IJG license is GPL-compatible (FSF list). Adding it needs `IJG` in `deny.toml` |
+| rusqlite and SQLite | Catalog (M2) | MIT; SQLite is public domain | Registry | |
+| lensfun library | Lens profiles (M3) | LGPL-3.0 | Upstream `README.md` | Or read the database only and implement the models in Rust |
+| lensfun database | Lens profiles (M3) | CC BY-SA 3.0 | Upstream `README.md` | Data, not code. Shipping it needs attribution and share-alike for the data files; it does not affect the code license |
+| ort | ONNX Runtime bindings (M4) | MIT OR Apache-2.0 | Registry | |
+| ONNX Runtime | Inference (M4) | MIT | Upstream `LICENSE` | Downloaded binaries; check what the provider builds pull in |
 
 ## HEVC patent position (decided)
 
@@ -61,6 +73,9 @@ The decoder is isolated so it can be removed in one change:
 
 ## Sign-off
 
-- [ ] Each candidate's license read from its upstream repository, version pinned
+- [x] Each M0 candidate's license read from its upstream repository, version pinned (2026-10-14)
 - [x] HEVC position decided (2026-10-14)
-- [ ] `deny.toml` updated for each adopted candidate
+- [x] `deny.toml` updated for each adopted candidate (rawler exception; everything else was already allowed)
+- [x] ICC library chosen: moxcms (2026-10-14)
+
+Later candidates are signed off at the milestone that adopts them, with the same three steps.

@@ -114,6 +114,7 @@ Parked decisions that have been settled, with the date and what follows from eac
 | Undo scope (APP-10) | Per photo. Each photo has its own history; Ctrl Z undoes the last change to the current photo | 2026-10-14 | The M1 `Undo` and `Redo` commands take the photo they act on. History steps are stored per photo (the catalog's History step entity already is). In M2, library actions such as ratings, flags and labels join the history of the photo they change |
 | HEVC patent position | Ship libde265 (inside a bundled libheif) on every platform, and accept the patent risk. Revisit before the first public release | 2026-10-14 | See `docs/licenses.md`, which also explains how to cut HEIC support |
 | Module state (APP-01) | Not remembered. Zoom, pan and open panels are neither kept per photo nor per module; switching modules or photos starts from the defaults | 2026-10-14 | No view-state store is needed in M1 |
+| ICC library | moxcms (pure Rust), not lcms2 | 2026-10-14 | No C build for color management. lcms2 stays the fallback; see `docs/licenses.md` |
 
 ## Parked decisions, with a deadline
 
@@ -241,7 +242,7 @@ These are open questions, not conflicts. Neither source answers them.
 - [ ] Latency gate passed, or a ladder step chosen, on all three OSes.
 - [ ] ProRAW decodes on every device in the corpus
 - [ ] Software adapter runs the spike pipeline
-- [ ] License review written, fonts included
+- [x] License review written, fonts included (signed off for M0 in `docs/licenses.md`)
 - [ ] Performance targets confirmed or revised in the spec
 - [ ] Tokens, fonts, shared components and app shell running against the fake engine
 - [x] The M1 parked decisions are settled (undo scope, module state; see Decided)

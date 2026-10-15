@@ -2,10 +2,10 @@
 #   cargo deny --manifest-path backend/Cargo.toml --config deny.toml check
 #   cargo deny --manifest-path shell/Cargo.toml --config deny.toml check
 #
-# Every license allowed here is compatible with GPL-3.0. The reasoning and the
-# review of the not-yet-adopted native libraries live in docs/licenses.md.
-# LGPL libraries (rawler, LibRaw, libheif, libde265) are not allowed until
-# that review is signed off.
+# Every license allowed here is compatible with GPL-3.0. The reasoning lives in
+# docs/licenses.md. LGPL is allowed per crate only, after that review signs it
+# off. libheif and libde265 are C libraries that cargo-deny cannot see; that
+# file guards them.
 
 [graph]
 all-features = false
@@ -37,6 +37,11 @@ allow = [
   # Weak copyleft, file-level; compatible with GPL-3.0 (MPL-2.0 section 3.3).
   # Used by cssparser and selectors in the Tauri tree.
   "MPL-2.0",
+]
+exceptions = [
+  # LGPL-2.1-only, compatible with GPL-3.0 (section 3); pure Rust, linked
+  # statically with full source shipped. Signed off in docs/licenses.md.
+  { name = "rawler", allow = ["LGPL-2.1"] },
 ]
 
 [licenses.private]
