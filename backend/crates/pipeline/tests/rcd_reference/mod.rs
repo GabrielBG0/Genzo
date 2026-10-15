@@ -1,3 +1,14 @@
+//! Derived from darktable's data/kernels/demosaic_rcd.cl and
+//! src/iop/demosaicing/rcd.c:
+//!   Copyright (C) 2010-2026 darktable developers.
+//!   Ratio Corrected Demosaicing (RCD) by Luis Sanz Rodríguez, release 2.3,
+//!   https://github.com/LuisSR/RCD-Demosaicing, licensed under the GNU GPL v3;
+//!   tiling by Ingo Weyrich; optimisations by Hanno Schwalm.
+//! darktable is free software under the GNU General Public License, version 3
+//! or (at your option) any later version. Modified for Genzo (2026): ported to
+//! Rust as a test-only reference, the whole image as one tile.
+//! Genzo is distributed under the GPL-3.0; see LICENSE.
+//!
 //! A literal CPU port of darktable's `rcd.c` (GPL-3.0-or-later), with the
 //! whole image as one tile. Test-only: it checks the WGSL port against the
 //! reference, including darktable's half-width P/Q buffers.

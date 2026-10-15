@@ -62,4 +62,14 @@ export class LatencyProbe<T> {
   reset(): void {
     this.samples = [];
   }
+
+  /**
+   * Drops the request in flight and any queued input without recording a
+   * sample. Call before sending a render the probe must not time (the settled
+   * render at the end of a drag), whose frame would otherwise close the sample.
+   */
+  cancel(): void {
+    this.inFlightSince = null;
+    this.queued = null;
+  }
 }

@@ -1,3 +1,14 @@
+// Derived from darktable's data/kernels/demosaic_rcd.cl and
+// src/iop/demosaicing/rcd.c:
+//   Copyright (C) 2010-2026 darktable developers.
+//   Ratio Corrected Demosaicing (RCD) by Luis Sanz Rodríguez, release 2.3,
+//   https://github.com/LuisSR/RCD-Demosaicing, licensed under the GNU GPL v3;
+//   tiling by Ingo Weyrich; optimisations by Hanno Schwalm.
+// darktable is free software under the GNU General Public License, version 3
+// or (at your option) any later version. Modified for Genzo (2026): ported to
+// WGSL compute shaders with full-resolution, one-value-per-pixel buffers.
+// Genzo is distributed under the GPL-3.0; see LICENSE.
+
 // RCD step 4.3: red and blue at green positions, then assembly of the full
 // RGB image. RCD is unstable near the edges, so a border of BORDER pixels uses
 // a 3×3 same-color average instead (darktable's demosaic_box3).

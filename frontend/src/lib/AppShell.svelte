@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   import type { EngineInfo } from '$contract/genzo';
   import Filmstrip from './components/Filmstrip.svelte';
   import Histogram from './components/Histogram.svelte';
@@ -64,8 +65,12 @@
 
   // While dragging: interactive renders, timed by the probe.
   const probe = new LatencyProbe<null>(() => render(true));
-  // At the end of a gesture: one full-quality render, not timed.
-  const settle = () => void render(false).catch(() => {});
+  // At the end of a gesture: one full-quality render, not timed. It may replace
+  // a drag render on the render thread, so that drag sample is dropped too.
+  function settle() {
+    probe.cancel();
+    void render(false).catch(() => {});
+  }
 
   function ondraw() {
     probe.drawn();
@@ -80,8 +85,9 @@
   }
 
   $effect(() => {
-    // The first frame, so the viewport is not empty.
-    void load();
+    // The first frame, so the viewport is not empty. Untracked: a source
+    // change reloads through the select's onchange, not by re-running this.
+    untrack(() => void load());
     return engine.onEvent((e) => {
       if (e.type === 'renderFinished') gpuMs = e.gpuMs;
     });

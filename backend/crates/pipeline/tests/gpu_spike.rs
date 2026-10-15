@@ -18,7 +18,9 @@ use genzo_pipeline::gpu::{AdapterChoice, Gpu, GpuError};
 
 static ONE_DEVICE: Mutex<()> = Mutex::new(());
 
-fn gpu() -> Option<(Gpu, MutexGuard<'static, ()>)> {
+/// The lock comes first in the tuple on purpose: bindings drop in reverse
+/// order, so `let Some((_lock, gpu))` drops the device before the lock.
+fn gpu() -> Option<(MutexGuard<'static, ()>, Gpu)> {
     let lock = ONE_DEVICE.lock().unwrap_or_else(|e| e.into_inner());
     match Gpu::open(AdapterChoice::from_env()) {
         Ok(gpu) => {
@@ -26,7 +28,7 @@ fn gpu() -> Option<(Gpu, MutexGuard<'static, ()>)> {
                 "adapter: {} ({}), software: {}",
                 gpu.info.name, gpu.info.backend, gpu.info.software
             );
-            Some((gpu, lock))
+            Some((lock, gpu))
         }
         Err(GpuError::NoAdapter) if std::env::var("GENZO_REQUIRE_GPU").as_deref() != Ok("1") => {
             eprintln!("skipped: no GPU adapter");
@@ -85,7 +87,7 @@ const H: u32 = 512;
 
 #[test]
 fn reproduces_the_scene() {
-    let Some((gpu, _lock)) = gpu() else { return };
+    let Some((_lock, gpu)) = gpu() else { return };
     let mut p = SpikePipeline::new(&gpu);
     p.set_image(&gpu, &scene_mosaic(W, H));
     let f = p.render(&gpu, SpikeParams::default(), (W, H)).unwrap();
@@ -127,7 +129,7 @@ fn reproduces_the_scene() {
 
 #[test]
 fn reruns_only_the_stages_that_changed() {
-    let Some((gpu, _lock)) = gpu() else { return };
+    let Some((_lock, gpu)) = gpu() else { return };
     let mut p = SpikePipeline::new(&gpu);
     p.set_image(&gpu, &scene_mosaic(W, H));
     let base = SpikeParams::default();
@@ -203,7 +205,7 @@ fn reruns_only_the_stages_that_changed() {
 
 #[test]
 fn display_p3_output_differs_only_in_saturated_colors() {
-    let Some((gpu, _lock)) = gpu() else { return };
+    let Some((_lock, gpu)) = gpu() else { return };
     let mut p = SpikePipeline::new(&gpu);
     p.set_image(&gpu, &scene_mosaic(W, H));
     let srgb = p.render(&gpu, SpikeParams::default(), (W, H)).unwrap();
@@ -240,7 +242,7 @@ fn display_p3_output_differs_only_in_saturated_colors() {
 
 #[test]
 fn render_thread_coalesces_to_the_latest() {
-    let Some((gpu, _lock)) = gpu() else { return };
+    let Some((_lock, gpu)) = gpu() else { return };
     drop(gpu);
     let thread = Arc::new(RenderThread::spawn(AdapterChoice::from_env()).unwrap());
     thread.set_image(Arc::new(scene_mosaic(W, H))).unwrap();
@@ -268,7 +270,7 @@ fn render_thread_coalesces_to_the_latest() {
 #[test]
 #[ignore = "debug aid"]
 fn dump_scene() {
-    let Some((gpu, _lock)) = gpu() else { return };
+    let Some((_lock, gpu)) = gpu() else { return };
     let mut p = SpikePipeline::new(&gpu);
     p.set_image(&gpu, &scene_mosaic(W, H));
     let f = p.render(&gpu, SpikeParams::default(), (W, H)).unwrap();
@@ -278,7 +280,7 @@ fn dump_scene() {
 /// The WGSL RCD against the literal port of darktable's rcd.c.
 #[test]
 fn rcd_matches_the_darktable_reference() {
-    let Some((gpu, _lock)) = gpu() else { return };
+    let Some((_lock, gpu)) = gpu() else { return };
     let img = scene_mosaic(W, H);
     let mut p = SpikePipeline::new(&gpu);
     p.set_image(&gpu, &img);

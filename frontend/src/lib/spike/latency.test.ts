@@ -47,4 +47,18 @@ describe('LatencyProbe', () => {
     probe.drawn();
     expect(probe.percentile(0)).toBe(0);
   });
+
+  it('cancel drops the request in flight without a sample', () => {
+    let t = 0;
+    const sent: number[] = [];
+    const probe = new LatencyProbe<number>(async (v) => void sent.push(v), 10, () => t);
+    probe.input(1);
+    probe.input(2);
+    probe.cancel();
+    t = 30;
+    probe.drawn();
+    expect(probe.count).toBe(0);
+    // Nothing queued survives the cancel.
+    expect(sent).toEqual([1]);
+  });
 });

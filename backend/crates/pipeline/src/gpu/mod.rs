@@ -110,10 +110,19 @@ impl Gpu {
         let instance =
             wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
         if choice == AdapterChoice::Auto {
-            match Self::try_open(&instance, false, None) {
+            let hardware = match Self::try_open(&instance, false, None) {
                 Ok(gpu) => return Ok(gpu),
-                Err(reason) => return Self::try_open(&instance, true, Some(reason.to_string())),
-            }
+                Err(e) => e,
+            };
+            return match Self::try_open(&instance, true, Some(hardware.to_string())) {
+                Ok(gpu) => Ok(gpu),
+                // No software adapter either (macOS has none): report why the
+                // hardware one failed, which is the useful part.
+                Err(GpuError::NoAdapter) => Err(hardware),
+                Err(software) => Err(GpuError::Device(format!(
+                    "hardware: {hardware}; software: {software}"
+                ))),
+            };
         }
         Self::try_open(&instance, true, Some("software adapter requested".into()))
     }

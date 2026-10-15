@@ -45,6 +45,15 @@ The WGSL RCD is a port of darktable's `demosaic_rcd.cl` (GPL-3.0-or-later). The 
 - **Fine lines.** The lines band is a Bayer worst case: each anti-diagonal holds only green, or only red and blue samples. RCD itself renders it green-tinted, ΔE 18.6 from the truth in darktable's own code. It is therefore checked against the reference, not against the truth.
 - **Against the true scene** (`reproduces_the_scene`): smooth regions measure 51 dB PSNR with mean ΔE 0.05. With every patch edge included, 41 dB with mean ΔE 0.13.
 
+### Golden-image tests: a deviation to confirm
+
+CLAUDE.md asks for golden-image tests, with ΔE2000 and PSNR tolerances and lavapipe as the reference device. **No golden images are stored yet.** The tests compare instead against:
+
+- the synthetic scene's ground truth (PSNR and ΔE2000)
+- the literal CPU port of darktable's `rcd.c` (ΔE2000)
+
+Both hold on any adapter, and neither depends on a render someone stored. Stored goldens rendered on lavapipe can be added once the CI `gpu` job has run. The project owner should confirm this approach or ask for stored goldens.
+
 ### GPU time per slider change at 2560 px (target: under 16 ms)
 
 Synthetic scene, 2560 × 2560 viewport bounds (2560 × 1920 frames), `genzo-cli bench gpu`, release build, 50 steps per row. GPU time comes from timestamp queries. "Engine" is the time inside `Engine::execute`: the render, the readback of the frame, and splitting it into tiles.

@@ -1,8 +1,15 @@
+// Derived from darktable's data/kernels/demosaic_rcd.cl and
+// src/iop/demosaicing/rcd.c:
+//   Copyright (C) 2010-2026 darktable developers.
+//   Ratio Corrected Demosaicing (RCD) by Luis Sanz Rodríguez, release 2.3,
+//   https://github.com/LuisSR/RCD-Demosaicing, licensed under the GNU GPL v3;
+//   tiling by Ingo Weyrich; optimisations by Hanno Schwalm.
+// darktable is free software under the GNU General Public License, version 3
+// or (at your option) any later version. Modified for Genzo (2026): ported to
+// WGSL compute shaders with full-resolution, one-value-per-pixel buffers.
+// Genzo is distributed under the GPL-3.0; see LICENSE.
+
 // RCD step 1: vertical and horizontal directional discrimination.
-//
-// Ported from darktable's demosaic_rcd.cl (GPL-3.0-or-later), after the RCD
-// algorithm by Luis Sanz Rodríguez. Every RCD pass works on full-resolution
-// textures, one value per pixel, instead of darktable's half-width buffers.
 
 @group(0) @binding(1) var cfa: texture_2d<f32>;
 @group(0) @binding(2) var vh_out: texture_storage_2d<r32float, write>;

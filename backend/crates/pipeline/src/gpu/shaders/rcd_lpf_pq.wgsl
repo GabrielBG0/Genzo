@@ -1,3 +1,14 @@
+// Derived from darktable's data/kernels/demosaic_rcd.cl and
+// src/iop/demosaicing/rcd.c:
+//   Copyright (C) 2010-2026 darktable developers.
+//   Ratio Corrected Demosaicing (RCD) by Luis Sanz Rodríguez, release 2.3,
+//   https://github.com/LuisSR/RCD-Demosaicing, licensed under the GNU GPL v3;
+//   tiling by Ingo Weyrich; optimisations by Hanno Schwalm.
+// darktable is free software under the GNU General Public License, version 3
+// or (at your option) any later version. Modified for Genzo (2026): ported to
+// WGSL compute shaders with full-resolution, one-value-per-pixel buffers.
+// Genzo is distributed under the GPL-3.0; see LICENSE.
+
 // RCD steps 2 and 4.0: the low-pass filter, and the squared high-pass filter
 // along the P (\) and Q (/) diagonals.
 
