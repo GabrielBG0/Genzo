@@ -94,7 +94,8 @@ The criterion benchmark (`cargo bench -p genzo-pipeline --bench spike`, 12 MP, R
 ### Open
 
 - lavapipe: the CI `gpu` job runs the tests on Ubuntu 22.04's mesa. Its first result has not been seen yet.
-- macOS (Metal) and Linux hardware: not measured.
+- macOS (Metal, M1 Max): measured with the bench kit, see 0.E. Exposure and white balance drags take 0.25 to 0.71 ms of GPU time at 12 and 48 MP; the settled white balance render takes 7 ms at 12 MP and 26 ms at 48 MP.
+- Linux hardware: only the MX110 dry run (see 0.E); the RTX 3050 run is pending.
 - Real raw files instead of the synthetic scene arrive with 0.C (rawler).
 
 ## 0.C ProRAW and RAW decode
@@ -266,13 +267,31 @@ Caveats, to settle before this counts as final:
   - Decode and upload: 3.5 to 5.3 ms on photos, against an unmeasured but smaller figure for the smooth frame, so at most about 2 ms more.
 
   That adds at most about 7 ms, so the expected figure is about 19 to 26 ms p95. It is an estimate from measured parts, not an end-to-end measurement: the spike cannot load a real image, so real-photo latency in the app has not been measured. The conclusion is unchanged: the preview stays well under 50 ms p95 on Windows, and the full-size JPEG alternative would not have (about 40 ms before the probe's queueing).
-- **macOS and Linux are still unmeasured**, and the custom-scheme throughput there is unknown. Compression makes that less of a risk, not zero.
+- **macOS passes** (M1 Max, below). Linux is pending; the dry run on a weak laptop is below too.
 - **Display P3 previews** are drawn as untagged bitmaps, so their colors are approximate during a drag. The spike only sends sRGB; the color check (step 5) is still open.
 - **At 1:1 zoom** the preview is not used (it would show at the wrong scale), so a 1:1 drag still sends full frames. That case needs its own answer in M1 (send only the visible region).
 - **The settled frame** still moves 11 MB raw, about 90 ms. Nobody waits on it during a drag, but it is the next thing to compress if the pause after release feels slow.
 - The CI bench gate has no baseline for the new `... preview` cases yet; they are reported as new until the baseline is refreshed.
 
 **macOS and Linux have no DevTools attach**, so the script above does not work there. Instead the app benchmarks itself: started with `GENZO_AUTOBENCH=FILE` (contract 0.4.0), it runs the same drag protocol with synthetic input and writes a JSON report (`frontend/src/lib/spike/autobench.ts`). The Linux bench kit (`scripts/bench-kit/`, built by the "Bench kit" workflow on ubuntu-22.04) wraps it for testers: it records the hardware, runs `cli bench gpu`, then runs the app in each WebKitGTK drawing mode. Color handling (sRGB and Display P3 tagged frames, step 5) is still open.
+
+### macOS 26.3, M1 Max, WKWebView (WebKit 21623.2.7), bench kit 7a40671 (2026-10-16)
+
+A friend's MacBook Pro (M1 Max, 32 GPU cores, 64 GB, on AC power, built-in Liquid Retina XDR display), release build from the bench kit, synthetic input (autobench), 2560 × 1440 frame. The tester saw the image change.
+
+| Case | Input → pixels p50 / p95 | One request alone, p50 / p95 | of which: send to event (engine) | event to draw (fetch, size) |
+|---|---|---|---|---|
+| 12 MP, Exposure, Fit | 32 / 33 ms | 17 / 18 ms | 3 / 3 ms (2 / 3) | 14 / 15 ms (0 / 1 ms, 39 KB) |
+| 12 MP, Temp, Fit | 31 / 32 ms | 17 / 18 ms | 3 / 3 ms (2 / 3) | 14 / 15 ms (0 / 1 ms, 27 KB) |
+| 12 MP, Exposure, 1:1 (full frames) | 32 / 33 ms | 17 / 18 ms | 4 / 3 ms (3 / 3) | 13 / 15 ms (4 / 5 ms, 10.5 MB) |
+| 48 MP, Exposure, Fit | 32 / 33 ms | 17 / 18 ms | 3 / 3 ms (2 / 2) | 14 / 15 ms (0 / 1 ms, 20 KB) |
+| 48 MP, Temp, Fit | 32 / 33 ms | 17 / 18 ms | 3 / 3 ms (2 / 6) | 14 / 15 ms (0 / 1 ms, 17 KB) |
+
+- **The gate passes on macOS with room to spare: 33 ms p95 against 50 ms**, at 12 and 48 MP, and even at 1:1 with full frames. No ladder step is needed beyond the JPEG preview the app already sends.
+- **The display sets the pace, not the pipeline.** Every case lands on the same numbers: one request takes about 17 ms, one 60 Hz frame, and a probe sample (about two requests, see the Linux section) about 33 ms. The engine and IPC take about 3 ms, and the fetch is near zero. WebKit runs animation frames at 60 Hz even on this 120 Hz display, so the wait for the next frame is most of the time.
+- **The custom URI scheme is fast in WKWebView**: 10.5 MB in 4 to 5 ms (about 2 GB/s), against about 200 MB/s in WebKitGTK on the Linux laptop. Full frames at 1:1 are no problem here.
+- 48 MP fits easily in 64 GB of unified memory; GPU time per drag step is under 1 ms (0.D above).
+- The input is synthetic. Running the autobench once on the Windows machine of the 18.4 ms result would check that it agrees with the DevTools measurement.
 
 ### Linux dry run: Ubuntu 24.04, WebKitGTK 2.52.6, X11, GeForce MX110 2 GB (2026-10-16)
 

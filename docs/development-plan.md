@@ -242,7 +242,7 @@ These are open questions, not conflicts. Neither source answers them.
 7. **Fake engine** in TypeScript that implements the generated contract, with a static tile source. Add the **transport module**, the only file that touches Tauri.
 
 **Exit checklist**
-- [ ] Latency gate passed, or a ladder step chosen, on all three OSes.
+- [ ] Latency gate passed, or a ladder step chosen, on all three OSes. (Windows passed with the JPEG preview, 18.4 ms p95; macOS passed, 33 ms p95 on an M1 Max; Linux pending the RTX 3050 run. See `docs/m0-results.md`.)
 - [ ] ProRAW decodes on every device in the corpus
 - [x] Software adapter runs the spike pipeline (lavapipe job on every push; WARP locally)
 - [x] License review written, fonts included (signed off for M0 in `docs/licenses.md`)
