@@ -243,7 +243,7 @@ These are open questions, not conflicts. Neither source answers them.
 
 **Exit checklist**
 - [ ] Latency gate passed, or a ladder step chosen, on all three OSes. (Windows passed with the JPEG preview, 18.4 ms p95; macOS passed, 33 ms p95 on an M1 Max; Linux pending the RTX 3050 run. See `docs/m0-results.md`.)
-- [ ] ProRAW decodes on every device in the corpus
+- [ ] ProRAW decodes on every device in the corpus (iPhone 12 Pro and 13 Pro Max decode in rawler; the iPhone 16 Pro, JPEG XL, only in the `dng_jxl_probe` prototype, not yet in the decode path)
 - [x] Software adapter runs the spike pipeline (lavapipe job on every push; WARP locally)
 - [x] License review written, fonts included (signed off for M0 in `docs/licenses.md`)
 - [x] Performance targets confirmed or revised in the spec (revision 64: GPU time confirmed, input to pixels measured on Windows only, 48 MP GPU memory and 48 MP open time flagged for M1)

@@ -104,7 +104,7 @@ In progress (step 2 partly done). Steps 3 to 7 are still open.
 
 ### Corpus
 
-`python scripts/fetch-raw-corpus.py` downloads one file per camera body from raw.pixls.us into the gitignored `corpus/raw/` and checks it against `corpus/manifest.json` (sha256). 16 raw.pixls.us bodies (the Z 9 twice, lossless and High Efficiency), plus the iPhone 12 Pro ProRAW. The owner's iPhone 16 Pro 48 MP ProRAW is in `corpus/proraw/iPhone 16 Pro/`. A 12 MP file from an iPhone 14 or 15 Pro would still help.
+`python scripts/fetch-raw-corpus.py` downloads one file per camera body from raw.pixls.us into the gitignored `corpus/raw/` and checks it against `corpus/manifest.json` (sha256). 16 raw.pixls.us bodies (the Z 9 twice, lossless and High Efficiency), plus the iPhone 12 Pro ProRAW. The owner's iPhone 16 Pro 48 MP ProRAW is in `corpus/proraw/iPhone 16 Pro/`, and a friend's iPhone 13 Pro Max 12 MP ProRAW in `corpus/proraw/iPhone 13 Pro Max/`. A file from an iPhone 14 or 15 Pro would still help.
 
 ### rawler 0.8.0 gap report (step 2)
 
@@ -112,11 +112,13 @@ In progress (step 2 partly done). Steps 3 to 7 are still open.
 
 **Decodes: 16 of 19 files** (the corpus without the owner's iPhone 16 Pro file; with it, 16 of 20), with white and black levels, a camera matrix (D65 and A, or D50 for Leica) and white balance present in all but one. The exception is the Kodak DCS760C, which has no WB coefficients.
 
+Added since this run, both decoding: the iPhone 16 Pro Bayer DNG (Halide) and the iPhone 13 Pro Max ProRAW (below). With every file now in the corpus that is **18 of 22**.
+
 | Result | Files |
 |---|---|
 | Fails: Nikon High Efficiency NEF ("compression HighEfficency is not supported") | Z 8, Z 9 HE |
 | Fails: GoPro GPR ("Unsupported DNG compression", probably VC-5) | HERO6 Black |
-| Decodes, LinearRaw (cpp 3, no demosaic) | iPhone 12 Pro ProRAW, Galaxy S23 Ultra DNG |
+| Decodes, LinearRaw (cpp 3, no demosaic) | iPhone 12 Pro ProRAW, Galaxy S23 Ultra DNG; since then iPhone 13 Pro Max ProRAW |
 | Decodes, X-Trans (6x6 CFA) | Fujifilm X-T5 |
 | Decodes, Bayer | everything else, including Canon R5m2 CR3 (C-RAW), Sony 7RM5 lossless ARW, GFX100S, Hasselblad 3FR, Phase One IIQ (9 s, slowest) |
 
@@ -127,6 +129,7 @@ Gaps that matter for the pipeline:
 - White and black levels are per channel or per CFA position (36 entries for X-Trans). The pipeline must take them as arrays, not scalars.
 - The 4th WB coefficient is NaN on every body. Treat only the first three as valid.
 - **iPhone 16 Pro ProRAW fails in rawler 0.8.0, and the cause is JPEG XL.** The owner's file `IPhone16proRaw.DNG` (28.6 MB, sha256 `97f76203...b5b378`) is **48 MP** (8064x6048, 3 samples per pixel, LinearRaw). Its main image uses compression 52546 (JPEG XL, DNG 1.7), and it carries a ProfileGainTableMap of 3.1 MB. rawler has no JPEG XL decoder, so it panics ("index out of bounds: the len is 1024 but the index is 1024"), after 8 s. The iPhone 12 Pro file uses an older encoding and decodes. So **every ProRAW from the iPhone 16 Pro on is likely unreadable by rawler**, and Samsung Expert RAW will be the same. Our own DNG path with a pure-Rust JPEG XL decoder (`jxl-oxide`, MIT OR Apache-2.0) is the likely fix. PhotoCraft (github.com/storytold/photocraft, `crates/raw`, MIT OR Apache-2.0) does it this way: its DNG reader decodes JPEG XL tiles with `jxl-oxide` pinned exactly, and reports ProfileGainTableMap as "not applied". We can do the same, or go further and apply the gain table map.
+- **iPhone 13 Pro Max ProRAW decodes in rawler 0.8.0** (added 2026-10-16). `IMG_8104.dng` (36.1 MB, sha256 `197623dd...f0d62f`), shot on iOS 26.3.1: 12 MP (4032x3024) LinearRaw, 3 samples per pixel, 12-bit, **lossless JPEG** (compression 7, DNG 1.6, 504x504 tiles), so not JPEG XL. rawler reads it in 250 ms with a warm cache (3 s on the first, cold read), with both colour matrices (illuminants 17 and 21) and none of the fields the gap report checks missing. As for every DNG, rawler does not surface its ProfileGainTableMap (see the gaps above); the tags below come from our own TIFF tag reading. Like the 16 Pro file it has a 4096-entry LinearizationTable, AsShotNeutral 1,1,1 (white balanced in the camera), DefaultBlackRender 1, no ForwardMatrix and no opcode lists. It also carries a **ProfileGainTableMap** (3.1 MB), so the gain table map is not limited to the 16 Pro: a current iOS writes it on older phones too. Its **BaselineExposure is +2.50 EV**, against +0.51 on the 16 Pro file, so the default look depends on honoring BaselineExposure. With the 12 Pro, that makes three iPhone generations, of which the two older ones decode in rawler and the 16 Pro only in the JPEG XL prototype.
 - **iPhone Bayer DNG decodes in rawler 0.8.0.** The owner's `Halide_iPhone16Pro_bayer.dng` (16.0 MB, sha256 `a6c97126...38b547`) is a Halide RAW capture from the **ultra wide** camera (4224x3024, 12 MP, RGGB Bayer, lossless JPEG compression, white level 4095, black level 528). rawler decodes it in 349 ms with no missing fields (WB, two colour matrices, crop). So the Bayer DNG path is covered for iPhone, with one device. It is the same phone as the ProRAW sample, so it adds a second sensor, not a second generation. The file is kept under `corpus/bayer-dng/` (gitignored).
 - Nikon HE is the one mainstream gap. Whether LibRaw can read it is step 3 and is not checked yet.
 
@@ -171,7 +174,7 @@ Weights are LightCraft's estimate of Lightroom raw users by maker (Canon 33%, So
 | Order | What | Share | Status in our corpus | Work for M1 |
 |---|---|---|---|---|
 | 1 | Canon CR3, Sony ARW, Nikon NEF (lossless and lossy compressed), Fujifilm RAF (Bayer and X-Trans) | ~86% | All decode with rawler 0.8 on the files tested | Verify more bodies per maker; only one Canon CR3 (an APS-C C-RAW) is tested. X-Trans needs its own demosaic |
-| 2 | Phones: Apple ProRAW (all generations), Samsung and other DNG | 3% | iPhone 12 Pro and S23 Ultra decode with rawler. **iPhone 16 Pro (JPEG XL) does not** | Own DNG path with `jxl-oxide`, LinearizationTable with clamping, opcode lists. Gain table map off by default |
+| 2 | Phones: Apple ProRAW (all generations), Samsung and other DNG | 3% | iPhone 12 Pro, 13 Pro Max and S23 Ultra decode with rawler. **iPhone 16 Pro (JPEG XL) does not** | Own DNG path with `jxl-oxide`, LinearizationTable with clamping, opcode lists. Gain table map off by default |
 | 3 | Panasonic RW2, OM/Olympus ORF, Leica/Pentax DNG | ~9% | All decode with rawler | Per-body checks only |
 | 4 | Nikon High Efficiency NEF (Z 6III, Z 8, Z 9, Z f in HE mode) | part of Nikon's 16%, only shots taken in HE | Fails in rawler and LibRaw; Adobe reads it | Needs a JPEG XS decoder (est. 20 to 40 h). Until then, show the embedded preview and say why. Decide in M1 whether it is worth the time |
 | 5 | Medium format and legacy: Hasselblad 3FR, Phase One IIQ, Kodak DCR | <1% | Decode with rawler (IIQ is slow: 9 s debug) | Nothing planned |
