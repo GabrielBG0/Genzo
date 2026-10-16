@@ -5,3 +5,6 @@
 /corpus/*
 !/corpus/README.md
 !/corpus/manifest.json
+
+# Benchmark kits built by scripts/bench-kit/make-kit.sh
+/dist/

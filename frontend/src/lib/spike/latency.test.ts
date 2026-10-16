@@ -27,6 +27,8 @@ describe('LatencyProbe', () => {
     expect(probe.count).toBe(2);
     expect(probe.percentile(0)).toBe(20);
     expect(probe.percentile(1)).toBe(40);
+    // The second request went out at 20, so it cost 25 on its own.
+    expect(probe.sendToDrawMs).toEqual([20, 25]);
   });
 
   it('ignores draws with nothing in flight', () => {

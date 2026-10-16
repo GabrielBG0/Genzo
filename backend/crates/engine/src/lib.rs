@@ -5,6 +5,7 @@
 //! contract types so callers never depend on `genzo-model` directly.
 
 use std::collections::{BTreeMap, VecDeque};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -85,6 +86,9 @@ pub struct Engine {
     generations: Generations,
     /// Finished frames by generation: the concatenated tile messages.
     frames: Mutex<FrameStore>,
+    /// Where the autobench report goes (`GENZO_AUTOBENCH`), if the app was
+    /// started to benchmark itself.
+    autobench: Option<PathBuf>,
 }
 
 #[derive(Debug, Default)]
@@ -113,9 +117,14 @@ impl Default for Engine {
 
 impl Engine {
     /// Starts the engine and its render thread. `GENZO_ADAPTER=software`
-    /// forces the software adapter.
+    /// forces the software adapter. `GENZO_AUTOBENCH=FILE` starts the app's
+    /// self-benchmark, which saves its report to FILE.
     pub fn new() -> Self {
-        Self::start(Some(AdapterChoice::from_env()))
+        let mut engine = Self::start(Some(AdapterChoice::from_env()));
+        engine.autobench = std::env::var_os("GENZO_AUTOBENCH")
+            .filter(|p| !p.is_empty())
+            .map(PathBuf::from);
+        engine
     }
 
     /// An engine without a render thread, for work that never renders on the
@@ -159,6 +168,7 @@ impl Engine {
             gpu,
             generations: Generations::new(),
             frames: Mutex::new(FrameStore::default()),
+            autobench: None,
         }
     }
 
@@ -167,6 +177,7 @@ impl Engine {
             engine_version: ENGINE_VERSION.into(),
             contract_version: genzo_model::CONTRACT_VERSION.into(),
             adapter: self.adapter.clone(),
+            autobench: self.autobench.is_some(),
         }
     }
 
@@ -295,6 +306,14 @@ impl Engine {
                     render_ms: started.elapsed().as_secs_f64() * 1000.0,
                     gpu_ms: frame.gpu_ms,
                 }])
+            }
+            Command::SaveAutobenchReport { report } => {
+                let path = self.autobench.as_ref().ok_or_else(|| {
+                    EngineError::Io("not in autobench mode (GENZO_AUTOBENCH is unset)".into())
+                })?;
+                write_atomically(path, report.as_bytes())
+                    .map_err(|e| EngineError::Io(format!("{}: {e}", path.display())))?;
+                Ok(Vec::new())
             }
         }
     }
@@ -456,6 +475,28 @@ pub fn covered_area(tiles: &[(TileHeader, &[u8])]) -> u64 {
         .sum()
 }
 
+/// Writes `bytes` to a new sibling of `path`, then renames it into place, so
+/// a reader waiting for `path` to appear never sees half a file. The sibling
+/// is created fresh (never an existing file) and removed if anything fails.
+fn write_atomically(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let name = path
+        .file_name()
+        .ok_or_else(|| std::io::Error::other("no file name"))?
+        .to_string_lossy();
+    let tmp = path.with_file_name(format!(".{name}.{}.partial", std::process::id()));
+    let result = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&tmp)
+        .and_then(|mut f| f.write_all(bytes))
+        .and_then(|()| std::fs::rename(&tmp, path));
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -502,6 +543,45 @@ mod tests {
         assert_eq!(tiles.len(), 6);
         assert_eq!(covered_area(&tiles), 600 * 300);
         assert!(tiles.iter().all(|(h, _)| h.generation == generation));
+    }
+
+    #[test]
+    fn autobench_report_needs_autobench_mode() {
+        let mut e = Engine::headless();
+        assert!(!e.info().autobench);
+        let save = |e: &Engine| {
+            e.execute(Command::SaveAutobenchReport {
+                report: "{\"ok\":true}".into(),
+            })
+        };
+        assert!(save(&e).is_err());
+
+        let path =
+            std::env::temp_dir().join(format!("genzo-autobench-{}.json", std::process::id()));
+        e.autobench = Some(path.clone());
+        assert!(e.info().autobench);
+        assert!(save(&e).unwrap().is_empty());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "{\"ok\":true}");
+        std::fs::remove_file(&path).unwrap();
+        // No temporary sibling is left behind, after success or failure.
+        let leftovers = || {
+            std::fs::read_dir(std::env::temp_dir())
+                .unwrap()
+                .filter_map(Result::ok)
+                .any(|f| {
+                    let name = f.file_name().to_string_lossy().into_owned();
+                    name.starts_with(&format!(".genzo-autobench-{}", std::process::id()))
+                        && name.ends_with(".partial")
+                })
+        };
+        assert!(!leftovers());
+        // The write succeeds and the rename fails: the destination is a directory.
+        let dir = std::env::temp_dir().join(format!("genzo-autobench-{}-dir", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        e.autobench = Some(dir.clone());
+        assert!(save(&e).is_err());
+        assert!(!leftovers());
+        std::fs::remove_dir(dir).unwrap();
     }
 
     #[test]

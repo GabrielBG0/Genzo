@@ -1,0 +1,134 @@
+name: Bench kit
+
+# Builds the benchmark kits (scripts/bench-kit) for testers with real GPUs:
+# M0 step 0.E on every OS. Run it from the Actions tab.
+#
+# - Linux is built on ubuntu-22.04, the oldest supported distro, so it starts
+#   on any distro with glibc 2.35 or newer.
+# - macOS is built on Apple silicon for macOS 13 or newer.
+# - Windows is built on windows-2022.
+# The builds are unsigned; each run script clears the download flag on its own
+# folder so they start. Every kit, results file and the release carry the
+# commit's short hash, so a result can always be matched to its code.
+#
+# With "publish" ticked, the kits are attached to a pre-release tagged
+# bench-<commit>: a link testers can download from without a GitHub account.
+# Otherwise they are only workflow artifacts.
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the kits as a pre-release (bench-<commit>)
+        type: boolean
+        default: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  kit:
+    name: Kit (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-22.04, macos-15, windows-2022]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "13.0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            backend
+            shell
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: frontend/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - id: build
+        run: echo "archive=$(./scripts/bench-kit/make-kit.sh | tail -1)" >> "$GITHUB_OUTPUT"
+      # Catches a kit that cannot start before a tester finds out. The runners
+      # may have no usable GPU, so the cli renders on the CPU, and the app is
+      # not started (no display).
+      - name: Smoke test
+        run: |
+          kit="$(ls -d dist/genzo-bench-*/ | head -1)"
+          "$kit/bin/genzo-cli" version
+          "$kit/bin/genzo-cli" bench test-pattern 256 256 3
+          cat "$kit/VERSION"
+      - name: Check the PowerShell script parses
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile("$PWD\scripts\bench-kit\run-bench.ps1", [ref]$null, [ref]$errors) | Out-Null
+          if ($errors) { $errors; exit 1 }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kit-${{ matrix.os }}
+          path: ${{ steps.build.outputs.archive }}
+
+  release:
+    name: Pre-release
+    if: inputs.publish
+    needs: kit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: kits
+          merge-multiple: true
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          commit="$(git rev-parse --short=7 HEAD)"
+          tag="bench-$commit"
+          contract="$(awk -F'"' '/CONTRACT_VERSION: &str/ {print $2}' backend/crates/model/src/contract.rs)"
+          {
+            echo "Benchmark kits for commit \`$commit\` (contract $contract). Test builds, unsigned, not a Genzo release."
+            echo
+            echo "| File | Runs on |"
+            echo "|---|---|"
+            for f in kits/*; do
+              case "$f" in
+                *linux*) os="Linux x86_64 with glibc 2.35 or newer and WebKitGTK 4.1 (Ubuntu 22.04, Fedora 36 or newer)" ;;
+                *macos*) os="macOS 13 or newer on Apple silicon" ;;
+                *windows*) os="Windows 10 or 11 (x64) with WebView2" ;;
+              esac
+              echo "| \`$(basename "$f")\` | $os |"
+            done
+            echo
+            echo "Unpack it, then run \`./run-bench.sh\` (Linux, macOS) or double-click \`run-bench.cmd\` (Windows)."
+            echo "It takes 10 to 15 minutes and writes \`genzo-bench-results-<os>-$commit-<time>\` to send back."
+            echo
+            echo '```'
+            cat scripts/bench-kit/README.txt
+            echo '```'
+          } > notes.md
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" kits/* --clobber
+          else
+            gh release create "$tag" kits/* --target "$GITHUB_SHA" --prerelease \
+              --title "Bench kit $commit" --notes-file notes.md
+          fi

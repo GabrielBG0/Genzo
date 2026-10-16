@@ -272,4 +272,28 @@ Caveats, to settle before this counts as final:
 - **The settled frame** still moves 11 MB raw, about 90 ms. Nobody waits on it during a drag, but it is the next thing to compress if the pause after release feels slow.
 - The CI bench gate has no baseline for the new `... preview` cases yet; they are reported as new until the baseline is refreshed.
 
-**Not measured:** macOS (WKWebView) and Linux (WebKitGTK 4.1 on two distros) have no DevTools attach, so the script does not work there. On those the numbers have to be read off the "Input → pixels" rows in the app's right panel while dragging the slider by hand, on a release build (`pnpm app:build --no-bundle`). Color handling (sRGB and Display P3 tagged frames, step 5) is also open.
+**macOS and Linux have no DevTools attach**, so the script above does not work there. Instead the app benchmarks itself: started with `GENZO_AUTOBENCH=FILE` (contract 0.4.0), it runs the same drag protocol with synthetic input and writes a JSON report (`frontend/src/lib/spike/autobench.ts`). The Linux bench kit (`scripts/bench-kit/`, built by the "Bench kit" workflow on ubuntu-22.04) wraps it for testers: it records the hardware, runs `cli bench gpu`, then runs the app in each WebKitGTK drawing mode. Color handling (sRGB and Display P3 tagged frames, step 5) is still open.
+
+### Linux dry run: Ubuntu 24.04, WebKitGTK 2.52.6, X11, GeForce MX110 2 GB (2026-10-16)
+
+The owner's laptop, a weak hybrid GPU (Intel UHD plus MX110), used to test the kit. These numbers do not decide the gate, but they point at where Linux loses time. Release build, 2560 × 1440 frame, synthetic 12 MP raw, half-size JPEG preview while dragging:
+
+| WebKitGTK mode, case | Input → pixels p50 / p95 | One request alone, p50 / p95 | of which: send to event (engine) | event to draw (fetch, size) |
+|---|---|---|---|---|
+| default (DMABUF renderer), any | **0 frames drawn** of 12 rendered per case, no viewport or page error | | | |
+| `WEBKIT_DISABLE_DMABUF_RENDERER=1`, Exposure, Fit | 72 / 89 ms | 45 / 57 ms | 18 / 16 ms (11 / 12) | 27 / 41 ms (11 / 15 ms, 39 KB) |
+| same, Temp, Fit | 70 / 82 ms | 42 / 52 ms | 15 / 14 ms (8 / 9) | 27 / 38 ms (12 / 14 ms, 27 KB) |
+| same, Exposure, 1:1 (full frames) | 124 / 143 ms | 72 / 81 ms | 17 / 18 ms (10 / 11) | 55 / 63 ms (51 / 58 ms, 10.5 MB) |
+| PRIME offload to the NVIDIA GPU, Fit | 73 / 84 ms | (first run, no split) | | |
+
+How to read it: the gate number (input to pixels) is timed like on Windows, from the oldest input waiting for a frame. With input every 8 ms there is always one waiting, so a sample covers the request it waited behind as well as its own: about two requests. "One request alone" times a single request from send to draw; it splits into send to `renderFinished` (IPC and the engine) and `renderFinished` to draw (fetch, JPEG decode, WebGL upload, the next animation frame). Send to event minus the engine is the IPC. Percentiles of the parts do not add up exactly.
+
+- **This laptop fails the gate in the modes that draw: about 84 to 89 ms p95, against 18.4 ms on Windows.** It is a weak GPU and an old CPU, so the friend's run decides the gate, but the split shows where Linux loses time compared with Windows:
+  - the IPC round trip costs about 5 to 7 ms on top of the engine;
+  - fetching a 39 KB preview over the custom URI scheme takes 11 to 15 ms (on Windows a 78 to 254 KB preview was estimated at 0.7 to 2.1 ms), and 10.5 MB takes about 55 ms, about 200 MB/s;
+  - decode, upload and the animation frame take the remaining 15 to 25 ms.
+  The custom scheme is the clearest Linux-specific cost. A Tauri binary channel or fewer round trips (the frame bytes with the event) are the next things to try if the friend's machine shows the same pattern.
+- **In the default mode the page never draws a frame** on this NVIDIA X11 setup: the engine renders, the viewport is created without error, but no frame reaches `ondraw`. Nobody has watched the window yet, so whether it is blank is not confirmed by eye. If the friend's machine shows the same, the app must set `WEBKIT_DISABLE_DMABUF_RENDERER=1` itself on NVIDIA.
+- **48 MP runs out of GPU memory** on 2 GB (`wgpu error: Out of Memory`), and the panic stops the render thread for good. With only the 12 MP image loaded the app already holds about 1.5 GB of GPU memory (`nvidia-smi`). That matches the 48 MP GPU memory item flagged for M1. A failed allocation should become an error, not a dead render thread.
+- `performance.now()` has 1 ms resolution in WebKitGTK, so these samples are whole milliseconds.
+- WebKit masks the WebGL renderer ("Apple GPU"), so the kit records the page's GPU from `glxinfo` and `eglinfo` instead.

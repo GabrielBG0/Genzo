@@ -11,6 +11,7 @@
   import TopBar, { type Module } from './components/TopBar.svelte';
   import type { Engine } from './engine/types';
   import { provideRegistry } from './shortcuts/context';
+  import { runAutobench, timedEngine, type AutobenchDriver, type Diagnostics } from './spike/autobench';
   import { LatencyProbe } from './spike/latency';
   import type { Zoom } from './viewport/types';
 
@@ -18,7 +19,22 @@
     engine: Engine;
     info: EngineInfo;
   }
-  let { engine, info }: Props = $props();
+  let { engine: given, info }: Props = $props();
+  // The autobench times the transport calls; otherwise the engine is used as given.
+  const diag: Diagnostics = {
+    engineMs: [],
+    executeMs: [],
+    fetchMs: [],
+    fetchBytes: [],
+    sendToDrawMs: [],
+    eventToDrawMs: [],
+    framesDrawn: 0,
+    viewportError: null,
+  };
+  /** When each generation's renderFinished arrived, for the autobench. */
+  // Not reactive state: nothing renders from it.
+  let finishedAt: [generation: number, at: number][] = [];
+  const engine = untrack(() => (info.autobench ? timedEngine(given, diag) : given));
 
   const registry = provideRegistry();
   let module: Module = $state('develop');
@@ -34,8 +50,11 @@
   type Source = keyof typeof SOURCES;
   let size: keyof typeof SIZES = $state('2560 × 1440');
   // Picked once at startup: a real engine without a GPU can only draw the test pattern.
+  // The autobench starts small: 48 MP can run out of GPU memory, which stops
+  // the render thread before the first case.
   function initialSource(): Source {
-    return engine.kind === 'tauri' && info.adapter.kind === 'none' ? 'Test pattern' : 'GPU · 48 MP raw';
+    if (engine.kind === 'tauri' && info.adapter.kind === 'none') return 'Test pattern';
+    return info.autobench ? 'GPU · 12 MP raw' : 'GPU · 48 MP raw';
   }
   let source: Source = $state(initialSource());
   let phase = $state(0);
@@ -75,8 +94,14 @@
     void render(false).catch(() => {});
   }
 
-  function ondraw() {
-    probe.drawn();
+  function ondraw(generation: number, at: number) {
+    if (info.autobench) {
+      diag.framesDrawn += 1;
+      const finished = finishedAt.find(([g]) => g === generation);
+      if (finished) diag.eventToDrawMs.push(at - finished[1]);
+      finishedAt = finishedAt.filter(([g]) => g > generation);
+    }
+    probe.drawn(at);
     stats = { p50: probe.percentile(0.5), p95: probe.percentile(0.95), n: probe.count };
   }
 
@@ -87,12 +112,57 @@
     probe.input(null);
   }
 
+  // Started with GENZO_AUTOBENCH: drive the sliders like the Windows script
+  // does, then hand the report to the engine, which writes it to disk.
+  let autobench: string | null = $state(null);
+  const driver: AutobenchDriver = {
+    async prepare(c) {
+      source = c.source as Source;
+      size = c.frame as keyof typeof SIZES;
+      zoom = c.zoom;
+      await load();
+    },
+    input(slider, t) {
+      if (slider === 'Exposure') exposure = Math.round((-3 + 6 * t) * 100) / 100;
+      else temp = Math.round(-100 + 200 * t);
+      probe.input(null);
+    },
+    settle,
+    reset: () => {
+      probe.reset();
+      for (const k of ['engineMs', 'executeMs', 'fetchMs', 'fetchBytes', 'eventToDrawMs'] as const) diag[k] = [];
+      diag.framesDrawn = 0;
+    },
+    samples: () => probe.all,
+    diagnostics: () => ({ ...diag, sendToDrawMs: probe.sendToDrawMs }),
+  };
+  async function selfBenchmark() {
+    const report = await runAutobench(driver, info, undefined, undefined, (done, total) => {
+      autobench = `Autobench running, case ${Math.min(done + 1, total)} of ${total}. Do not touch or cover this window.`;
+    });
+    await engine.execute({ type: 'saveAutobenchReport', report: JSON.stringify(report, null, 2) });
+    autobench = 'Autobench done. The report is saved; the script closes the app.';
+  }
+
   $effect(() => {
     // The first frame, so the viewport is not empty. Untracked: a source
     // change reloads through the select's onchange, not by re-running this.
-    untrack(() => void load());
+    untrack(() => {
+      const first = load();
+      if (info.autobench) {
+        void first
+          .catch(() => {})
+          .then(selfBenchmark)
+          .catch((e: unknown) => (autobench = `Autobench failed: ${e instanceof Error ? e.message : String(e)}`));
+      }
+    });
     return engine.onEvent((e) => {
-      if (e.type === 'renderFinished') gpuMs = e.gpuMs;
+      if (e.type !== 'renderFinished') return;
+      gpuMs = e.gpuMs;
+      if (info.autobench) {
+        diag.engineMs.push(e.renderMs);
+        finishedAt.push([e.generation, performance.now()]);
+      }
     });
   });
 
@@ -113,7 +183,7 @@
       <LeftPanelDevelop />
     </div>
     <div class="center">
-      <PhotoViewport {engine} {zoom} {ondraw} />
+      <PhotoViewport {engine} {zoom} {ondraw} onerror={(m) => (diag.viewportError = m)} />
     </div>
     <aside class="right pane" aria-label="Right panel">
       <Histogram />
@@ -161,7 +231,9 @@
         <dt>Samples</dt>
         <dd>{stats.n}</dd>
       </dl>
-      <p class="note">Gate: under 50 ms p95 at 2560 px. Drag the slider to collect samples.</p>
+      <p class="note" role="status">
+        {autobench ?? 'Gate: under 50 ms p95 at 2560 px. Drag the slider to collect samples.'}
+      </p>
     </aside>
   </main>
   <Filmstrip items={[]} />
