@@ -280,7 +280,10 @@ The owner's laptop, a weak hybrid GPU (Intel UHD plus MX110), used to test the k
 
 | WebKitGTK mode, case | Input → pixels p50 / p95 | One request alone, p50 / p95 | of which: send to event (engine) | event to draw (fetch, size) |
 |---|---|---|---|---|
-| default (DMABUF renderer), any | **0 frames drawn** of 12 rendered per case, no viewport or page error | | | |
+| default (DMABUF renderer), unattended | 0 frames drawn of 12 rendered per case: the display was most likely blanked (see below) | | | |
+| default, watched, Exposure, Fit | 129 / 215 ms | 69 / 114 ms | 26 / 9 ms (23 / 31) | 43 / 105 ms (4 / 9 ms, 39 KB) |
+| default, watched, Temp, Fit | 87 / 181 ms | 47 / 98 ms | 13 / 14 ms (12 / 20) | 34 / 84 ms (1 / 8 ms, 27 KB) |
+| default, watched, Exposure, 1:1 | 326 / 387 ms | 171 / 212 ms | 25 / 36 ms (17 / 32) | 146 / 176 ms (139 / 168 ms, 10.5 MB) |
 | `WEBKIT_DISABLE_DMABUF_RENDERER=1`, Exposure, Fit | 72 / 89 ms | 45 / 57 ms | 18 / 16 ms (11 / 12) | 27 / 41 ms (11 / 15 ms, 39 KB) |
 | same, Temp, Fit | 70 / 82 ms | 42 / 52 ms | 15 / 14 ms (8 / 9) | 27 / 38 ms (12 / 14 ms, 27 KB) |
 | same, Exposure, 1:1 (full frames) | 124 / 143 ms | 72 / 81 ms | 17 / 18 ms (10 / 11) | 55 / 63 ms (51 / 58 ms, 10.5 MB) |
@@ -293,7 +296,8 @@ How to read it: the gate number (input to pixels) is timed like on Windows, from
   - fetching a 39 KB preview over the custom URI scheme takes 11 to 15 ms (on Windows a 78 to 254 KB preview was estimated at 0.7 to 2.1 ms), and 10.5 MB takes about 55 ms, about 200 MB/s;
   - decode, upload and the animation frame take the remaining 15 to 25 ms.
   The custom scheme is the clearest Linux-specific cost. A Tauri binary channel or fewer round trips (the frame bytes with the event) are the next things to try if the friend's machine shows the same pattern.
-- **In the default mode the page never draws a frame** on this NVIDIA X11 setup: the engine renders, the viewport is created without error, but no frame reaches `ondraw`. Nobody has watched the window yet, so whether it is blank is not confirmed by eye. If the friend's machine shows the same, the app must set `WEBKIT_DISABLE_DMABUF_RENDERER=1` itself on NVIDIA.
+- **The default mode does draw** (corrected 2026-10-16). The first default-mode runs drew no frame at all, but they ran with nobody at the laptop. Run again with the owner watching, the image changed and every case drew its 164 to 200 frames. The likely cause is a blanked or locked display: WebKitGTK then stops drawing in the DMABUF mode, while the no-DMABUF runs kept drawing. That is not confirmed, but a tester walking away would lose the run, so the kit now keeps the screen awake (`gnome-session-inhibit` or `systemd-inhibit`, `caffeinate`, `SetThreadExecutionState`) and the report flags a case whose page was hidden.
+- **The watched default-mode run was slower** than the no-DMABUF runs (181 to 215 ms p95 at Fit, against 82 to 89), mostly between `renderFinished` and the draw, while the frame fetch was faster (4 to 9 ms). The conditions differed (a person at the machine, other apps open, a different hour), so this needs a repeat on an idle machine before it says anything about the DMABUF renderer.
 - **48 MP runs out of GPU memory** on 2 GB (`wgpu error: Out of Memory`), and the panic stops the render thread for good. With only the 12 MP image loaded the app already holds about 1.5 GB of GPU memory (`nvidia-smi`). That matches the 48 MP GPU memory item flagged for M1. A failed allocation should become an error, not a dead render thread.
 - `performance.now()` has 1 ms resolution in WebKitGTK, so these samples are whole milliseconds.
 - WebKit masks the WebGL renderer ("Apple GPU"), so the kit records the page's GPU from `glxinfo` and `eglinfo` instead.

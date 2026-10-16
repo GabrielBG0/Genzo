@@ -27,7 +27,8 @@ changes nothing on your system; everything it writes stays in this folder.
    - a few minutes of GPU benchmark in the terminal, nothing to do;
    - then a Genzo window opens (2 or 3 times on Linux, once on macOS and
      Windows) and moves its own sliders for about a minute each. Do not
-     touch the mouse or keyboard, and do not minimize or cover the window.
+     touch the mouse or keyboard, do not minimize or cover the window, and
+     stay at the computer: if the screen dims or locks, the run is lost.
      After each run it asks whether the photo visibly changed: answer y or n.
 4. Send back the file it names at the end, genzo-bench-results-*.tar.gz
    (.zip on Windows). Its name carries the code version (a short commit

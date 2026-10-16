@@ -109,7 +109,8 @@ Write-Host @'
 A Genzo window opens and moves its own sliders. While it runs:
   - do not touch the mouse or keyboard,
   - do not minimize, move or cover the window,
-  - watch whether the photo in the middle changes brightness and color.
+  - watch whether the photo in the middle changes brightness and color,
+  - stay at the computer: if the screen dims or locks, the run is lost.
 If Windows asks whether to run genzo, choose "Run anyway".
 '@
 if ($Ask) { Read-Host 'Press Enter to start' | Out-Null }
@@ -117,6 +118,11 @@ if ($Ask) { Read-Host 'Press Enter to start' | Out-Null }
 $name = 'default'
 $report = Join-Path $Out "app-$name.json"
 $started = Get-Date
+# Keep the screen on while the app runs: with the display off, the webview
+# stops drawing and the run measures nothing.
+Add-Type -Namespace Genzo -Name Power -MemberDefinition '[DllImport("kernel32.dll")] public static extern uint SetThreadExecutionState(uint flags);'
+$ES_CONTINUOUS = [uint32]2147483648; $ES_SYSTEM_REQUIRED = [uint32]1; $ES_DISPLAY_REQUIRED = [uint32]2
+[Genzo.Power]::SetThreadExecutionState($ES_CONTINUOUS -bor $ES_SYSTEM_REQUIRED -bor $ES_DISPLAY_REQUIRED) | Out-Null
 $env:GENZO_AUTOBENCH = $report
 $p = Start-Process -FilePath $App -PassThru
 Remove-Item Env:\GENZO_AUTOBENCH
@@ -129,6 +135,7 @@ while ($true) {
 }
 Start-Sleep -Seconds 1
 if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+[Genzo.Power]::SetThreadExecutionState($ES_CONTINUOUS) | Out-Null
 $seen = 'not asked'
 if ($Ask) { $seen = Read-Host 'Did the photo visibly change while the sliders moved? [y/n]' }
 @{
@@ -155,6 +162,7 @@ if (Test-Path $report) {
     } else {
       Write-Host "${head}no samples: $($c.breakdown.engine.n) engine frames, $($c.breakdown.framesDrawn) drawn"
     }
+    if ($c.pageHidden) { Write-Host '      the page was hidden during this case: these numbers are suspect' }
     foreach ($e in $c.pageErrors) { Write-Host "      page error: $e" }
   }
 }
