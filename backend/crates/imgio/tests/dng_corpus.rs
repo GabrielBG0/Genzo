@@ -13,19 +13,30 @@ fn corpus_files(model: &str) -> Vec<(PathBuf, Vec<u8>)> {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../../corpus/proraw")
         .join(model);
-    let Ok(entries) = std::fs::read_dir(&dir) else {
-        println!("skipped: no corpus/proraw/{model}");
-        return Vec::new();
+    // A missing folder means the corpus is not here: skip. Any other error
+    // is a real problem and fails the test.
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            println!("skipped: no corpus/proraw/{model}");
+            return Vec::new();
+        }
+        Err(e) => panic!("{}: {e}", dir.display()),
     };
     let mut paths: Vec<PathBuf> = entries
-        .flatten()
-        .map(|e| e.path())
+        .map(|e| {
+            e.unwrap_or_else(|e| panic!("{}: {e}", dir.display()))
+                .path()
+        })
         .filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("dng")))
         .collect();
     paths.sort();
     paths
         .into_iter()
-        .filter_map(|p| Some((p.clone(), std::fs::read(&p).ok()?)))
+        .map(|p| {
+            let data = std::fs::read(&p).unwrap_or_else(|e| panic!("{}: {e}", p.display()));
+            (p, data)
+        })
         .collect()
 }
 

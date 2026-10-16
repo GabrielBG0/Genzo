@@ -19,6 +19,10 @@ const PHOTOMETRIC_CFA: u16 = 32803;
 
 /// Largest image accepted, in pixels (above any current sensor).
 const MAX_PIXELS: u64 = 400_000_000;
+/// Largest output accepted, in samples (2 bytes each): room for 133 MP of
+/// RGB, against 146M samples for a 48 MP ProRAW. Checked before allocating,
+/// since a file of a few hundred bytes can claim any size.
+const MAX_SAMPLES: u64 = 400_000_000;
 /// Largest tile side accepted.
 const MAX_TILE_SIDE: u32 = 8192;
 /// Most entries read from one IFD, and most values from one entry.
@@ -185,8 +189,8 @@ pub fn decode_linear(data: &[u8]) -> Result<LinearDng, DngError> {
         return Err(DngError::TooLarge(format!("tiles of {tile_w}x{tile_h}")));
     }
     let pixels = u64::from(width) * u64::from(height);
-    if pixels > MAX_PIXELS {
-        return Err(DngError::TooLarge(format!("{width}x{height}")));
+    if pixels > MAX_PIXELS || pixels * u64::from(spp) > MAX_SAMPLES {
+        return Err(DngError::TooLarge(format!("{width}x{height}x{spp}")));
     }
     let bits = tiff
         .ints(find(&raw, tag::BITS_PER_SAMPLE).ok_or_else(|| corrupt("no BitsPerSample"))?)?
@@ -222,6 +226,17 @@ pub fn decode_linear(data: &[u8]) -> Result<LinearDng, DngError> {
                 .ok_or_else(|| corrupt("a tile lies outside the file"))
         })
         .collect::<Result<_, _>>()?;
+    // Checked before the output is allocated: tiles that cannot hold their
+    // pixels fail here, not after a large allocation.
+    let full_tile_bytes = tile_w as usize * tile_h as usize * spp as usize * 2;
+    for tile in &tiles {
+        if tile.is_empty() {
+            return Err(corrupt("an empty tile"));
+        }
+        if compression == COMPRESSION_NONE && tile.len() < full_tile_bytes {
+            return Err(corrupt("an uncompressed tile is too short"));
+        }
+    }
 
     let table: Vec<u16> = match find(&raw, tag::LINEARIZATION_TABLE) {
         Some(e) => tiff
@@ -242,7 +257,12 @@ pub fn decode_linear(data: &[u8]) -> Result<LinearDng, DngError> {
         bits,
         big_endian: tiff.big_endian,
     };
-    let mut pixels = vec![0u16; layout.width * layout.height * layout.spp];
+    let len = layout.width * layout.height * layout.spp;
+    let mut pixels = Vec::new();
+    pixels
+        .try_reserve_exact(len)
+        .map_err(|_| DngError::TooLarge(format!("no memory for {len} samples")))?;
+    pixels.resize(len, 0u16);
     let tracker = AllocTracker::with_limit(JXL_MEMORY_LIMIT);
     // One band per row of tiles, decoded in parallel; each band owns its rows
     // of the output.
@@ -988,6 +1008,16 @@ mod tests {
         let mut s = spec(Vec::new(), COMPRESSION_JPEG_XL);
         s.size = (60_000, 60_000);
         assert!(matches!(error(&s), DngError::TooLarge(_)));
+
+        // Within the pixel cap, but 900M samples: refused before allocating.
+        let mut s = spec(Vec::new(), COMPRESSION_JPEG_XL);
+        s.size = (20_000, 15_000);
+        assert!(matches!(error(&s), DngError::TooLarge(_)));
+
+        // An empty tile.
+        let mut s = spec(jxl_tiles(16), COMPRESSION_JPEG_XL);
+        s.tiles[4].clear();
+        assert!(matches!(error(&s), DngError::Corrupt(m) if m.contains("empty")));
     }
 
     /// Writes the seed inputs of the `dng_linear` fuzz target:
