@@ -32,10 +32,17 @@ New-Item -ItemType Directory -Force -Path $Out | Out-Null
 
 function Say($text) { Write-Host ''; Write-Host "== $text" }
 # Keep the user's folder, user name and computer name out of every file.
+# The names are replaced only as whole words, so a short user name like "a"
+# does not rewrite the rest of the output.
 function Scrub([string]$text) {
-  $text = $text.Replace($env:USERPROFILE, '~')
-  if ($env:USERNAME) { $text = $text.Replace($env:USERNAME, 'user') }
-  if ($env:COMPUTERNAME) { $text = $text.Replace($env:COMPUTERNAME, 'host') }
+  if ($env:USERPROFILE) { $text = $text.Replace($env:USERPROFILE, '~') }
+  # The computer name goes first: it often contains the user name.
+  foreach ($pair in @(@($env:COMPUTERNAME, 'host'), @($env:USERNAME, 'user'))) {
+    if ($pair[0]) {
+      $name = [regex]::Escape($pair[0])
+      $text = [regex]::Replace($text, "(?<!\w)$name(?!\w)", $pair[1], 'IgnoreCase')
+    }
+  }
   return $text
 }
 function Save($path, $text) { Set-Content -Path $path -Value (Scrub ($text | Out-String)) -Encoding UTF8 }

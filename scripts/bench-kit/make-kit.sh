@@ -12,7 +12,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-COMMIT="$(git -C "$ROOT" rev-parse --short=7 HEAD)$(git -C "$ROOT" diff --quiet HEAD -- || echo '-dirty')"
+# Untracked files count too: a build can pick up a new source file.
+COMMIT="$(git -C "$ROOT" rev-parse --short=7 HEAD)$([ -z "$(git -C "$ROOT" status --porcelain)" ] || echo '-dirty')"
 EXE=""
 case "$(uname -s)" in
   Darwin) OS=macos

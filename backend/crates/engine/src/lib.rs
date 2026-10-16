@@ -311,11 +311,7 @@ impl Engine {
                 let path = self.autobench.as_ref().ok_or_else(|| {
                     EngineError::Io("not in autobench mode (GENZO_AUTOBENCH is unset)".into())
                 })?;
-                // Write then rename: the script waiting for the file never
-                // reads half a report.
-                let partial = path.with_extension("partial");
-                std::fs::write(&partial, report)
-                    .and_then(|()| std::fs::rename(&partial, path))
+                write_atomically(path, report.as_bytes())
                     .map_err(|e| EngineError::Io(format!("{}: {e}", path.display())))?;
                 Ok(Vec::new())
             }
@@ -479,6 +475,28 @@ pub fn covered_area(tiles: &[(TileHeader, &[u8])]) -> u64 {
         .sum()
 }
 
+/// Writes `bytes` to a new sibling of `path`, then renames it into place, so
+/// a reader waiting for `path` to appear never sees half a file. The sibling
+/// is created fresh (never an existing file) and removed if anything fails.
+fn write_atomically(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let name = path
+        .file_name()
+        .ok_or_else(|| std::io::Error::other("no file name"))?
+        .to_string_lossy();
+    let tmp = path.with_file_name(format!(".{name}.{}.partial", std::process::id()));
+    let result = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&tmp)
+        .and_then(|mut f| f.write_all(bytes))
+        .and_then(|()| std::fs::rename(&tmp, path));
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    result
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -544,8 +562,26 @@ mod tests {
         assert!(e.info().autobench);
         assert!(save(&e).unwrap().is_empty());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "{\"ok\":true}");
-        assert!(!path.with_extension("partial").exists());
-        std::fs::remove_file(path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        // No temporary sibling is left behind, after success or failure.
+        let leftovers = || {
+            std::fs::read_dir(std::env::temp_dir())
+                .unwrap()
+                .filter_map(Result::ok)
+                .any(|f| {
+                    let name = f.file_name().to_string_lossy().into_owned();
+                    name.starts_with(&format!(".genzo-autobench-{}", std::process::id()))
+                        && name.ends_with(".partial")
+                })
+        };
+        assert!(!leftovers());
+        // The write succeeds and the rename fails: the destination is a directory.
+        let dir = std::env::temp_dir().join(format!("genzo-autobench-{}-dir", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        e.autobench = Some(dir.clone());
+        assert!(save(&e).is_err());
+        assert!(!leftovers());
+        std::fs::remove_dir(dir).unwrap();
     }
 
     #[test]

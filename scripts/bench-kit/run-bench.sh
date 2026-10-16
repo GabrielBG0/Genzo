@@ -49,7 +49,18 @@ mkdir -p "$OUT"
 say() { printf '\n== %s\n' "$*"; }
 have() { command -v "$1" >/dev/null 2>&1; }
 # Keep the user's home folder, user name and host name out of every file.
-scrub() { sed -e "s#$HOME#~#g" -e "s#$(id -un)#user#g" -e "s#$(hostname 2>/dev/null || echo __nohost__)#host#g"; }
+# perl takes them as literal text (\Q..\E), and the names only as whole words
+# (between non-word characters such as space, "-" or "."), so a short user name
+# like "a" does not rewrite the rest of the output. The host name goes first:
+# it often contains the user name.
+scrub() {
+  SCRUB_HOME="$HOME" SCRUB_USER="$(id -un)" SCRUB_HOST="$(hostname 2>/dev/null)" perl -pe '
+    BEGIN { ($h, $u, $n) = @ENV{qw(SCRUB_HOME SCRUB_USER SCRUB_HOST)} }
+    s/\Q$h\E/~/g if length $h;
+    s/(?<!\w)\Q$n\E(?!\w)/host/g if length $n;
+    s/(?<!\w)\Q$u\E(?!\w)/user/g if length $u;
+  '
+}
 # macOS has no `timeout`; perl's alarm does the same.
 with_timeout() { if have timeout; then timeout "$@"; else perl -e 'alarm shift; exec @ARGV' "$@"; fi; }
 OS="$(uname -s)"
