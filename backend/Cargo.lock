@@ -565,6 +565,7 @@ dependencies = [
  "jpeg-encoder",
  "jxl-oxide",
  "rawler",
+ "rayon",
  "thiserror",
 ]
 

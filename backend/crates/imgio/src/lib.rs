@@ -2,10 +2,13 @@
 //!
 //! Every decoder returns the same normalized [`DecodedImage`], so the
 //! pipeline never sees a file format. HEIC and HEIF decode through the
-//! bundled libheif (the `heic` feature). The RAW decoders (rawler, LibRaw)
-//! and JPEG, TIFF and PNG are still to come: the RAW ones with the 0.C spike,
-//! after their license review in docs/licenses.md.
+//! bundled libheif (the `heic` feature). Linear DNGs (ProRAW, including
+//! JPEG XL tiles) have their own reader in [`dng`] (the `dng` feature), not
+//! yet part of [`decode`]: the normalized RAW output comes with M1. rawler
+//! for camera RAW, and JPEG, TIFF and PNG, are still to come.
 
+#[cfg(feature = "dng")]
+pub mod dng;
 mod heic;
 pub mod jpeg;
 

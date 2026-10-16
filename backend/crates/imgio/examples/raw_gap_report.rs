@@ -1,5 +1,7 @@
 //! 0.C gap report: decode every file under a directory with rawler and print
-//! one Markdown table row per file (what decoded, what is missing).
+//! one Markdown table row per file (what decoded, what is missing). Files
+//! rawler cannot read go through the linear DNG reader (src/dng.rs), which
+//! reads ProRAW with JPEG XL tiles.
 //!
 //! cargo run -p genzo-imgio --features raw --example raw_gap_report -- ../corpus
 
@@ -31,8 +33,8 @@ fn report(path: &Path) -> String {
     });
     let ms = started.elapsed().as_millis();
     match result {
-        Err(_) => format!("PANIC after {ms} ms"),
-        Ok(Err(e)) => format!("ERROR after {ms} ms: {e}"),
+        Err(_) => format!("PANIC after {ms} ms{}", linear_dng(path)),
+        Ok(Err(e)) => format!("ERROR after {ms} ms: {e}{}", linear_dng(path)),
         Ok(Ok(img)) => {
             let kind = match img.data {
                 rawler::RawImageData::Integer(_) => "u16",
@@ -81,6 +83,41 @@ fn report(path: &Path) -> String {
                 },
             )
         }
+    }
+}
+
+/// The linear DNG reader's result for a file rawler failed on.
+fn linear_dng(path: &Path) -> String {
+    let Ok(data) = std::fs::read(path) else {
+        return String::new();
+    };
+    let started = Instant::now();
+    let result = genzo_imgio::dng::decode_linear(&data);
+    let ms = started.elapsed().as_millis();
+    match result {
+        Err(e) => format!("\n    linear DNG reader: {e}"),
+        Ok(img) => format!(
+            "\n    linear DNG reader: ok {ms} ms | {}x{} cpp {} bps {} compression {} | table {} entries, {} clamped | white {:?} | black {:?} | matrices {}{} | neutral {:?} | baseline exposure {:?} | gain table map {} | opcode lists {:?}",
+            img.width,
+            img.height,
+            img.samples_per_pixel,
+            img.bits_per_sample,
+            img.compression,
+            img.linearization_entries,
+            img.clamped,
+            img.white_level,
+            img.black_level,
+            u8::from(img.color_matrix_1.is_some()),
+            if img.color_matrix_2.is_some() {
+                "+2"
+            } else {
+                ""
+            },
+            img.as_shot_neutral,
+            img.baseline_exposure,
+            img.has_gain_table_map,
+            img.opcode_lists,
+        ),
     }
 }
 

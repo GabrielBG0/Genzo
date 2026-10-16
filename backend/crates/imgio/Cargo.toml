@@ -12,19 +12,23 @@ publish.workspace = true
 workspace = true
 
 [features]
-default = ["heic"]
+default = ["heic", "dng"]
 # HEIC and HEIF decoding through the bundled libheif and libde265 (LGPL-3.0,
 # HEVC). Turning this off removes all native image code from the build; see
 # docs/licenses.md for how to cut HEIC support completely.
 heic = ["dep:genzo-heif"]
+# The linear DNG reader (src/dng.rs): ProRAW and other LinearRaw DNGs,
+# including JPEG XL tiles (DNG 1.7). Pure Rust (jxl-oxide, MIT OR Apache-2.0).
+dng = ["dep:jxl-oxide", "dep:rayon"]
 # RAW and DNG decoding through rawler (LGPL-2.1, pure Rust). 0.C spike.
-raw = ["dep:rawler", "dep:jxl-oxide"]
+raw = ["dep:rawler", "dng"]
 
 [dependencies]
 genzo-model.workspace = true
 genzo-heif = { workspace = true, optional = true }
 rawler = { workspace = true, optional = true }
 thiserror.workspace = true
+rayon = { workspace = true, optional = true }
 jpeg-encoder.workspace = true
 # Pure-Rust JPEG XL decoder for DNG 1.7 tiles (iPhone 16 Pro ProRAW, Samsung Expert RAW). Pinned exactly: it parses untrusted files.
 jxl-oxide = { version = "=0.12.6", default-features = false, features = ["rayon"], optional = true }
@@ -35,4 +39,4 @@ required-features = ["raw"]
 
 [[example]]
 name = "dng_jxl_probe"
-required-features = ["raw"]
+required-features = ["dng"]

@@ -14,7 +14,7 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
-genzo-imgio = { path = "../crates/imgio" }
+genzo-imgio = { path = "../crates/imgio" }  # default features: heic and dng
 
 [[bin]]
 name = "sniff"
@@ -33,6 +33,16 @@ bench = false
 [[bin]]
 name = "heic_decode"
 path = "fuzz_targets/heic_decode.rs"
+test = false
+doc = false
+bench = false
+
+# The linear DNG reader (ProRAW, JPEG XL tiles). Start from the committed
+# seeds (written by the imgio test `write_fuzz_seeds`):
+#   cargo +nightly fuzz run dng_linear seeds/dng_linear
+[[bin]]
+name = "dng_linear"
+path = "fuzz_targets/dng_linear.rs"
 test = false
 doc = false
 bench = false
