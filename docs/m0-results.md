@@ -149,6 +149,23 @@ Gaps that matter for the pipeline:
 - **Tags this file carries:** ColorMatrix1 and 2, AsShotNeutral 1,1,1 (ProRAW is already white balanced in the camera, so no WB gain is needed), BaselineExposure +0.51 EV, NoiseProfile, DefaultBlackRender. No ForwardMatrix and **no opcode lists** in this file, so the iPhone 16 Pro needs no GainMap or warp opcode handling. Opcode lists still matter for other DNGs (Samsung, Pixel), not tested.
 - Still to do for the real DNG path: parse opcode lists for the files that have them, and the ProfileGainTableMap reader (kept but off by default, see below).
 
+### The linear DNG reader (2026-10-16)
+
+The prototype became a library reader, `genzo_imgio::dng::decode_linear` (`backend/crates/imgio/src/dng.rs`, default `dng` feature). It reads the full-size LinearRaw image of a DNG with JPEG XL or uncompressed tiles, applies the LinearizationTable with clamping, and returns the levels, matrices, neutral, BaselineExposure and flags for the gain table map and opcode lists. CFA images and lossless JPEG tiles stay with rawler: it returns an "unsupported" error for them (checked on the 13 Pro Max). It is not part of `imgio::decode` yet; the normalized RAW output is M1 step 2.
+
+- **Hardened for untrusted files.** Every read is bounds-checked, sizes are capped before allocating, and each JPEG XL header is checked against the tile grid before decoding. Unit tests cover truncated and byte-flipped files, and the `dng_linear` fuzz target has seeds in `backend/fuzz/seeds/` (compiled, not yet run: needs nightly).
+- **Bit depth.** jxl-oxide rescales samples to 0..65535 unless a stream declares 16 bits, which would break the table lookup. The reader scales back from the declared depth; a synthetic test checks that 16- and 12-bit tiles give the same integers. The iPhone streams declare 16 bits (the DNG says 10), so the iPhone files did not hit this.
+- **Second iPhone 16 Pro file:** `IMG_6889.DNG` (20.3 MB, sha256 `8e93f79c...7f50d1`, iOS 27.2, big-endian). 48 MP, 12 tiles of 2016x2016, **lossy** JPEG XL (VarDCT, XYB), a 1024-entry table, gain table map, BaselineExposure +0.13 EV. 7 samples past the table, mean linear value 6789, 6669, 6715.
+- **Checked against libjxl**, the reference decoder (imagecodecs, table applied in NumPy): the same clamp count and means, and 99.982 % of samples identical. The other 0.018 % differ by exactly one table step, up or down: lossy tiles decode to fractions, and the two decoders round the last step differently. The prototype gives the same clamp count and means.
+- **Speed and memory** on the owner's laptop (i7-10510U, 4 cores), release build, file read first:
+
+  | | Decode time, 48 MP | Peak memory |
+  |---|---|---|
+  | Prototype (`full`, tiles one after another) | 5.35 to 5.83 s | 443 to 455 MiB |
+  | Linear DNG reader (rows of tiles in parallel) | 2.60 to 2.75 s | 602 to 638 MiB |
+
+  Twice as fast, for about 170 MiB more at peak while three rows of tiles decode at once. (The prototype's 1.84 s in the table above was on the faster Windows machine.) Streaming tiles into the mip pyramid, as the `mip` mode showed, would cut the 279 MiB full-size buffer when M1 wires this into the pipeline.
+
 ### LibRaw check (step 3) and what it means for the FFI fallback (step 4)
 
 Read from the LibRaw 0.22.2 source (the newest release, 2026), not run:
