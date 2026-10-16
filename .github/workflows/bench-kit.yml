@@ -1,0 +1,43 @@
+name: Bench kit
+
+# Builds the Linux benchmark kit (scripts/bench-kit) for testers with real
+# GPUs: M0 step 0.E on Linux. Built on ubuntu-22.04, the oldest supported
+# distro, so it starts on any distro with glibc 2.35 or newer. Run it from the
+# Actions tab and download the `genzo-bench-linux-x86_64` artifact.
+
+on:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libsoup-3.0-dev libjavascriptcoregtk-4.1-dev \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            backend
+            shell
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: frontend/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - run: ./scripts/bench-kit/make-kit.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: genzo-bench-linux-x86_64
+          path: dist/genzo-bench-linux-x86_64.tar.gz

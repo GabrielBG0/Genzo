@@ -272,4 +272,21 @@ Caveats, to settle before this counts as final:
 - **The settled frame** still moves 11 MB raw, about 90 ms. Nobody waits on it during a drag, but it is the next thing to compress if the pause after release feels slow.
 - The CI bench gate has no baseline for the new `... preview` cases yet; they are reported as new until the baseline is refreshed.
 
-**Not measured:** macOS (WKWebView) and Linux (WebKitGTK 4.1 on two distros) have no DevTools attach, so the script does not work there. On those the numbers have to be read off the "Input → pixels" rows in the app's right panel while dragging the slider by hand, on a release build (`pnpm app:build --no-bundle`). Color handling (sRGB and Display P3 tagged frames, step 5) is also open.
+**macOS and Linux have no DevTools attach**, so the script above does not work there. Instead the app benchmarks itself: started with `GENZO_AUTOBENCH=FILE` (contract 0.4.0), it runs the same drag protocol with synthetic input and writes a JSON report (`frontend/src/lib/spike/autobench.ts`). The Linux bench kit (`scripts/bench-kit/`, built by the "Bench kit" workflow on ubuntu-22.04) wraps it for testers: it records the hardware, runs `cli bench gpu`, then runs the app in each WebKitGTK drawing mode. Color handling (sRGB and Display P3 tagged frames, step 5) is still open.
+
+### Linux dry run: Ubuntu 24.04, WebKitGTK 2.52.6, X11, GeForce MX110 2 GB (2026-10-16)
+
+The owner's laptop, a weak hybrid GPU (Intel UHD plus MX110), used to test the kit. These numbers do not decide the gate, but they point at where Linux loses time. Release build, 2560 × 1440 frame, synthetic 12 MP raw, half-size JPEG preview while dragging:
+
+| WebKitGTK mode | Input → pixels p50 / p95 | Engine p95 | `execute` round trip p95 | Frame fetch p95 (size) |
+|---|---|---|---|---|
+| default (DMABUF renderer) | **no frame ever drawn** (12 engine frames per case, all timed out) | | | |
+| `WEBKIT_DISABLE_DMABUF_RENDERER=1` | 74 / 88 ms | 7.3 ms | 18 ms | 14 ms (39 KB) |
+| PRIME offload to the NVIDIA GPU | 73 / 84 ms | 7.4 ms | 18 ms | 14 ms (39 KB) |
+| 1:1 zoom, full frames, no-DMABUF | 129 / 149 ms | 18.4 ms | 43 ms | 60 ms (10.5 MB) |
+
+- **In the default mode no frame reached the screen** on this NVIDIA X11 setup: the engine rendered, but the page never reported a draw, and no page error was caught. Nobody watched the window during the dry run, so whether it was blank is not confirmed yet. If it is, and the friend's machine shows the same, the app must set `WEBKIT_DISABLE_DMABUF_RENDERER=1` itself on NVIDIA.
+- **The engine is not the problem.** Of 84 to 88 ms, the engine takes about 7 ms, and the IPC round trip and the 39 KB fetch about 32 ms together. That leaves **about 50 ms in the page**: the JPEG decode (`createImageBitmap`), the WebGL upload and waiting for the next animation frame. On Windows the whole decode and upload took 4 to 5 ms. Moving 39 KB taking 14 ms also shows the custom URI scheme is slow in WebKitGTK.
+- **48 MP runs out of GPU memory** on 2 GB (`wgpu error: Out of Memory`), and the panic stops the render thread for good. That matches the 48 MP GPU memory item flagged for M1. A failed allocation should become an error, not a dead render thread.
+- `performance.now()` has 1 ms resolution in WebKitGTK, so these samples are whole milliseconds.
+- WebKit masks the WebGL renderer ("Apple GPU"), so the kit records the page's GPU from `glxinfo` and `eglinfo` instead.

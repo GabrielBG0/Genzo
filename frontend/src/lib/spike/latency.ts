@@ -53,6 +53,11 @@ export class LatencyProbe<T> {
     return this.samples.length;
   }
 
+  /** A copy of the kept samples, oldest first, in ms. */
+  get all(): number[] {
+    return [...this.samples];
+  }
+
   percentile(p: number): number | null {
     if (this.samples.length === 0) return null;
     const sorted = [...this.samples].sort((a, b) => a - b);

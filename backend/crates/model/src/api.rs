@@ -58,6 +58,10 @@ pub struct EngineInfo {
     pub engine_version: String,
     pub contract_version: String,
     pub adapter: AdapterInfo,
+    /// The app was started to benchmark itself (M0 0.E on Linux and macOS,
+    /// where no DevTools attach exists). The frontend runs a scripted drag and
+    /// sends the result with [`Command::SaveAutobenchReport`].
+    pub autobench: bool,
 }
 
 /// Where the raw image of the 0.D GPU spike comes from.
@@ -110,6 +114,10 @@ pub enum Command {
         /// bottleneck of a drag (0.E).
         proxy: bool,
     },
+    /// M0 spike 0.E: store the autobench report (JSON written by the
+    /// frontend) at the path the engine was started with. Fails when the
+    /// engine is not in autobench mode.
+    SaveAutobenchReport { report: String },
 }
 
 /// Requests that only read engine state.

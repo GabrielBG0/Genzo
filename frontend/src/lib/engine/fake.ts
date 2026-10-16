@@ -43,6 +43,10 @@ export class FakeEngine implements Engine {
   private frames = new Map<number, ArrayBuffer>();
   private generation = 0;
   private spikeSize: [number, number] | null = null;
+  /** Reported in the engine info; tests set it to run the autobench. */
+  autobench = false;
+  /** The last report sent with `saveAutobenchReport`. */
+  autobenchReport: string | null = null;
 
   constructor(private readonly contractVersion = CONTRACT_VERSION) {}
 
@@ -63,6 +67,7 @@ export class FakeEngine implements Engine {
             engineVersion: '0.0.0-fake',
             contractVersion: this.contractVersion,
             adapter: ADAPTER,
+            autobench: this.autobench,
           },
         };
     }
@@ -87,6 +92,11 @@ export class FakeEngine implements Engine {
         const [w, h] = fit(this.spikeSize, [command.width, command.height]);
         // Exposure moves the pattern, so a stale frame is easy to spot.
         this.renderPattern(w, h, (command.exposureEv + 3) / 6, command.format);
+        return;
+      }
+      case 'saveAutobenchReport': {
+        if (!this.autobench) throw new Error('not in autobench mode');
+        this.autobenchReport = command.report;
         return;
       }
     }
