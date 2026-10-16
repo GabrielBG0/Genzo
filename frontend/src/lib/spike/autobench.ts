@@ -119,6 +119,12 @@ export interface CaseResult extends AutobenchCase {
   breakdown: Breakdown | null;
   /** Uncaught errors in the page during the case (first few). */
   pageErrors: string[];
+  /**
+   * The page was hidden at some point during the case (minimized, covered or
+   * the screen off, as far as the webview reports it). Its samples are then
+   * suspect: hidden pages draw late or not at all.
+   */
+  pageHidden: boolean;
   error?: string;
 }
 
@@ -215,11 +221,18 @@ export async function runAutobench(
   };
   const onerror = (e: ErrorEvent) => note(e.message);
   const onrejection = (e: PromiseRejectionEvent) => note(e.reason instanceof Error ? e.reason.message : String(e.reason));
+  // Reset per case; the listener marks it when the page goes hidden.
+  const visibility = { hidden: false };
+  const onvisibility = () => {
+    if (document.hidden) visibility.hidden = true;
+  };
   window.addEventListener('error', onerror);
   window.addEventListener('unhandledrejection', onrejection);
+  document.addEventListener('visibilitychange', onvisibility);
   for (const [i, c] of cases.entries()) {
     onprogress(i, cases.length);
     pageErrors = [];
+    visibility.hidden = document.hidden;
     try {
       await timeout(driver.prepare(c), protocol.prepareTimeoutMs, `loading ${c.source}`);
       await sleep(protocol.loadWaitMs);
@@ -242,6 +255,7 @@ export async function runAutobench(
         samples,
         breakdown: breakdown(driver.diagnostics()),
         pageErrors,
+        pageHidden: visibility.hidden || document.hidden,
       });
     } catch (e) {
       results.push({
@@ -252,12 +266,14 @@ export async function runAutobench(
         samples: [],
         breakdown: null,
         pageErrors,
+        pageHidden: visibility.hidden || document.hidden,
         error: e instanceof Error ? e.message : String(e),
       });
     }
   }
   window.removeEventListener('error', onerror);
   window.removeEventListener('unhandledrejection', onrejection);
+  document.removeEventListener('visibilitychange', onvisibility);
   onprogress(cases.length, cases.length);
   return {
     kind: 'genzo-autobench',

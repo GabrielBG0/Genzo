@@ -94,7 +94,8 @@ The criterion benchmark (`cargo bench -p genzo-pipeline --bench spike`, 12 MP, R
 ### Open
 
 - lavapipe: the CI `gpu` job runs the tests on Ubuntu 22.04's mesa. Its first result has not been seen yet.
-- macOS (Metal) and Linux hardware: not measured.
+- macOS (Metal, M1 Max): measured with the bench kit, see 0.E. Exposure and white balance drags take 0.25 to 0.71 ms of GPU time at 12 and 48 MP; the settled white balance render takes 7 ms at 12 MP and 26 ms at 48 MP.
+- Linux hardware: only the MX110 dry run (see 0.E); the RTX 3050 run is pending.
 - Real raw files instead of the synthetic scene arrive with 0.C (rawler).
 
 ## 0.C ProRAW and RAW decode
@@ -266,7 +267,7 @@ Caveats, to settle before this counts as final:
   - Decode and upload: 3.5 to 5.3 ms on photos, against an unmeasured but smaller figure for the smooth frame, so at most about 2 ms more.
 
   That adds at most about 7 ms, so the expected figure is about 19 to 26 ms p95. It is an estimate from measured parts, not an end-to-end measurement: the spike cannot load a real image, so real-photo latency in the app has not been measured. The conclusion is unchanged: the preview stays well under 50 ms p95 on Windows, and the full-size JPEG alternative would not have (about 40 ms before the probe's queueing).
-- **macOS and Linux are still unmeasured**, and the custom-scheme throughput there is unknown. Compression makes that less of a risk, not zero.
+- **macOS passes** (M1 Max, below). Linux is pending; the dry run on a weak laptop is below too.
 - **Display P3 previews** are drawn as untagged bitmaps, so their colors are approximate during a drag. The spike only sends sRGB; the color check (step 5) is still open.
 - **At 1:1 zoom** the preview is not used (it would show at the wrong scale), so a 1:1 drag still sends full frames. That case needs its own answer in M1 (send only the visible region).
 - **The settled frame** still moves 11 MB raw, about 90 ms. Nobody waits on it during a drag, but it is the next thing to compress if the pause after release feels slow.
@@ -274,13 +275,34 @@ Caveats, to settle before this counts as final:
 
 **macOS and Linux have no DevTools attach**, so the script above does not work there. Instead the app benchmarks itself: started with `GENZO_AUTOBENCH=FILE` (contract 0.4.0), it runs the same drag protocol with synthetic input and writes a JSON report (`frontend/src/lib/spike/autobench.ts`). The Linux bench kit (`scripts/bench-kit/`, built by the "Bench kit" workflow on ubuntu-22.04) wraps it for testers: it records the hardware, runs `cli bench gpu`, then runs the app in each WebKitGTK drawing mode. Color handling (sRGB and Display P3 tagged frames, step 5) is still open.
 
+### macOS 26.3, M1 Max, WKWebView (WebKit 21623.2.7), bench kit 7a40671 (2026-10-16)
+
+A friend's MacBook Pro (M1 Max, 32 GPU cores, 64 GB, on AC power, built-in Liquid Retina XDR display), release build from the bench kit, synthetic input (autobench), 2560 × 1440 frame. The tester saw the image change.
+
+| Case | Input → pixels p50 / p95 | One request alone, p50 / p95 | of which: send to event (engine) | event to draw (fetch, size) |
+|---|---|---|---|---|
+| 12 MP, Exposure, Fit | 32 / 33 ms | 17 / 18 ms | 3 / 3 ms (2 / 3) | 14 / 15 ms (0 / 1 ms, 39 KB) |
+| 12 MP, Temp, Fit | 31 / 32 ms | 17 / 18 ms | 3 / 3 ms (2 / 3) | 14 / 15 ms (0 / 1 ms, 27 KB) |
+| 12 MP, Exposure, 1:1 (full frames) | 32 / 33 ms | 17 / 18 ms | 4 / 3 ms (3 / 3) | 13 / 15 ms (4 / 5 ms, 10.5 MB) |
+| 48 MP, Exposure, Fit | 32 / 33 ms | 17 / 18 ms | 3 / 3 ms (2 / 2) | 14 / 15 ms (0 / 1 ms, 20 KB) |
+| 48 MP, Temp, Fit | 32 / 33 ms | 17 / 18 ms | 3 / 3 ms (2 / 6) | 14 / 15 ms (0 / 1 ms, 17 KB) |
+
+- **The gate passes on macOS with room to spare: 33 ms p95 against 50 ms**, at 12 and 48 MP, and even at 1:1 with full frames. No ladder step is needed beyond the JPEG preview the app already sends.
+- **The display sets the pace, not the pipeline.** Every case lands on the same numbers: one request takes about 17 ms, one 60 Hz frame, and a probe sample (about two requests, see the Linux section) about 33 ms. The engine and IPC take about 3 ms, and the fetch is near zero. The wait for the next animation frame is most of the time; that it matches 60 Hz on a 120 Hz display suggests WebKit caps animation frames at 60 Hz there (not checked).
+- **The custom URI scheme is fast in WKWebView**: 10.5 MB in 4 to 5 ms (about 2 GB/s), against about 200 MB/s in WebKitGTK on the Linux laptop. Full frames at 1:1 are no problem here.
+- 48 MP fits easily in 64 GB of unified memory; GPU time per drag step is under 1 ms (0.D above).
+- The input is synthetic. Running the autobench once on the Windows machine of the 18.4 ms result would check that it agrees with the DevTools measurement.
+
 ### Linux dry run: Ubuntu 24.04, WebKitGTK 2.52.6, X11, GeForce MX110 2 GB (2026-10-16)
 
 The owner's laptop, a weak hybrid GPU (Intel UHD plus MX110), used to test the kit. These numbers do not decide the gate, but they point at where Linux loses time. Release build, 2560 × 1440 frame, synthetic 12 MP raw, half-size JPEG preview while dragging:
 
 | WebKitGTK mode, case | Input → pixels p50 / p95 | One request alone, p50 / p95 | of which: send to event (engine) | event to draw (fetch, size) |
 |---|---|---|---|---|
-| default (DMABUF renderer), any | **0 frames drawn** of 12 rendered per case, no viewport or page error | | | |
+| default (DMABUF renderer), unattended | 0 frames drawn of 12 rendered per case: the display was most likely blanked (see below) | | | |
+| default, watched, Exposure, Fit | 129 / 215 ms | 69 / 114 ms | 26 / 9 ms (23 / 31) | 43 / 105 ms (4 / 9 ms, 39 KB) |
+| default, watched, Temp, Fit | 87 / 181 ms | 47 / 98 ms | 13 / 14 ms (12 / 20) | 34 / 84 ms (1 / 8 ms, 27 KB) |
+| default, watched, Exposure, 1:1 | 326 / 387 ms | 171 / 212 ms | 25 / 36 ms (17 / 32) | 146 / 176 ms (139 / 168 ms, 10.5 MB) |
 | `WEBKIT_DISABLE_DMABUF_RENDERER=1`, Exposure, Fit | 72 / 89 ms | 45 / 57 ms | 18 / 16 ms (11 / 12) | 27 / 41 ms (11 / 15 ms, 39 KB) |
 | same, Temp, Fit | 70 / 82 ms | 42 / 52 ms | 15 / 14 ms (8 / 9) | 27 / 38 ms (12 / 14 ms, 27 KB) |
 | same, Exposure, 1:1 (full frames) | 124 / 143 ms | 72 / 81 ms | 17 / 18 ms (10 / 11) | 55 / 63 ms (51 / 58 ms, 10.5 MB) |
@@ -293,7 +315,8 @@ How to read it: the gate number (input to pixels) is timed like on Windows, from
   - fetching a 39 KB preview over the custom URI scheme takes 11 to 15 ms (on Windows a 78 to 254 KB preview was estimated at 0.7 to 2.1 ms), and 10.5 MB takes about 55 ms, about 200 MB/s;
   - decode, upload and the animation frame take the remaining 15 to 25 ms.
   The custom scheme is the clearest Linux-specific cost. A Tauri binary channel or fewer round trips (the frame bytes with the event) are the next things to try if the friend's machine shows the same pattern.
-- **In the default mode the page never draws a frame** on this NVIDIA X11 setup: the engine renders, the viewport is created without error, but no frame reaches `ondraw`. Nobody has watched the window yet, so whether it is blank is not confirmed by eye. If the friend's machine shows the same, the app must set `WEBKIT_DISABLE_DMABUF_RENDERER=1` itself on NVIDIA.
+- **The default mode does draw** (corrected 2026-10-16). The first default-mode runs drew no frame at all, but they ran with nobody at the laptop. Run again with the owner watching, the image changed and every case drew its 164 to 200 frames. The likely cause is a blanked or locked display: WebKitGTK then stops drawing in the DMABUF mode, while the no-DMABUF runs kept drawing. That is not confirmed, but a tester walking away would lose the run, so the kit now keeps the screen awake (`gnome-session-inhibit` or `systemd-inhibit`, `caffeinate`, `SetThreadExecutionState`) and the report flags a case whose page was hidden.
+- **The watched default-mode run was slower** than the no-DMABUF runs (181 to 215 ms p95 at Fit, against 82 to 89), mostly between `renderFinished` and the draw, while the frame fetch was faster (4 to 9 ms). The conditions differed (a person at the machine, other apps open, a different hour), so this needs a repeat on an idle machine before it says anything about the DMABUF renderer.
 - **48 MP runs out of GPU memory** on 2 GB (`wgpu error: Out of Memory`), and the panic stops the render thread for good. With only the 12 MP image loaded the app already holds about 1.5 GB of GPU memory (`nvidia-smi`). That matches the 48 MP GPU memory item flagged for M1. A failed allocation should become an error, not a dead render thread.
 - `performance.now()` has 1 ms resolution in WebKitGTK, so these samples are whole milliseconds.
 - WebKit masks the WebGL renderer ("Apple GPU"), so the kit records the page's GPU from `glxinfo` and `eglinfo` instead.

@@ -186,7 +186,8 @@ cat <<'EOF'
 A Genzo window opens and moves its own sliders. While it runs:
   - do not touch the mouse or keyboard,
   - do not minimize, move or cover the window,
-  - watch whether the photo in the middle changes brightness and color.
+  - watch whether the photo in the middle changes brightness and color,
+  - stay at the computer: if the screen dims or locks, the run is lost.
 If the window opens behind this terminal, click its title bar once to bring
 it to the front, then leave it alone.
 EOF
@@ -202,6 +203,16 @@ for v in "${VARIANTS[@]}"; do
   # shellcheck disable=SC2086
   env $envs GENZO_AUTOBENCH="$report" "$APP" > "$log" 2>&1 &
   pid=$!
+  # Keep the screen on: with the display blanked or locked, the webview stops
+  # drawing and the run measures nothing (seen on the dry run).
+  awake=""
+  if [ "$OS" = Darwin ]; then
+    caffeinate -d -i -w "$pid" & awake=$!
+  elif have gnome-session-inhibit; then
+    gnome-session-inhibit --inhibit idle:suspend --reason "Genzo benchmark" sleep "$APP_TIMEOUT" >/dev/null 2>&1 & awake=$!
+  elif have systemd-inhibit; then
+    systemd-inhibit --what=idle:sleep --who="Genzo benchmark" --why="measuring" sleep "$APP_TIMEOUT" >/dev/null 2>&1 & awake=$!
+  fi
   status="timeout"
   snapped=0
   while :; do
@@ -219,6 +230,7 @@ for v in "${VARIANTS[@]}"; do
   sleep 1
   kill "$pid" 2>/dev/null; sleep 1; kill -9 "$pid" 2>/dev/null
   wait "$pid" 2>/dev/null
+  [ -n "$awake" ] && kill "$awake" 2>/dev/null
   seen="not asked"
   if [ "$ASK" = 1 ]; then
     read -r -p "Did the photo visibly change while the sliders moved? [y/n] " seen
@@ -258,6 +270,8 @@ for f in sorted(out.glob("app-*.json")):
             res = (f"no samples: {b['engine']['n']} engine frames, {b['framesDrawn']} drawn"
                    + (f", viewport error: {b['viewportError']}" if b["viewportError"] else ""))
         print(f"  {c['source']:16} {c['slider']:8} {zoom:3}  {res}")
+        if c.get("pageHidden"):
+            print("      the page was hidden during this case: these numbers are suspect")
         for err in c.get("pageErrors", []):
             print(f"      page error: {err}")
 EOF
