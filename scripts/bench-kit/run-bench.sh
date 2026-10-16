@@ -39,7 +39,11 @@ done
 [ -t 0 ] || ASK=0
 
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
-OUT="$KIT/results-$STAMP"
+# The commit the kit was built from, in every results name and file.
+COMMIT="$(sed -n 's/^commit //p' "$KIT/VERSION" 2>/dev/null)"
+COMMIT="${COMMIT:-unknown}"
+case "$(uname -s)" in Darwin) OS_NAME=macos ;; *) OS_NAME=linux ;; esac
+OUT="$KIT/results-$OS_NAME-$COMMIT-$STAMP"
 mkdir -p "$OUT"
 
 say() { printf '\n== %s\n' "$*"; }
@@ -51,7 +55,7 @@ with_timeout() { if have timeout; then timeout "$@"; else perl -e 'alarm shift; 
 OS="$(uname -s)"
 
 # ---------------------------------------------------------------- 1. system
-say "Recording the system (results-$STAMP/system.txt)"
+say "Recording the system ($(basename "$OUT")/system.txt)"
 linux_system() {
   . /etc/os-release 2>/dev/null && echo "os: $PRETTY_NAME"
   echo "kernel: $(uname -r) $(uname -m)"
@@ -208,8 +212,8 @@ for v in "${VARIANTS[@]}"; do
   if [ "$ASK" = 1 ]; then
     read -r -p "Did the photo visibly change while the sliders moved? [y/n] " seen
   fi
-  printf '{"variant": "%s", "env": "%s", "status": "%s", "seconds": %d, "imageVisiblyChanged": "%s"}\n' \
-    "$name" "$envs" "$status" "$(( $(date +%s) - started ))" "$seen" > "$OUT/app-$name.run.json"
+  printf '{"kitCommit": "%s", "variant": "%s", "env": "%s", "status": "%s", "seconds": %d, "imageVisiblyChanged": "%s"}\n' \
+    "$COMMIT" "$name" "$envs" "$status" "$(( $(date +%s) - started ))" "$seen" > "$OUT/app-$name.run.json"
   scrub < "$log" > "$log.tmp" && mv "$log.tmp" "$log"
   echo "status: $status"
 done
@@ -247,8 +251,8 @@ for f in sorted(out.glob("app-*.json")):
             print(f"      page error: {err}")
 EOF
 fi
-ARCHIVE="$KIT/genzo-bench-results-$STAMP.tar.gz"
+ARCHIVE="$KIT/genzo-bench-results-$OS_NAME-$COMMIT-$STAMP.tar.gz"
 # COPYFILE_DISABLE: no macOS ._ metadata files in the archive.
-COPYFILE_DISABLE=1 tar -czf "$ARCHIVE" -C "$KIT" "results-$STAMP"
+COPYFILE_DISABLE=1 tar -czf "$ARCHIVE" -C "$KIT" "$(basename "$OUT")"
 say "Done. Send this file back:"
 echo "$ARCHIVE"
