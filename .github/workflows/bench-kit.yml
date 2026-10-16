@@ -104,7 +104,7 @@ jobs:
         run: |
           commit="$(git rev-parse --short=7 HEAD)"
           tag="bench-$commit"
-          contract="$(grep -o '"[0-9.]*"' backend/crates/model/src/contract.rs | head -1 | tr -d '"')"
+          contract="$(awk -F'"' '/CONTRACT_VERSION: &str/ {print $2}' backend/crates/model/src/contract.rs)"
           {
             echo "Benchmark kits for commit \`$commit\` (contract $contract). Test builds, unsigned, not a Genzo release."
             echo

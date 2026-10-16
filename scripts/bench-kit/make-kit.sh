@@ -21,7 +21,7 @@ case "$(uname -s)" in
   MINGW* | MSYS* | CYGWIN*) OS=windows EXE=.exe
     BUILT_ON="Windows $(cmd //c ver | tr -d '\r' | grep -o '[0-9][0-9.]*')" ;;
   *) OS=linux
-    BUILT_ON="$(. /etc/os-release && echo "$PRETTY_NAME"), glibc $(ldd --version | head -1 | awk '{print $NF}')" ;;
+    BUILT_ON="$(. /etc/os-release && echo "$PRETTY_NAME"), glibc $(ldd --version | awk 'NR == 1 {print $NF}')" ;;
 esac
 NAME="genzo-bench-$OS-$(uname -m)-$COMMIT"
 KIT="$ROOT/dist/$NAME"
@@ -41,7 +41,7 @@ else
 fi
 {
   echo "commit $COMMIT"
-  echo "contract $(grep -o '"[0-9.]*"' "$ROOT/backend/crates/model/src/contract.rs" | head -1 | tr -d '"')"
+  echo "contract $(awk -F'"' '/CONTRACT_VERSION: &str/ {print $2}' "$ROOT/backend/crates/model/src/contract.rs")"
   echo "built on $BUILT_ON"
 } > "$KIT/VERSION"
 
