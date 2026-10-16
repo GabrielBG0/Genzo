@@ -1,9 +1,11 @@
 name: Bench kit
 
-# Builds the Linux benchmark kit (scripts/bench-kit) for testers with real
-# GPUs: M0 step 0.E on Linux. Built on ubuntu-22.04, the oldest supported
-# distro, so it starts on any distro with glibc 2.35 or newer. Run it from the
-# Actions tab and download the `genzo-bench-linux-x86_64` artifact.
+# Builds the benchmark kits (scripts/bench-kit) for testers with real GPUs:
+# M0 step 0.E on Linux and macOS. Linux is built on ubuntu-22.04, the oldest
+# supported distro, so it starts on any distro with glibc 2.35 or newer. macOS
+# is built on Apple silicon for macOS 13 or newer; the build is unsigned, and
+# run-bench.sh clears the download quarantine flag so it can start. Run the
+# workflow from the Actions tab and download the `genzo-bench-*` artifacts.
 
 on:
   workflow_dispatch:
@@ -41,3 +43,38 @@ jobs:
         with:
           name: genzo-bench-linux-x86_64
           path: dist/genzo-bench-linux-x86_64.tar.gz
+
+  macos:
+    runs-on: macos-15
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "13.0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            backend
+            shell
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: frontend/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+      - run: ./scripts/bench-kit/make-kit.sh
+      # Catches a cli that cannot start on macOS before a tester finds out.
+      # The runner may have no usable GPU, so this renders on the CPU.
+      - name: Smoke test
+        run: |
+          kit=dist/genzo-bench-macos-arm64
+          "$kit/bin/genzo-cli" version
+          "$kit/bin/genzo-cli" bench test-pattern 256 256 3
+      - uses: actions/upload-artifact@v4
+        with:
+          name: genzo-bench-macos-arm64
+          path: dist/genzo-bench-macos-arm64.tar.gz

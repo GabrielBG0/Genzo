@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
-# Genzo M0 benchmark kit (Linux). Measures slider input to pixels in the real
+# Genzo M0 benchmark kit (Linux and macOS). Measures slider input to pixels in the real
 # app (M0 step 0.E) and GPU time per slider step (0.D), then packs the results
 # into one file to send back. Run from the kit folder: ./run-bench.sh
 #
 # What it does, in order:
 #   1. Records the hardware and driver facts (no user name, host name or paths).
-#   2. Checks that the app's libraries (WebKitGTK 4.1) are installed.
+#   2. Linux: checks that the app's libraries (WebKitGTK 4.1) are installed.
+#      macOS: clears the download quarantine flag on this folder, so the
+#      unsigned test build can start.
 #   3. Runs the GPU benchmark in the command line tool.
-#   4. Starts the app 2 or 3 times; each time it drags its own sliders for
-#      about 2 minutes, saves a report and is closed by this script.
+#   4. Starts the app 2 or 3 times (once on macOS); each time it drags its own sliders for
+#      about a minute, saves a report and is closed by this script.
 #   5. Writes genzo-bench-results-*.tar.gz next to this script.
 #
 # Options: --no-questions  skip the "did the image change?" questions
@@ -44,12 +46,13 @@ say() { printf '\n== %s\n' "$*"; }
 have() { command -v "$1" >/dev/null 2>&1; }
 # Keep the user's home folder, user name and host name out of every file.
 scrub() { sed -e "s#$HOME#~#g" -e "s#$(id -un)#user#g" -e "s#$(hostname 2>/dev/null || echo __nohost__)#host#g"; }
+# macOS has no `timeout`; perl's alarm does the same.
+with_timeout() { if have timeout; then timeout "$@"; else perl -e 'alarm shift; exec @ARGV' "$@"; fi; }
+OS="$(uname -s)"
 
 # ---------------------------------------------------------------- 1. system
 say "Recording the system (results-$STAMP/system.txt)"
-{
-  echo "kit: $(cat "$KIT/VERSION" 2>/dev/null || echo unknown)"
-  echo "date: $STAMP"
+linux_system() {
   . /etc/os-release 2>/dev/null && echo "os: $PRETTY_NAME"
   echo "kernel: $(uname -r) $(uname -m)"
   echo "session: ${XDG_SESSION_TYPE:-unknown}, desktop: ${XDG_CURRENT_DESKTOP:-unknown}"
@@ -78,12 +81,44 @@ say "Recording the system (results-$STAMP/system.txt)"
   echo
   echo "## Displays"
   have xrandr && xrandr --current 2>/dev/null | grep -E ' connected|\*'
+}
+
+mac_system() {
+  echo "os: macOS $(sw_vers -productVersion) ($(sw_vers -buildVersion))"
+  echo "kernel: $(uname -r) $(uname -m)"
+  echo "cpu: $(sysctl -n machdep.cpu.brand_string), $(sysctl -n hw.ncpu) cores"
+  echo "ram_gb: $(( $(sysctl -n hw.memsize) / 1073741824 ))"
+  echo "power: $(pmset -g batt | head -1)"
+  pmset -g | grep -i lowpowermode
+  echo
+  echo "## GPU and displays (no serial numbers)"
+  system_profiler SPDisplaysDataType 2>/dev/null \
+    | grep -E 'Chipset Model|Total Number of Cores|Metal|Resolution|UI Looks like|Refresh|Display Type|Main Display|Connection Type' \
+    | grep -v -i serial
+  echo
+  echo "## WebKit (WKWebView)"
+  echo "webkit: $(defaults read /System/Library/Frameworks/WebKit.framework/Resources/Info CFBundleVersion 2>/dev/null)"
+  echo "safari: $(defaults read /Applications/Safari.app/Contents/Info CFBundleShortVersionString 2>/dev/null)"
+}
+
+{
+  echo "kit: $(cat "$KIT/VERSION" 2>/dev/null || echo unknown)"
+  echo "date: $STAMP"
+  if [ "$OS" = Darwin ]; then mac_system; else linux_system; fi
 } 2>&1 | scrub > "$OUT/system.txt"
 cat "$OUT/system.txt"
 
 # ---------------------------------------------------------------- 2. libraries
-say "Checking the app's libraries"
-MISSING="$(ldd "$APP" 2>/dev/null | grep 'not found' || true)"
+if [ "$OS" = Darwin ]; then
+  say "Allowing the test build to start"
+  # Files that came from a download carry com.apple.quarantine, and macOS
+  # refuses to run an unsigned binary that has it. Only this folder is touched.
+  xattr -dr com.apple.quarantine "$KIT" 2>/dev/null || true
+  echo "ok"
+fi
+[ "$OS" = Darwin ] || say "Checking the app's libraries"
+MISSING=""
+[ "$OS" = Darwin ] || MISSING="$(ldd "$APP" 2>/dev/null | grep 'not found' || true)"
 if [ -n "$MISSING" ]; then
   echo "The app cannot start, these libraries are missing:"
   echo "$MISSING"
@@ -98,7 +133,7 @@ EOF
   echo "$MISSING" > "$OUT/missing-libraries.txt"
   exit 1
 fi
-echo "ok"
+[ "$OS" = Darwin ] || echo "ok"
 
 # ---------------------------------------------------------------- 3. cli
 say "GPU benchmark in the command line tool (a few minutes, nothing to do)"
@@ -106,7 +141,7 @@ say "GPU benchmark in the command line tool (a few minutes, nothing to do)"
 [ "$CLI_BENCH" = 1 ] && for size in "4032 3024 12mp" "8064 6048 48mp"; do
   set -- $size
   echo "-- $3"
-  timeout 900 "$CLI" bench gpu "$1" "$2" 30 --json "$OUT/cli-$3.json" 2>&1 | scrub | tee "$OUT/cli-$3.txt"
+  with_timeout 900 "$CLI" bench gpu "$1" "$2" 30 --json "$OUT/cli-$3.json" 2>&1 | scrub | tee "$OUT/cli-$3.txt"
   echo "exit: ${PIPESTATUS[0]}" >> "$OUT/cli-$3.txt"
 done
 
@@ -114,10 +149,11 @@ done
 # Each variant is one way WebKitGTK can draw. The default is what users get.
 # NVIDIA's driver sometimes shows a blank window with the default; the report
 # counts frames drawn, and the question checks what the eye saw.
+# macOS has one way: WKWebView on Metal.
 VARIANTS=("default|")
-VARIANTS+=("no-dmabuf|WEBKIT_DISABLE_DMABUF_RENDERER=1")
+[ "$OS" = Darwin ] || VARIANTS+=("no-dmabuf|WEBKIT_DISABLE_DMABUF_RENDERER=1")
 GPU_COUNT="$(lspci 2>/dev/null | grep -Eic 'vga|3d|display' || true)"
-if have nvidia-smi && [ "${GPU_COUNT:-0}" -gt 1 ]; then
+if [ "$OS" != Darwin ] && have nvidia-smi && [ "${GPU_COUNT:-0}" -gt 1 ]; then
   # Hybrid laptop: also draw the page on the NVIDIA GPU instead of the integrated one.
   prime="__NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia __VK_LAYER_NV_optimus=NVIDIA_only"
   for f in /usr/share/glvnd/egl_vendor.d/10_nvidia.json /etc/glvnd/egl_vendor.d/10_nvidia.json; do
@@ -130,12 +166,14 @@ if [ -n "$ONLY" ]; then
   [ "${VARIANTS[0]%%|*}" = "$ONLY" ] || { echo "no variant $ONLY here"; exit 2; }
 fi
 
-say "App benchmark: ${#VARIANTS[@]} runs of about 2 minutes each"
+say "App benchmark: ${#VARIANTS[@]} run(s) of about a minute each"
 cat <<'EOF'
 A Genzo window opens and moves its own sliders. While it runs:
   - do not touch the mouse or keyboard,
   - do not minimize, move or cover the window,
   - watch whether the photo in the middle changes brightness and color.
+If the window opens behind this terminal, click its title bar once to bring
+it to the front, then leave it alone.
 EOF
 [ "$ASK" = 1 ] && read -r -p "Press Enter to start. " _
 
@@ -178,7 +216,9 @@ done
 
 # ---------------------------------------------------------------- 5. pack
 say "Summary"
-if have python3; then
+# On a Mac without the developer tools, python3 is a stub that pops up an
+# install dialog; only use it when the tools are there.
+if have python3 && { [ "$OS" != Darwin ] || xcode-select -p >/dev/null 2>&1; }; then
   python3 - "$OUT" <<'EOF'
 import json, pathlib, sys
 out = pathlib.Path(sys.argv[1])
@@ -208,6 +248,7 @@ for f in sorted(out.glob("app-*.json")):
 EOF
 fi
 ARCHIVE="$KIT/genzo-bench-results-$STAMP.tar.gz"
-tar -czf "$ARCHIVE" -C "$KIT" "results-$STAMP"
+# COPYFILE_DISABLE: no macOS ._ metadata files in the archive.
+COPYFILE_DISABLE=1 tar -czf "$ARCHIVE" -C "$KIT" "results-$STAMP"
 say "Done. Send this file back:"
 echo "$ARCHIVE"
