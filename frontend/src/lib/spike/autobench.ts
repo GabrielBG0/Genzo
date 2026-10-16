@@ -31,13 +31,29 @@ export interface AutobenchDriver {
   input(slider: AutobenchSlider, t: number): void;
   /** The end of a gesture: one full-quality render, not timed. */
   settle(): void;
-  /** Clears the probe's samples and the engine times. */
+  /** Clears the probe's samples and the diagnostics. */
   reset(): void;
+  /** Input to pixels, as the probe times it (from the oldest waiting input). */
   samples(): number[];
-  /** Engine time (render, readback, encode) of every frame finished since `reset`, in ms. */
-  engineMs(): number[];
-  /** Transport times since `reset`. */
-  transport(): TransportTimes;
+  /** Where the time went since `reset`. */
+  diagnostics(): Diagnostics;
+}
+
+/**
+ * What splits a sample. A probe sample starts at the oldest waiting input, so
+ * with input every 8 ms it spans the request it waited behind as well as its
+ * own. `sendToDrawMs` times one request alone: `sendToEventMs` (IPC and the
+ * engine) plus `eventToDrawMs` (fetch, decode, upload and the next animation
+ * frame). `execute` resolves after its event is out, so it overlaps the fetch.
+ */
+export interface Diagnostics extends TransportTimes {
+  /** Engine time (render, readback, encode) of every finished frame. */
+  engineMs: number[];
+  sendToDrawMs: number[];
+  eventToDrawMs: number[];
+  framesDrawn: number;
+  /** Why the viewport cannot draw, if it cannot. */
+  viewportError: string | null;
 }
 
 export const PROTOCOL = { drags: 6, steps: 120, stepMs: 8, pauseMs: 600, loadWaitMs: 3000, prepareTimeoutMs: 60_000 };
@@ -62,7 +78,36 @@ export interface Stat {
 }
 
 const stat = (xs: number[]): Stat => ({ n: xs.length, p50: percentile(xs, 0.5), p95: percentile(xs, 0.95) });
-const EMPTY = { execute: stat([]), fetch: stat([]), fetchKB: stat([]) };
+
+export interface Breakdown {
+  framesDrawn: number;
+  viewportError: string | null;
+  engine: Stat;
+  sendToDraw: Stat;
+  sendToEvent: Stat;
+  eventToDraw: Stat;
+  execute: Stat;
+  fetch: Stat;
+  fetchKB: Stat;
+}
+
+export function breakdown(d: Diagnostics): Breakdown {
+  const eventToDraw = stat(d.eventToDrawMs);
+  const sendToDraw = stat(d.sendToDrawMs);
+  // Medians do not subtract exactly, so this is the median request minus the median second half.
+  const minus = (a: number | null, b: number | null) => (a === null || b === null ? null : Math.max(0, a - b));
+  return {
+    framesDrawn: d.framesDrawn,
+    viewportError: d.viewportError,
+    engine: stat(d.engineMs),
+    sendToDraw,
+    sendToEvent: { n: sendToDraw.n, p50: minus(sendToDraw.p50, eventToDraw.p50), p95: minus(sendToDraw.p95, eventToDraw.p95) },
+    eventToDraw,
+    execute: stat(d.executeMs),
+    fetch: stat(d.fetchMs),
+    fetchKB: stat(d.fetchBytes.map((b) => Math.round(b / 1024))),
+  };
+}
 
 export interface CaseResult extends AutobenchCase {
   n: number;
@@ -70,10 +115,8 @@ export interface CaseResult extends AutobenchCase {
   p95: number | null;
   /** Input to pixels of every sample, in ms. */
   samples: number[];
-  /** Frames the engine finished, and their engine time: the rest of a sample is IPC, fetch, decode and draw. */
-  engine: { frames: number; p50: number | null; p95: number | null };
-  /** p50 and p95 of the drag's transport calls; see {@link TransportTimes}. */
-  transport: { execute: Stat; fetch: Stat; fetchKB: Stat };
+  /** Where the time went; see {@link Diagnostics}. Null when the case failed before the drag. */
+  breakdown: Breakdown | null;
   /** Uncaught errors in the page during the case (first few). */
   pageErrors: string[];
   error?: string;
@@ -100,10 +143,7 @@ export interface TransportTimes {
   fetchBytes: number[];
 }
 
-/**
- * Wraps an engine to time its transport calls, so a sample splits into engine,
- * IPC, fetch and the rest (decode, upload, the next animation frame).
- */
+/** Wraps an engine to time its transport calls. */
 export function timedEngine(engine: Engine, times: TransportTimes): Engine {
   return {
     kind: engine.kind,
@@ -194,20 +234,13 @@ export async function runAutobench(
         await sleep(protocol.pauseMs);
       }
       const samples = driver.samples();
-      const engineMs = driver.engineMs();
-      const t = driver.transport();
       results.push({
         ...c,
         n: samples.length,
         p50: percentile(samples, 0.5),
         p95: percentile(samples, 0.95),
         samples,
-        engine: { frames: engineMs.length, p50: percentile(engineMs, 0.5), p95: percentile(engineMs, 0.95) },
-        transport: {
-          execute: stat(t.executeMs),
-          fetch: stat(t.fetchMs),
-          fetchKB: stat(t.fetchBytes.map((b) => Math.round(b / 1024))),
-        },
+        breakdown: breakdown(driver.diagnostics()),
         pageErrors,
       });
     } catch (e) {
@@ -217,8 +250,7 @@ export async function runAutobench(
         p50: null,
         p95: null,
         samples: [],
-        engine: { frames: 0, p50: null, p95: null },
-        transport: EMPTY,
+        breakdown: null,
         pageErrors,
         error: e instanceof Error ? e.message : String(e),
       });

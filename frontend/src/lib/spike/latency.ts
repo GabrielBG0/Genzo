@@ -4,7 +4,9 @@
  */
 export class LatencyProbe<T> {
   private samples: number[] = [];
+  private sendToDraw: number[] = [];
   private inFlightSince: number | null = null;
+  private sentAt = 0;
   private queued: { value: T; at: number } | null = null;
 
   constructor(
@@ -35,7 +37,9 @@ export class LatencyProbe<T> {
   drawn(at: number = this.now()): void {
     if (this.inFlightSince === null) return;
     this.samples.push(at - this.inFlightSince);
+    this.sendToDraw.push(at - this.sentAt);
     if (this.samples.length > this.keep) this.samples.shift();
+    if (this.sendToDraw.length > this.keep) this.sendToDraw.shift();
     this.inFlightSince = null;
     const next = this.queued;
     this.queued = null;
@@ -44,6 +48,7 @@ export class LatencyProbe<T> {
 
   private dispatch(value: T, at: number) {
     this.inFlightSince = at;
+    this.sentAt = this.now();
     this.send(value).catch(() => {
       this.inFlightSince = null;
     });
@@ -58,6 +63,14 @@ export class LatencyProbe<T> {
     return [...this.samples];
   }
 
+  /**
+   * Like {@link all}, but timed from when each request was sent rather than
+   * from the oldest input waiting for it: one request's own cost.
+   */
+  get sendToDrawMs(): number[] {
+    return [...this.sendToDraw];
+  }
+
   percentile(p: number): number | null {
     if (this.samples.length === 0) return null;
     const sorted = [...this.samples].sort((a, b) => a - b);
@@ -66,6 +79,7 @@ export class LatencyProbe<T> {
 
   reset(): void {
     this.samples = [];
+    this.sendToDraw = [];
   }
 
   /**

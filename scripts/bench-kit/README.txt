@@ -18,6 +18,10 @@ changes nothing on your system; everything it writes stays in this folder.
      visibly changed: answer y or n.
 4. Send back the file it names at the end, genzo-bench-results-*.tar.gz.
 
+Optional, makes the results more useful: install glxinfo and eglinfo first
+(Ubuntu and Debian: sudo apt install mesa-utils; Fedora: sudo dnf install
+glx-utils egl-utils).
+
 If it stops with "libraries are missing", run the install line it prints for
 your distribution (WebKitGTK 4.1) and start it again.
 

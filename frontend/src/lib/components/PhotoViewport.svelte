@@ -10,8 +10,10 @@
     zoom?: Zoom;
     /** Called after a generation's pixels reached the screen. */
     ondraw?: (generation: number, at: number) => void;
+    /** Called when the viewport cannot draw at all (no WebGL2). */
+    onerror?: (message: string) => void;
   }
-  let { engine = null, zoom = 'fit', ondraw }: Props = $props();
+  let { engine = null, zoom = 'fit', ondraw, onerror }: Props = $props();
 
   let host: HTMLDivElement | undefined = $state();
   let canvas: HTMLCanvasElement | undefined = $state();
@@ -34,6 +36,7 @@
       viewport = new WebGLViewport(canvas);
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
+      onerror?.(error);
       return;
     }
     const vp = viewport;

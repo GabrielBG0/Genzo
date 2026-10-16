@@ -11,7 +11,7 @@
   import TopBar, { type Module } from './components/TopBar.svelte';
   import type { Engine } from './engine/types';
   import { provideRegistry } from './shortcuts/context';
-  import { runAutobench, timedEngine, type AutobenchDriver, type TransportTimes } from './spike/autobench';
+  import { runAutobench, timedEngine, type AutobenchDriver, type Diagnostics } from './spike/autobench';
   import { LatencyProbe } from './spike/latency';
   import type { Zoom } from './viewport/types';
 
@@ -21,8 +21,20 @@
   }
   let { engine: given, info }: Props = $props();
   // The autobench times the transport calls; otherwise the engine is used as given.
-  const transport: TransportTimes = { executeMs: [], fetchMs: [], fetchBytes: [] };
-  const engine = untrack(() => (info.autobench ? timedEngine(given, transport) : given));
+  const diag: Diagnostics = {
+    engineMs: [],
+    executeMs: [],
+    fetchMs: [],
+    fetchBytes: [],
+    sendToDrawMs: [],
+    eventToDrawMs: [],
+    framesDrawn: 0,
+    viewportError: null,
+  };
+  /** When each generation's renderFinished arrived, for the autobench. */
+  // Not reactive state: nothing renders from it.
+  let finishedAt: [generation: number, at: number][] = [];
+  const engine = untrack(() => (info.autobench ? timedEngine(given, diag) : given));
 
   const registry = provideRegistry();
   let module: Module = $state('develop');
@@ -82,8 +94,14 @@
     void render(false).catch(() => {});
   }
 
-  function ondraw() {
-    probe.drawn();
+  function ondraw(generation: number, at: number) {
+    if (info.autobench) {
+      diag.framesDrawn += 1;
+      const finished = finishedAt.find(([g]) => g === generation);
+      if (finished) diag.eventToDrawMs.push(at - finished[1]);
+      finishedAt = finishedAt.filter(([g]) => g > generation);
+    }
+    probe.drawn(at);
     stats = { p50: probe.percentile(0.5), p95: probe.percentile(0.95), n: probe.count };
   }
 
@@ -97,7 +115,6 @@
   // Started with GENZO_AUTOBENCH: drive the sliders like the Windows script
   // does, then hand the report to the engine, which writes it to disk.
   let autobench: string | null = $state(null);
-  let engineMs: number[] = [];
   const driver: AutobenchDriver = {
     async prepare(c) {
       source = c.source as Source;
@@ -113,14 +130,11 @@
     settle,
     reset: () => {
       probe.reset();
-      engineMs = [];
-      transport.executeMs = [];
-      transport.fetchMs = [];
-      transport.fetchBytes = [];
+      for (const k of ['engineMs', 'executeMs', 'fetchMs', 'fetchBytes', 'eventToDrawMs'] as const) diag[k] = [];
+      diag.framesDrawn = 0;
     },
     samples: () => probe.all,
-    engineMs: () => engineMs,
-    transport: () => transport,
+    diagnostics: () => ({ ...diag, sendToDrawMs: probe.sendToDrawMs }),
   };
   async function selfBenchmark() {
     const report = await runAutobench(driver, info, undefined, undefined, (done, total) => {
@@ -145,7 +159,10 @@
     return engine.onEvent((e) => {
       if (e.type !== 'renderFinished') return;
       gpuMs = e.gpuMs;
-      if (info.autobench) engineMs.push(e.renderMs);
+      if (info.autobench) {
+        diag.engineMs.push(e.renderMs);
+        finishedAt.push([e.generation, performance.now()]);
+      }
     });
   });
 
@@ -166,7 +183,7 @@
       <LeftPanelDevelop />
     </div>
     <div class="center">
-      <PhotoViewport {engine} {zoom} {ondraw} />
+      <PhotoViewport {engine} {zoom} {ondraw} onerror={(m) => (diag.viewportError = m)} />
     </div>
     <aside class="right pane" aria-label="Right panel">
       <Histogram />

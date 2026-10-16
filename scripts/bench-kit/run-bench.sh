@@ -14,6 +14,7 @@
 # Options: --no-questions  skip the "did the image change?" questions
 #          --app-timeout S  give up on one app run after S seconds (default 600)
 #          --skip-cli       skip step 3
+#          --only NAME      run one app variant: default, no-dmabuf or nvidia-offload
 set -uo pipefail
 
 KIT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -22,10 +23,12 @@ CLI="$KIT/bin/genzo-cli"
 ASK=1
 APP_TIMEOUT=600
 CLI_BENCH=1
+ONLY=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --no-questions) ASK=0 ;;
     --skip-cli) CLI_BENCH=0 ;;
+    --only) ONLY="$2"; shift ;;
     --app-timeout) APP_TIMEOUT="$2"; shift ;;
     *) echo "unknown option $1"; exit 2 ;;
   esac
@@ -109,8 +112,8 @@ done
 
 # ---------------------------------------------------------------- 4. app
 # Each variant is one way WebKitGTK can draw. The default is what users get.
-# NVIDIA's driver sometimes shows a blank window with the default, which the
-# app cannot detect (it still times its WebGL work), hence the question.
+# NVIDIA's driver sometimes shows a blank window with the default; the report
+# counts frames drawn, and the question checks what the eye saw.
 VARIANTS=("default|")
 VARIANTS+=("no-dmabuf|WEBKIT_DISABLE_DMABUF_RENDERER=1")
 GPU_COUNT="$(lspci 2>/dev/null | grep -Eic 'vga|3d|display' || true)"
@@ -121,6 +124,10 @@ if have nvidia-smi && [ "${GPU_COUNT:-0}" -gt 1 ]; then
     [ -f "$f" ] && prime="$prime __EGL_VENDOR_LIBRARY_FILENAMES=$f" && break
   done
   VARIANTS+=("nvidia-offload|$prime")
+fi
+if [ -n "$ONLY" ]; then
+  for v in "${VARIANTS[@]}"; do [ "${v%%|*}" = "$ONLY" ] && VARIANTS=("$v") && break; done
+  [ "${VARIANTS[0]%%|*}" = "$ONLY" ] || { echo "no variant $ONLY here"; exit 2; }
 fi
 
 say "App benchmark: ${#VARIANTS[@]} runs of about 2 minutes each"
@@ -143,7 +150,14 @@ for v in "${VARIANTS[@]}"; do
   env $envs GENZO_AUTOBENCH="$report" "$APP" > "$log" 2>&1 &
   pid=$!
   status="timeout"
+  snapped=0
   while :; do
+    # Mid-run, which processes use the NVIDIA GPU: shows whether the page
+    # (WebKitWebProcess) is drawn there or on the integrated GPU.
+    if [ "$snapped" = 0 ] && [ $(( $(date +%s) - started )) -ge 20 ] && have nvidia-smi; then
+      nvidia-smi 2>&1 | scrub > "$OUT/app-$name.nvidia-smi.txt"
+      snapped=1
+    fi
     if [ -f "$report" ]; then status="ok"; break; fi
     if ! kill -0 "$pid" 2>/dev/null; then wait "$pid"; status="exited ($?)"; break; fi
     if [ $(( $(date +%s) - started )) -ge "$APP_TIMEOUT" ]; then break; fi
@@ -178,14 +192,16 @@ for f in sorted(out.glob("app-*.json")):
         if c.get("error"):
             res = c["error"]
         elif c["n"]:
-            e = c["engine"]
-            t = c["transport"]
-            fmt = lambda x: "n/a" if x is None else f"{x:.1f}"
-            eng = (f"p95 engine {fmt(e['p95'])}, execute {fmt(t['execute']['p95'])}, "
-                   f"fetch {fmt(t['fetch']['p95'])} ms of {t['fetchKB']['p50']} KB")
-            res = f"p50 {c['p50']:.1f} ms, p95 {c['p95']:.1f} ms, n {c['n']} ({eng})"
+            b = c["breakdown"]
+            fmt = lambda s: "n/a" if s["p50"] is None else f"{s['p50']:.0f}/{s['p95']:.0f}"
+            res = (f"p50 {c['p50']:.1f} ms, p95 {c['p95']:.1f} ms, n {c['n']}\n"
+                   f"      one request p50/p95: {fmt(b['sendToDraw'])} ms = send to event {fmt(b['sendToEvent'])}"
+                   f" (engine {fmt(b['engine'])}) + event to draw {fmt(b['eventToDraw'])}"
+                   f" (fetch {fmt(b['fetch'])}, {b['fetchKB']['p50']} KB)")
         else:
-            res = f"no samples ({c['engine']['frames']} frames from the engine)"
+            b = c["breakdown"]
+            res = (f"no samples: {b['engine']['n']} engine frames, {b['framesDrawn']} drawn"
+                   + (f", viewport error: {b['viewportError']}" if b["viewportError"] else ""))
         print(f"  {c['source']:16} {c['slider']:8} {zoom:3}  {res}")
         for err in c.get("pageErrors", []):
             print(f"      page error: {err}")

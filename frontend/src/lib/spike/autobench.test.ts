@@ -1,12 +1,23 @@
 import { describe, expect, it } from 'vitest';
 import type { EngineInfo } from '$contract/genzo';
-import { CASES, PROTOCOL, percentile, runAutobench, type AutobenchDriver, type AutobenchSlider } from './autobench';
+import { CASES, PROTOCOL, percentile, runAutobench, type AutobenchDriver, type AutobenchSlider, type Diagnostics } from './autobench';
 
 const INFO: EngineInfo = {
   engineVersion: '0.0.0-test',
   contractVersion: '0.0.0',
   adapter: { kind: 'none', name: 'test', backend: 'none', fallbackReason: null },
   autobench: true,
+};
+
+const NONE: Diagnostics = {
+  engineMs: [],
+  executeMs: [],
+  fetchMs: [],
+  fetchBytes: [],
+  sendToDrawMs: [],
+  eventToDrawMs: [],
+  framesDrawn: 0,
+  viewportError: null,
 };
 
 const FAST = { ...PROTOCOL, drags: 2, steps: 4, stepMs: 0, pauseMs: 0, loadWaitMs: 0, prepareTimeoutMs: 50 };
@@ -26,8 +37,16 @@ describe('runAutobench', () => {
         samples = [];
       },
       samples: () => samples,
-      engineMs: () => [4, 6],
-      transport: () => ({ executeMs: [9], fetchMs: [2, 3], fetchBytes: [2048, 4096] }),
+      diagnostics: () => ({
+        engineMs: [4, 6],
+        executeMs: [9],
+        fetchMs: [2, 3],
+        fetchBytes: [2048, 4096],
+        sendToDrawMs: [20, 30],
+        eventToDrawMs: [5, 8],
+        framesDrawn: 2,
+        viewportError: null,
+      }),
     };
     const report = await runAutobench(driver, INFO, CASES.slice(0, 1), FAST);
     expect(log).toEqual([
@@ -40,8 +59,9 @@ describe('runAutobench', () => {
     const [c] = report.cases;
     expect(c?.n).toBe(10);
     expect(c?.p95).toBe(11);
-    expect(c?.engine).toEqual({ frames: 2, p50: 6, p95: 6 });
-    expect(c?.transport.fetchKB).toEqual({ n: 2, p50: 4, p95: 4 });
+    expect(c?.breakdown?.engine).toEqual({ n: 2, p50: 6, p95: 6 });
+    expect(c?.breakdown?.fetchKB).toEqual({ n: 2, p50: 4, p95: 4 });
+    expect(c?.breakdown?.sendToEvent).toEqual({ n: 2, p50: 22, p95: 22 });
     expect(report.engine).toBe(INFO);
   });
 
@@ -52,8 +72,7 @@ describe('runAutobench', () => {
       settle: () => {},
       reset: () => {},
       samples: () => [20],
-      engineMs: () => [],
-      transport: () => ({ executeMs: [], fetchMs: [], fetchBytes: [] }),
+      diagnostics: () => NONE,
     };
     const report = await runAutobench(driver, INFO, CASES.filter((_, i) => i === 3 || i === 0), FAST);
     expect(report.cases.map((c) => c.error ?? c.p95)).toEqual([20, 'out of memory']);
@@ -66,8 +85,7 @@ describe('runAutobench', () => {
       settle: () => {},
       reset: () => {},
       samples: () => [],
-      engineMs: () => [],
-      transport: () => ({ executeMs: [], fetchMs: [], fetchBytes: [] }),
+      diagnostics: () => NONE,
     };
     const report = await runAutobench(driver, INFO, CASES.slice(0, 1), FAST);
     expect(report.cases[0]?.error).toMatch(/took over 50 ms/);
