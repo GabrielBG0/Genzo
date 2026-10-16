@@ -288,7 +288,7 @@ A friend's MacBook Pro (M1 Max, 32 GPU cores, 64 GB, on AC power, built-in Liqui
 | 48 MP, Temp, Fit | 32 / 33 ms | 17 / 18 ms | 3 / 3 ms (2 / 6) | 14 / 15 ms (0 / 1 ms, 17 KB) |
 
 - **The gate passes on macOS with room to spare: 33 ms p95 against 50 ms**, at 12 and 48 MP, and even at 1:1 with full frames. No ladder step is needed beyond the JPEG preview the app already sends.
-- **The display sets the pace, not the pipeline.** Every case lands on the same numbers: one request takes about 17 ms, one 60 Hz frame, and a probe sample (about two requests, see the Linux section) about 33 ms. The engine and IPC take about 3 ms, and the fetch is near zero. WebKit runs animation frames at 60 Hz even on this 120 Hz display, so the wait for the next frame is most of the time.
+- **The display sets the pace, not the pipeline.** Every case lands on the same numbers: one request takes about 17 ms, one 60 Hz frame, and a probe sample (about two requests, see the Linux section) about 33 ms. The engine and IPC take about 3 ms, and the fetch is near zero. The wait for the next animation frame is most of the time; that it matches 60 Hz on a 120 Hz display suggests WebKit caps animation frames at 60 Hz there (not checked).
 - **The custom URI scheme is fast in WKWebView**: 10.5 MB in 4 to 5 ms (about 2 GB/s), against about 200 MB/s in WebKitGTK on the Linux laptop. Full frames at 1:1 are no problem here.
 - 48 MP fits easily in 64 GB of unified memory; GPU time per drag step is under 1 ms (0.D above).
 - The input is synthetic. Running the autobench once on the Windows machine of the 18.4 ms result would check that it agrees with the DevTools measurement.
