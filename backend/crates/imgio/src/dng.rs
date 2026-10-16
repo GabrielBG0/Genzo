@@ -442,11 +442,12 @@ fn uncompressed_tile(
     for y in 0..rows {
         let src = &bytes[y * row_bytes..][..cols * spp * 2];
         let out = &mut band[(y * layout.width + tile.x0) * spp..][..cols * spp];
-        for (o, b) in out.iter_mut().zip(src.chunks_exact(2)) {
+        let (pairs, _) = src.as_chunks::<2>();
+        for (o, &b) in out.iter_mut().zip(pairs) {
             let stored = if layout.big_endian {
-                u16::from_be_bytes([b[0], b[1]])
+                u16::from_be_bytes(b)
             } else {
-                u16::from_le_bytes([b[0], b[1]])
+                u16::from_le_bytes(b)
             };
             let (value, past_end) = linearize(stored, table);
             *o = value;

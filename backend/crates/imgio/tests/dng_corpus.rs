@@ -8,24 +8,35 @@ use std::path::PathBuf;
 
 use genzo_imgio::dng::{self, COMPRESSION_JPEG_XL, DngError};
 
-/// The first DNG in corpus/proraw/<model>/, if the corpus has one.
-fn corpus_file(model: &str) -> Option<Vec<u8>> {
+/// Every DNG in corpus/proraw/<model>/, if the corpus has any.
+fn corpus_files(model: &str) -> Vec<(PathBuf, Vec<u8>)> {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../../corpus/proraw")
         .join(model);
-    let path = std::fs::read_dir(&dir)
-        .ok()?
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        println!("skipped: no corpus/proraw/{model}");
+        return Vec::new();
+    };
+    let mut paths: Vec<PathBuf> = entries
         .flatten()
         .map(|e| e.path())
-        .find(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("dng")))?;
-    println!("reading {}", path.display());
-    std::fs::read(path).ok()
+        .filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("dng")))
+        .collect();
+    paths.sort();
+    paths
+        .into_iter()
+        .filter_map(|p| Some((p.clone(), std::fs::read(&p).ok()?)))
+        .collect()
 }
 
 /// Facts recorded for known corpus files, told apart by size: the clamp count
 /// and the rounded per-channel means. Means are checked within 1, since the
 /// tiles are lossy JPEG XL and decoders may round the last step differently.
 const KNOWN_16_PRO: &[(usize, u64, [f64; 3])] = &[
+    // IMG_6884.DNG (sha256 97f76203...b5b378), the file of the 0.C
+    // prototype. Against libjxl: 0.017 % of samples differ, almost all by one
+    // table step; 15 saturated pixels by 2 to 5 steps (lossy XYB rounding).
+    (28_591_661, 3, [3901.0, 4229.0, 4705.0]),
     // IMG_6889.DNG (iOS 27.2), checked against libjxl: 0.018 % of samples
     // differ, each by one LinearizationTable step.
     (20_306_343, 7, [6789.0, 6669.0, 6715.0]),
@@ -34,12 +45,15 @@ const KNOWN_16_PRO: &[(usize, u64, [f64; 3])] = &[
 /// The iPhone 16 Pro 48 MP ProRAW with JPEG XL tiles.
 #[test]
 fn iphone_16_pro_jpeg_xl() {
-    let Some(data) = corpus_file("iPhone 16 Pro") else {
-        println!("skipped: no iPhone 16 Pro file in corpus/proraw");
-        return;
-    };
+    for (path, data) in corpus_files("iPhone 16 Pro") {
+        println!("{}", path.display());
+        check_16_pro(&data);
+    }
+}
+
+fn check_16_pro(data: &[u8]) {
     let started = std::time::Instant::now();
-    let img = dng::decode_linear(&data).unwrap();
+    let img = dng::decode_linear(data).unwrap();
     println!("decoded in {:?}", started.elapsed());
     assert_eq!(
         (img.width, img.height, img.samples_per_pixel),
@@ -90,12 +104,11 @@ fn iphone_16_pro_jpeg_xl() {
 /// rawler: the reader must say so, not misread them.
 #[test]
 fn iphone_13_pro_max_is_left_to_rawler() {
-    let Some(data) = corpus_file("iPhone 13 Pro Max") else {
-        println!("skipped: no iPhone 13 Pro Max file in corpus/proraw");
-        return;
-    };
-    match dng::decode_linear(&data) {
-        Err(DngError::Unsupported(m)) => assert!(m.contains("lossless JPEG"), "{m}"),
-        other => panic!("expected Unsupported, got {other:?}"),
+    for (path, data) in corpus_files("iPhone 13 Pro Max") {
+        println!("{}", path.display());
+        match dng::decode_linear(&data) {
+            Err(DngError::Unsupported(m)) => assert!(m.contains("lossless JPEG"), "{m}"),
+            other => panic!("expected Unsupported, got {other:?}"),
+        }
     }
 }

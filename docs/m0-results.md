@@ -157,14 +157,15 @@ The prototype became a library reader, `genzo_imgio::dng::decode_linear` (`backe
 - **Bit depth.** jxl-oxide rescales samples to 0..65535 unless a stream declares 16 bits, which would break the table lookup. The reader scales back from the declared depth; a synthetic test checks that 16- and 12-bit tiles give the same integers. The iPhone streams declare 16 bits (the DNG says 10), so the iPhone files did not hit this.
 - **Second iPhone 16 Pro file:** `IMG_6889.DNG` (20.3 MB, sha256 `8e93f79c...7f50d1`, iOS 27.2, big-endian). 48 MP, 12 tiles of 2016x2016, **lossy** JPEG XL (VarDCT, XYB), a 1024-entry table, gain table map, BaselineExposure +0.13 EV. 7 samples past the table, mean linear value 6789, 6669, 6715.
 - **Checked against libjxl**, the reference decoder (imagecodecs, table applied in NumPy): the same clamp count and means, and 99.982 % of samples identical. The other 0.018 % differ by exactly one table step, up or down: lossy tiles decode to fractions, and the two decoders round the last step differently. The prototype gives the same clamp count and means.
+- **The prototype's own file**, `IMG_6884.DNG` (the `97f76203...b5b378` above, also big-endian lossy JPEG XL): the reader reproduces the recorded values, 3 samples past the table and means 3901, 4229, 4705. Against libjxl, 0.017 % of samples differ, almost all by one table step. 15 samples in 8 strongly saturated pixels (one channel near zero) differ by 2 to 5 steps, at most 80 of 65535: lossy colors are stored as XYB, and converting back to RGB amplifies small float differences at the edge of the gamut. Decoder variance, not a reader error.
 - **Speed and memory** on the owner's laptop (i7-10510U, 4 cores), release build, file read first:
 
-  | | Decode time, 48 MP | Peak memory |
+  | Decode time and peak memory, 48 MP | `IMG_6889` (20.3 MB) | `IMG_6884` (28.6 MB) |
   |---|---|---|
-  | Prototype (`full`, tiles one after another) | 5.35 to 5.83 s | 443 to 455 MiB |
-  | Linear DNG reader (rows of tiles in parallel) | 2.60 to 2.75 s | 602 to 638 MiB |
+  | Prototype (`full`, tiles one after another) | 5.35 to 5.83 s, 443 to 455 MiB | 8.82 to 9.79 s, 451 to 466 MiB |
+  | Linear DNG reader (rows of tiles in parallel) | 2.60 to 2.75 s, 602 to 638 MiB | 4.82 to 5.35 s, 628 to 661 MiB |
 
-  Twice as fast, for about 170 MiB more at peak while three rows of tiles decode at once. (The prototype's 1.84 s in the table above was on the faster Windows machine.) Streaming tiles into the mip pyramid, as the `mip` mode showed, would cut the 279 MiB full-size buffer when M1 wires this into the pipeline.
+  1.8 to 2 times as fast, for about 170 MiB more at peak while three rows of tiles decode at once. (The prototype's 1.84 s in the table above was on the faster Windows machine.) Streaming tiles into the mip pyramid, as the `mip` mode showed, would cut the 279 MiB full-size buffer when M1 wires this into the pipeline.
 
 ### LibRaw check (step 3) and what it means for the FFI fallback (step 4)
 
