@@ -62,8 +62,7 @@ jobs:
           node-version: 24
           cache: pnpm
           cache-dependency-path: frontend/pnpm-lock.yaml
-      - id: build
-        run: echo "archive=$(./scripts/bench-kit/make-kit.sh | tail -1)" >> "$GITHUB_OUTPUT"
+      - run: ./scripts/bench-kit/make-kit.sh
       # Catches a kit that cannot start before a tester finds out. The runners
       # may have no usable GPU, so the cli renders on the CPU, and the app is
       # not started (no display).
@@ -80,10 +79,15 @@ jobs:
           $errors = $null
           [System.Management.Automation.Language.Parser]::ParseFile("$PWD\scripts\bench-kit\run-bench.ps1", [ref]$null, [ref]$errors) | Out-Null
           if ($errors) { $errors; exit 1 }
+      # A relative glob: on Windows the script prints a Git Bash path
+      # (/d/a/...), which upload-artifact cannot resolve.
       - uses: actions/upload-artifact@v4
         with:
           name: kit-${{ matrix.os }}
-          path: ${{ steps.build.outputs.archive }}
+          path: |
+            dist/genzo-bench-*.tar.gz
+            dist/genzo-bench-*.zip
+          if-no-files-found: error
 
   release:
     name: Pre-release
@@ -102,6 +106,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          ls -l kits
+          # Never publish a release with a kit missing.
+          for os in linux macos windows; do
+            ls kits/genzo-bench-$os-* >/dev/null 2>&1 || { echo "the $os kit is missing"; exit 1; }
+          done
           commit="$(git rev-parse --short=7 HEAD)"
           tag="bench-$commit"
           contract="$(awk -F'"' '/CONTRACT_VERSION: &str/ {print $2}' backend/crates/model/src/contract.rs)"
