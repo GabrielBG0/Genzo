@@ -14,7 +14,9 @@ cargo-fuzz = true
 
 [dependencies]
 libfuzzer-sys = "0.4"
-genzo-imgio = { path = "../crates/imgio" }  # default features: heic and dng
+# Default features (heic, dng) plus raw: rawler, whose lossless JPEG
+# decompressor the DNG reader uses, is fuzzed through it too.
+genzo-imgio = { path = "../crates/imgio", features = ["raw"] }
 
 [[bin]]
 name = "sniff"
