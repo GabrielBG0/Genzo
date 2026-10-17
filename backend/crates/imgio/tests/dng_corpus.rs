@@ -8,17 +8,17 @@ use std::path::PathBuf;
 
 use genzo_imgio::dng::{self, COMPRESSION_JPEG_XL, DngError};
 
-/// Every DNG in corpus/proraw/<model>/, if the corpus has any.
-fn corpus_files(model: &str) -> Vec<(PathBuf, Vec<u8>)> {
+/// Every DNG in corpus/<folder>/, if the corpus has any.
+fn corpus_files(folder: &str) -> Vec<(PathBuf, Vec<u8>)> {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../../corpus/proraw")
-        .join(model);
+        .join("../../../corpus")
+        .join(folder);
     // A missing folder means the corpus is not here: skip. Any other error
     // is a real problem and fails the test.
     let entries = match std::fs::read_dir(&dir) {
         Ok(entries) => entries,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            println!("skipped: no corpus/proraw/{model}");
+            println!("skipped: no corpus/{folder}");
             return Vec::new();
         }
         Err(e) => panic!("{}: {e}", dir.display()),
@@ -56,7 +56,7 @@ const KNOWN_16_PRO: &[(usize, u64, [f64; 3])] = &[
 /// The iPhone 16 Pro 48 MP ProRAW with JPEG XL tiles.
 #[test]
 fn iphone_16_pro_jpeg_xl() {
-    for (path, data) in corpus_files("iPhone 16 Pro") {
+    for (path, data) in corpus_files("proraw/iPhone 16 Pro") {
         println!("{}", path.display());
         check_16_pro(&data);
     }
@@ -116,7 +116,7 @@ fn check_16_pro(data: &[u8]) {
 /// checked against libjpeg-turbo: every sample identical.
 #[test]
 fn iphone_13_pro_max_lossless_jpeg() {
-    for (path, data) in corpus_files("iPhone 13 Pro Max") {
+    for (path, data) in corpus_files("proraw/iPhone 13 Pro Max") {
         println!("{}", path.display());
         let result = dng::decode_linear(&data);
         if !cfg!(feature = "raw") {
@@ -156,6 +156,56 @@ fn iphone_13_pro_max_lossless_jpeg() {
                 })
                 .collect();
             assert_eq!(means, [1288, 1274, 1268]);
+        }
+    }
+}
+
+/// The iPhone 12 Pro ProRAW from raw.pixls.us (fetched by
+/// scripts/fetch-raw-corpus.py), lossless JPEG like the 13 Pro Max. Unlike
+/// the newer files it is not white balanced in the camera: AsShotNeutral is
+/// a real neutral. Checked against libjpeg (imagecodecs) plus the table:
+/// every sample identical.
+#[test]
+fn iphone_12_pro_lossless_jpeg() {
+    for (path, data) in corpus_files("raw/Apple/iPhone 12 Pro") {
+        println!("{}", path.display());
+        let result = dng::decode_linear(&data);
+        if !cfg!(feature = "raw") {
+            assert!(
+                matches!(result, Err(DngError::Unsupported(_))),
+                "{result:?}"
+            );
+            continue;
+        }
+        let img = result.unwrap();
+        assert_eq!(
+            (img.width, img.height, img.samples_per_pixel),
+            (4032, 3024, 3)
+        );
+        assert_eq!(img.compression, dng::COMPRESSION_LOSSLESS_JPEG);
+        assert_eq!(img.linearization_entries, 4096);
+        let neutral = img.as_shot_neutral.clone().unwrap();
+        assert!(
+            neutral[0] < 0.9 && neutral[2] < 0.9,
+            "AsShotNeutral {neutral:?}"
+        );
+        // IMG_1361.DNG (sha256 e91e77a4...fdbdfc2); lossless, so the means are exact.
+        if data.len() == 29_195_592 {
+            assert_eq!(img.clamped, 0);
+            let n = (img.pixels.len() / 3) as u64;
+            let means: Vec<u64> = (0..3)
+                .map(|c| {
+                    let sum: u64 = img
+                        .pixels
+                        .iter()
+                        .skip(c)
+                        .step_by(3)
+                        .map(|&v| u64::from(v))
+                        .sum();
+                    (sum + n / 2) / n
+                })
+                .collect();
+            assert_eq!(means, [4988, 12571, 7970]);
         }
     }
 }

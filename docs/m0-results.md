@@ -183,6 +183,7 @@ The wrap happens because `dither` adds its offset in `u32` and returns `pixel as
 **Decision:** every ProRAW goes through the linear DNG reader, which applies the table exactly. Lossless JPEG tiles (iPhone 12 to 15 Pro) are decoded with rawler's public `LjpegDecompressor` inside `catch_unwind`, so a panic there is an error. rawler keeps CFA DNGs and camera RAW. The table and Huffman faults are drafted as an upstream issue for rawler.
 
 - **iPhone 13 Pro Max through the reader:** `IMG_8104.dng` (12 MP, 12-bit lossless JPEG, 48 tiles of 504x504, 4096-entry table) decodes in about 140 ms (rawler: 250 ms), peak 120 MiB. **Every one of its 36,578,304 samples is identical** to an independent decode with libjpeg-turbo plus the table. Means 1288, 1274, 1268; no sample past the table.
+- **iPhone 12 Pro through the reader** (2026-10-17): `IMG_1361.DNG` from raw.pixls.us (29.2 MB, sha256 `e91e77a4...fdbdfc2`): 12 MP, 12-bit lossless JPEG, 504x378 tiles, 4096-entry table, decodes in 54 ms. **Every one of its 36,578,304 samples is identical** to an independent decode with libjpeg (imagecodecs and tifffile) plus the table. Means 4988, 12571, 7970; no sample past the table. Unlike the 13 Pro Max and 16 Pro files it is **not white balanced in the camera**: AsShotNeutral is 0.449, 1, 0.541, so the M1 RAW path must apply the neutral rather than assume 1,1,1. BaselineExposure is −0.30 EV, and it carries the gain table map flag too. Checked by `iphone_12_pro_lossless_jpeg` in `backend/crates/imgio/tests/dng_corpus.rs`.
 
 ### LibRaw check (step 3) and what it means for the FFI fallback (step 4)
 
@@ -209,7 +210,7 @@ Weights are LightCraft's estimate of Lightroom raw users by maker (Canon 33%, So
 | Order | What | Share | Status in our corpus | Work for M1 |
 |---|---|---|---|---|
 | 1 | Canon CR3, Sony ARW, Nikon NEF (lossless and lossy compressed), Fujifilm RAF (Bayer and X-Trans) | ~86% | All decode with rawler 0.8 on the files tested | Verify more bodies per maker; only one Canon CR3 (an APS-C C-RAW) is tested. X-Trans needs its own demosaic |
-| 2 | Phones: Apple ProRAW (all generations), Samsung and other DNG | 3% | 13 Pro Max and 16 Pro decode with the linear DNG reader; the 12 Pro decoded with rawler and is not yet re-run through the reader (its file is not on the owner's Linux machine); S23 Ultra with rawler | Wire the linear DNG reader into `imgio::decode`, opcode lists. Gain table map off by default |
+| 2 | Phones: Apple ProRAW (all generations), Samsung and other DNG | 3% | 12 Pro, 13 Pro Max and 16 Pro decode with the linear DNG reader; S23 Ultra with rawler | Wire the linear DNG reader into `imgio::decode`, opcode lists. Gain table map off by default |
 | 3 | Panasonic RW2, OM/Olympus ORF, Leica/Pentax DNG | ~9% | All decode with rawler | Per-body checks only |
 | 4 | Nikon High Efficiency NEF (Z 6III, Z 8, Z 9, Z f in HE mode) | part of Nikon's 16%, only shots taken in HE | Fails in rawler and LibRaw; Adobe reads it | Needs a JPEG XS decoder (est. 20 to 40 h). Until then, show the embedded preview and say why. Decide in M1 whether it is worth the time |
 | 5 | Medium format and legacy: Hasselblad 3FR, Phase One IIQ, Kodak DCR | <1% | Decode with rawler (IIQ is slow: 9 s debug) | Nothing planned |
