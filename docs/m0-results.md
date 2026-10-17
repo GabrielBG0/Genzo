@@ -4,7 +4,7 @@ Measured results of the M0 feasibility spikes, against the exit gate in [develop
 
 ## 0.D GPU pipeline
 
-**Status: done on Windows (hardware and WARP). lavapipe runs in CI (`gpu` job); its first result is pending. macOS and Linux hardware are not measured yet.**
+**Status: done on Windows (hardware and WARP). lavapipe runs in CI (`gpu` job); its first result is pending. macOS (M1 Max, base M1) and Linux (RTX 3050 laptop) are measured with the bench kit, see 0.E.**
 
 ### What was built
 
@@ -96,7 +96,7 @@ The criterion benchmark (`cargo bench -p genzo-pipeline --bench spike`, 12 MP, R
 - lavapipe: the CI `gpu` job runs the tests on Ubuntu 22.04's mesa. Its first result has not been seen yet.
 - macOS (Metal, M1 Max): measured with the bench kit, see 0.E. Exposure and white balance drags take 0.25 to 0.71 ms of GPU time at 12 and 48 MP; the settled white balance render takes 7 ms at 12 MP and 26 ms at 48 MP.
 - macOS (Metal, base M1, 7 GPU cores, 8 GB): measured with the bench kit, see 0.E. Drags take 1.2 to 4.7 ms of GPU time (p50) at 12 and 48 MP, about 4 to 5 times the M1 Max, in line with its 7 GPU cores against 32. The settled white balance render takes 34 ms at 12 MP and 124 ms (p95 137 ms) at 48 MP; at 48 MP that pause after release is long enough to notice, which adds weight to finding 5.
-- Linux hardware: only the MX110 dry run (see 0.E); the RTX 3050 run is pending.
+- Linux (Vulkan, GeForce RTX 3050 Laptop, 4 GB): measured with the bench kit, see 0.E. Drags take 0.33 to 1.24 ms of GPU time at 12 and 48 MP; the settled white balance render takes 11 ms at 12 MP and 42 ms at 48 MP.
 - Real raw files instead of the synthetic scene arrive with 0.C (rawler).
 
 ## 0.C ProRAW and RAW decode
@@ -247,7 +247,7 @@ Two MIT OR Apache-2.0 projects from the same authors (github.com/storytold/light
 
 ## 0.E Pixels through the webview
 
-The tile protocol, the `genzo-frame` URI scheme, the WebGL2 viewport and the in-app latency probe exist from the M0 foundation. The app's Exposure and Temp sliders now drive the real GPU pipeline (`renderSpike`), sending interactive renders while dragging and one settled render on release. **Windows is measured (below). macOS and Linux are not.**
+The tile protocol, the `genzo-frame` URI scheme, the WebGL2 viewport and the in-app latency probe exist from the M0 foundation. The app's Exposure and Temp sliders now drive the real GPU pipeline (`renderSpike`), sending interactive renders while dragging and one settled render on release. **Windows, macOS and Linux are measured (below).**
 
 ### Windows 11, WebView2 155 (RTX 3060), release build
 
@@ -305,7 +305,7 @@ Caveats, to settle before this counts as final:
   - Decode and upload: 3.5 to 5.3 ms on photos, against an unmeasured but smaller figure for the smooth frame, so at most about 2 ms more.
 
   That adds at most about 7 ms, so the expected figure is about 19 to 26 ms p95. It is an estimate from measured parts, not an end-to-end measurement: the spike cannot load a real image, so real-photo latency in the app has not been measured. The conclusion is unchanged: the preview stays well under 50 ms p95 on Windows, and the full-size JPEG alternative would not have (about 40 ms before the probe's queueing).
-- **macOS passes** (M1 Max and base M1, below). Linux is pending; the dry run on a weak laptop is below too.
+- **macOS passes** (M1 Max and base M1, below). **Linux passes in WebKitGTK's default mode** on an RTX 3050 laptop, in the three gated cases it could measure (31 to 43 ms p95); the fourth ran out of GPU memory. The dry run on a weak laptop is below too.
 - **Display P3 previews** are drawn as untagged bitmaps, so their colors are approximate during a drag. The spike only sends sRGB; the color check (step 5) is still open.
 - **At 1:1 zoom** the preview is not used (it would show at the wrong scale), so a 1:1 drag still sends full frames. That case needs its own answer in M1 (send only the visible region).
 - **The settled frame** still moves 11 MB raw, about 90 ms. Nobody waits on it during a drag, but it is the next thing to compress if the pause after release feels slow.
@@ -367,6 +367,64 @@ Loading the synthetic raw took 47 ms at 12 MP and 181 ms at 48 MP.
 - **The custom URI scheme stays fast**: 10.5 MB in 3 to 4 ms at 1:1.
 - The run was on battery. macOS does not throttle the M1 much on battery without low power mode, but numbers on AC could be slightly better.
 
+### Linux: Ubuntu 22.04, WebKitGTK 2.50.4, X11, GeForce RTX 3050 Laptop 4 GB, bench kit 5755b0b (2026-10-17)
+
+A friend's laptop: Ryzen 5 5600H (12 threads), 14 GB, hybrid graphics (AMD Cezanne integrated plus RTX 3050 Laptop, 4 GB, driver 550.163.01), built-in 1920 × 1080 display at 120 Hz, GNOME on X11. Release build from the bench kit, synthetic input (autobench), 2560 × 1440 frame. The engine picked the RTX 3050 (Vulkan) in every mode. The tester saw the image change. How to read the columns: see the dry run below.
+
+| WebKitGTK mode, case | Input → pixels p50 / p95 | One request alone, p50 / p95 | of which: send to event (engine) | event to draw (fetch, size) |
+|---|---|---|---|---|
+| default (DMABUF renderer), 12 MP, Exposure, Fit | 27 / 40 ms | 16 / 26 ms | 7 / 9 ms (7 / 11) | 9 / 17 ms (1 / 2 ms, 39 KB) |
+| default, 12 MP, Temp, Fit | 27 / 31 ms | 16 / 17 ms | 8 / 3 ms (8 / 18) | 8 / 14 ms (1 / 2 ms, 27 KB) |
+| default, 12 MP, Exposure, 1:1 (full frames, reported only) | 111 / 125 ms | 56 / 70 ms | 16 / 17 ms (16 / 17) | 40 / 53 ms (36 / 43 ms, 10.5 MB) |
+| default, 48 MP, Exposure, Fit | 29 / 43 ms | 16 / 28 ms | 7 / 12 ms (7 / 11) | 9 / 16 ms (1 / 1 ms, 20 KB) |
+| default, 48 MP, Temp, Fit | not measured: GPU out of memory | | | |
+| `WEBKIT_DISABLE_DMABUF_RENDERER=1`, 12 MP, Exposure, Fit | 107 / 126 ms | 60 / 76 ms | 24 / 23 ms (16 / 17) | 36 / 53 ms (15 / 16 ms, 39 KB) |
+| same, 12 MP, Temp, Fit | 93 / 124 ms | 57 / 74 ms | 22 / 23 ms (10 / 23) | 35 / 51 ms (15 / 17 ms, 27 KB) |
+| same, 12 MP, Exposure, 1:1 (reported only) | 144 / 155 ms | 88 / 94 ms | 33 / 32 ms (28 / 29) | 55 / 62 ms (51 / 56 ms, 10.5 MB) |
+| same, 48 MP, Exposure, Fit | 94 / 109 ms | 59 / 73 ms | 24 / 24 ms (16 / 17) | 35 / 49 ms (15 / 16 ms, 20 KB) |
+| same, 48 MP, Temp, Fit | not measured: GPU out of memory | | | |
+| PRIME offload to the NVIDIA GPU | did not start: `Could not create GBM EGL display: EGL_SUCCESS. Aborting...` (exit 134) | | | |
+
+`genzo-cli bench gpu` on the same machine (2560 × 1440 frames, 30 steps per row):
+
+| Slider | Raw size | GPU p50 | GPU p95 | Engine p50 | Engine p95 |
+|---|---|---|---|---|---|
+| Exposure drag | 48 MP | 0.33 ms | 0.34 ms | 11.2 ms | 18.9 ms |
+| Exposure drag, preview | 48 MP | 0.47 ms | 0.47 ms | 4.0 ms | 5.6 ms |
+| White balance drag | 48 MP | 1.10 ms | 1.10 ms | 11.8 ms | 18.0 ms |
+| White balance drag, preview | 48 MP | 1.24 ms | 1.24 ms | 5.4 ms | 6.5 ms |
+| White balance settled (once per release) | 48 MP | 42.3 ms | 42.5 ms | 54.1 ms | 63.2 ms |
+| Exposure drag | 12 MP | 0.33 ms | 0.33 ms | 11.2 ms | 17.8 ms |
+| Exposure drag, preview | 12 MP | 0.47 ms | 0.47 ms | 4.5 ms | 5.8 ms |
+| White balance drag | 12 MP | 1.10 ms | 1.10 ms | 11.9 ms | 12.2 ms |
+| White balance drag, preview | 12 MP | 1.24 ms | 1.24 ms | 6.0 ms | 6.6 ms |
+| White balance settled (once per release) | 12 MP | 11.1 ms | 11.6 ms | 23.3 ms | 23.7 ms |
+
+Loading the synthetic raw took 126 ms at 12 MP and 516 ms at 48 MP.
+
+- **In the default mode the gate passes in the three gated cases that ran: 31 to 43 ms p95 against 50 ms.** The fourth gated case (48 MP, Temp) was not measured, because the GPU ran out of memory (below). That leaves less room than macOS (32 ms) or Windows (18.4 ms): the worst samples reach 44 to 45 ms. The case should be run again once a failed allocation no longer kills the render thread.
+- **The default mode is the one to ship; turning DMABUF off makes everything slower here** (109 to 126 ms p95, a fail). That is the opposite of the MX110 dry run, where the no-DMABUF runs were faster than the watched default run. The split shows the cost is not only in the webview: the engine itself takes 16 ms instead of 7, the IPC about 8 ms instead of under 1, and a 39 KB fetch 15 ms instead of 1. One possible cause, not checked: with DMABUF off, WebKit's web process draws on the NVIDIA GPU too (`nvidia-smi` lists `WebKitWebProcess` there only in that mode), so it competes with the render thread.
+- **The custom URI scheme is not the problem it looked like in the dry run.** In the default mode a 20 to 39 KB preview fetch takes 1 to 2 ms, and 10.5 MB at 1:1 takes 36 to 43 ms (about 270 MB/s). The 11 to 15 ms small fetches seen on the MX110 appear only with DMABUF off, here as there. Full frames at 1:1 stay slow on Linux (111 / 125 ms), which is the 1:1 item already open for M1.
+- **48 MP runs out of GPU memory on 4 GB in the app**, as it did on 2 GB: `wgpu error: Out of Memory` on the render thread, in both modes, during the 48 MP Temp case after the 48 MP Exposure drags had worked. With the 12 MP image loaded, the app already held 1.0 to 1.2 GB (`nvidia-smi`). The cause was found afterwards (see "GPU memory before and after the fix" below): loading an image allocated the new textures while the old ones were still held, so the 48 MP reload at the start of the Temp case briefly needed two 48 MP images, about 5.3 GB. Fixed in PR #22, which also turns a failed allocation into an error instead of a dead render thread. Tiling the full-resolution intermediates (finding 2 in 0.D) is still the M1 item.
+- **One request alone takes about 16 ms at p50** on a 120 Hz display, two display frames. Whether WebKitGTK paces animation frames at 60 Hz here was not checked.
+- **The kit's PRIME offload variant does not work on this setup**: WebKit aborts at start, unable to create a GBM EGL display with the NVIDIA EGL vendor forced. It is not needed (the engine already renders on the NVIDIA GPU), but the kit should either drop the variant or detect the failure and say it was skipped.
+- GPU time per drag step is 0.33 to 1.24 ms, three to four times the desktop RTX 3060, and the settled white balance render takes 42 ms at 48 MP, about twice the RTX 3060.
+
+### GPU memory before and after the fix (Windows, RTX 3060, 2026-10-17)
+
+Both Linux laptops ran out of GPU memory in the 48 MP Temp case. PR #22 frees the old image's textures before allocating the new ones, and catches device errors on the render thread. To check whether 48 MP now fits in 4 GB before the next Linux run, the Windows kits from before (5755b0b) and after the fix (aa6a785) ran the same autobench on the owner's RTX 3060 (12 GB), with `genzo.exe`'s dedicated GPU memory (the Windows `GPU Process Memory` counter) sampled every 0.3 s:
+
+| Stage | Before the fix | After the fix |
+|---|---|---|
+| 12 MP cases | 1.22 GB | 0.71 GB |
+| 48 MP cases | 2.99 GB | 2.74 GB |
+| Peak | **5.32 GB**, a short spike at the start of the 48 MP Temp case | **2.74 GB**, no spike |
+
+- **The spike was one extra 48 MP image** (about 2.3 GB): the autobench loads the image again for each case, and the old `set_image` held both copies for a moment. That is the case that died on both Linux laptops. The 12 MP stage shows the same doubling, smaller.
+- **The Windows figures carry over to Linux**: with the 12 MP image loaded, the RTX 3050 laptop reported 1,222 MiB before the fix and this machine 1,221 MiB. The new peak of 2.74 GB, plus about 0.1 GB for WebKit and the desktop, leaves about 1.2 GB of a 4 GB card free. The 0.3 s sampling could miss a shorter spike; none showed after the fix.
+- All five cases ran on both kits (12 GB is enough either way), with the same latency as before, about 22 ms p95 at Fit.
+- This is an estimate for the 4 GB card, not a run on it; the rerun of the Linux kit (aa6a785) on the RTX 3050 laptop decides the 48 MP Temp case.
+
 ### Linux dry run: Ubuntu 24.04, WebKitGTK 2.52.6, X11, GeForce MX110 2 GB (2026-10-16)
 
 The owner's laptop, a weak hybrid GPU (Intel UHD plus MX110), used to test the kit. These numbers do not decide the gate, but they point at where Linux loses time. Release build, 2560 × 1440 frame, synthetic 12 MP raw, half-size JPEG preview while dragging:
@@ -390,7 +448,7 @@ How to read it: the gate number (input to pixels) is timed like on Windows, from
   - decode, upload and the animation frame take the remaining 15 to 25 ms.
   The custom scheme is the clearest Linux-specific cost. A Tauri binary channel or fewer round trips (the frame bytes with the event) are the next things to try if the friend's machine shows the same pattern.
 - **The default mode does draw** (corrected 2026-10-16). The first default-mode runs drew no frame at all, but they ran with nobody at the laptop. Run again with the owner watching, the image changed and every case drew its 164 to 200 frames. The likely cause is a blanked or locked display: WebKitGTK then stops drawing in the DMABUF mode, while the no-DMABUF runs kept drawing. That is not confirmed, but a tester walking away would lose the run, so the kit now keeps the screen awake (`gnome-session-inhibit` or `systemd-inhibit`, `caffeinate`, `SetThreadExecutionState`) and the report flags a case whose page was hidden.
-- **The watched default-mode run was slower** than the no-DMABUF runs (181 to 215 ms p95 at Fit, against 82 to 89), mostly between `renderFinished` and the draw, while the frame fetch was faster (4 to 9 ms). The conditions differed (a person at the machine, other apps open, a different hour), so this needs a repeat on an idle machine before it says anything about the DMABUF renderer.
+- **The watched default-mode run was slower** than the no-DMABUF runs (181 to 215 ms p95 at Fit, against 82 to 89), mostly between `renderFinished` and the draw, while the frame fetch was faster (4 to 9 ms). The conditions differed (a person at the machine, other apps open, a different hour), so this needs a repeat on an idle machine before it says anything about the DMABUF renderer. (The RTX 3050 run above points the other way: there the default mode is much faster.)
 - **48 MP runs out of GPU memory** on 2 GB (`wgpu error: Out of Memory`), and the panic stops the render thread for good. With only the 12 MP image loaded the app already holds about 1.5 GB of GPU memory (`nvidia-smi`). That matches the 48 MP GPU memory item flagged for M1. A failed allocation should become an error, not a dead render thread.
 - `performance.now()` has 1 ms resolution in WebKitGTK, so these samples are whole milliseconds.
 - WebKit masks the WebGL renderer ("Apple GPU"), so the kit records the page's GPU from `glxinfo` and `eglinfo` instead.
