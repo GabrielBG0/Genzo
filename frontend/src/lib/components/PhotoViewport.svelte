@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Engine } from '../engine/types';
-  import { decodeFrame, isJpeg } from '../engine/tiles';
+  import { putFrame } from '../viewport/frame';
   import type { Viewport, Zoom } from '../viewport/types';
   import { WebGLViewport } from '../viewport/webgl';
 
@@ -59,25 +59,9 @@
     return eng.onEvent(async (event) => {
       if (event.type !== 'renderFinished' || !viewport) return;
       if (event.generation < viewport.generation) return;
-      const tiles = decodeFrame(await eng.fetchFrame(event.generation));
-      let drawn: boolean;
-      if (tiles.some((t) => isJpeg(t.header.format))) {
-        // A drag preview: JPEG bands, decoded by the webview in parallel.
-        // The bitmaps keep the file's pixel values (no color conversion).
-        const images = await Promise.all(
-          tiles.map(async ({ header, pixels }) => ({
-            header,
-            image: await createImageBitmap(new Blob([pixels.slice()], { type: 'image/jpeg' }), {
-              colorSpaceConversion: 'none',
-            }),
-          })),
-        );
-        drawn = viewport?.putImages(images) ?? false;
-        for (const { image } of images) image.close();
-      } else {
-        drawn = viewport?.putTiles(tiles) ?? false;
-      }
-      if (drawn) {
+      const bytes = await eng.fetchFrame(event.generation);
+      if (!viewport) return;
+      if (await putFrame(viewport, bytes)) {
         hasFrame = true;
         schedule(event.generation);
       }

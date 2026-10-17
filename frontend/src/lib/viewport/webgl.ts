@@ -128,8 +128,12 @@ export class WebGLViewport implements Viewport {
 
   private setColorSpace(space: PredefinedColorSpace) {
     // The webview converts to the monitor profile (spec: v1 color policy).
+    // `unpackColorSpace` stays sRGB: every frame's bytes are already encoded
+    // in its space and must upload unchanged. Raw tiles ignore it, but a
+    // decoded JPEG preview counts as sRGB, and with 'display-p3' here WebView2
+    // converts a P3 preview to P3 a second time, which desaturates it (found
+    // by the color probe, up to 15 of 255).
     if (this.gl.drawingBufferColorSpace !== space) this.gl.drawingBufferColorSpace = space;
-    if (this.gl.unpackColorSpace !== space) this.gl.unpackColorSpace = space;
   }
 
   setTransform(t: ViewTransform): void {
@@ -153,6 +157,38 @@ export class WebGLViewport implements Viewport {
     gl.uniform2f(this.uScale, p.scaleX, p.scaleY);
     gl.uniform2f(this.uOffset, p.offsetX, p.offsetY);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  }
+
+  /**
+   * Draws, then reads the drawing buffer back: the mean RGB of the
+   * (2r+1)² square around each point (normalized canvas coordinates, top
+   * left 0,0). The values are in the drawing buffer's color space, before
+   * the webview converts to the monitor. For the color probe.
+   */
+  readPixels(points: [number, number][], r = 2): [number, number, number][] {
+    const gl = this.gl;
+    this.draw();
+    const side = 2 * r + 1;
+    const px = new Uint8Array(side * side * 4);
+    return points.map(([nx, ny]) => {
+      const x = Math.round(nx * this.canvas.width) - r;
+      // WebGL rows start at the bottom.
+      const y = Math.round((1 - ny) * this.canvas.height) - r;
+      gl.readPixels(x, y, side, side, gl.RGBA, gl.UNSIGNED_BYTE, px);
+      let [r0, g0, b0] = [0, 0, 0];
+      for (let i = 0; i < px.length; i += 4) {
+        r0 += px[i] ?? 0;
+        g0 += px[i + 1] ?? 0;
+        b0 += px[i + 2] ?? 0;
+      }
+      const n = side * side;
+      return [r0 / n, g0 / n, b0 / n];
+    });
+  }
+
+  /** The color spaces the webview actually kept, after `setColorSpace`. */
+  colorSpaces(): { drawing: string; unpack: string } {
+    return { drawing: String(this.gl.drawingBufferColorSpace), unpack: String(this.gl.unpackColorSpace) };
   }
 
   destroy(): void {

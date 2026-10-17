@@ -274,6 +274,14 @@ for f in sorted(out.glob("app-*.json")):
             print("      the page was hidden during this case: these numbers are suspect")
         for err in c.get("pageErrors", []):
             print(f"      page error: {err}")
+    col = r.get("color")
+    if col:
+        s = col["support"]
+        print(f"  colors: display gamut {s['displayGamut']}, P3 canvas {'yes' if s['drawingBufferColorSpace'] else 'NO'}")
+        for p in col["paths"]:
+            print(f"    {p['format']:15} max error {p['maxError']:.1f}  {'ok' if p['pass'] else 'WRONG'}")
+        if col.get("error"):
+            print(f"    color check failed: {col['error']}")
 EOF
 fi
 ARCHIVE="$KIT/genzo-bench-results-$OS_NAME-$COMMIT-$STAMP.tar.gz"

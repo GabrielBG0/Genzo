@@ -306,12 +306,36 @@ Caveats, to settle before this counts as final:
 
   That adds at most about 7 ms, so the expected figure is about 19 to 26 ms p95. It is an estimate from measured parts, not an end-to-end measurement: the spike cannot load a real image, so real-photo latency in the app has not been measured. The conclusion is unchanged: the preview stays well under 50 ms p95 on Windows, and the full-size JPEG alternative would not have (about 40 ms before the probe's queueing).
 - **macOS passes** (M1 Max and base M1, below). **Linux passes in WebKitGTK's default mode** on an RTX 3050 laptop, in the three gated cases it could measure (31 to 43 ms p95); the fourth ran out of GPU memory. The dry run on a weak laptop is below too.
-- **Display P3 previews** are drawn as untagged bitmaps, so their colors are approximate during a drag. The spike only sends sRGB; the color check (step 5) is still open.
+- **Display P3 frames** are checked by the color probe (step 5, below). It found that WebView2 desaturated P3 drag previews, now fixed. The app itself still requests sRGB frames.
 - **At 1:1 zoom** the preview is not used (it would show at the wrong scale), so a 1:1 drag still sends full frames. That case needs its own answer in M1 (send only the visible region).
 - **The settled frame** still moves 11 MB raw, about 90 ms. Nobody waits on it during a drag, but it is the next thing to compress if the pause after release feels slow.
 - The CI bench gate has no baseline for the new `... preview` cases yet; they are reported as new until the baseline is refreshed.
 
-**macOS and Linux have no DevTools attach**, so the script above does not work there. Instead the app benchmarks itself: started with `GENZO_AUTOBENCH=FILE` (contract 0.4.0), it runs the same drag protocol with synthetic input and writes a JSON report (`frontend/src/lib/spike/autobench.ts`). The Linux bench kit (`scripts/bench-kit/`, built by the "Bench kit" workflow on ubuntu-22.04) wraps it for testers: it records the hardware, runs `cli bench gpu`, then runs the app in each WebKitGTK drawing mode. Color handling (sRGB and Display P3 tagged frames, step 5) is still open.
+**macOS and Linux have no DevTools attach**, so the script above does not work there. Instead the app benchmarks itself: started with `GENZO_AUTOBENCH=FILE` (contract 0.4.0), it runs the same drag protocol with synthetic input and writes a JSON report (`frontend/src/lib/spike/autobench.ts`). The Linux bench kit (`scripts/bench-kit/`, built by the "Bench kit" workflow on ubuntu-22.04) wraps it for testers: it records the hardware, runs `cli bench gpu`, then runs the app in each WebKitGTK drawing mode. After the cases, the app runs the color probe (step 5, below).
+
+### Color handling: sRGB and Display P3 frames (step 5)
+
+The app tags each frame with its encoding (`rgba8Srgb`, `rgba8DisplayP3`, and the JPEG previews `jpegSrgb`, `jpegDisplayP3`), and the WebGL viewport sets the canvas's `drawingBufferColorSpace` to match, so the webview converts to the monitor (the spec's v1 color policy). Two paths can go wrong in different ways:
+
+- **Raw RGBA8 tiles** upload as typed arrays, which no color setting touches. They are right as long as the webview honors `drawingBufferColorSpace`. If it ignores it, P3 values show as sRGB, too saturated. Reading the canvas back cannot see that, so the probe records whether the setting sticks.
+- **JPEG previews** are decoded by the webview into bitmaps and uploaded as images, which a webview may color-convert on the way in. A wrong conversion changes the values in the canvas, which reading back does see.
+
+**The color probe** (`frontend/src/lib/spike/colorProbe.ts`) runs at the end of every autobench, after the gated cases, so it does not change their numbers. It loads a small synthetic scene (1200 × 800), renders it four ways (raw and JPEG, sRGB and P3), draws each through the viewport's own upload path into a detached canvas, and reads back the centers of the scene's 12 flat patches. The engine's raw bytes at the same points are the truth. A path passes within 2 codes (raw) or 6 codes (JPEG). It also records whether `drawingBufferColorSpace` keeps 'display-p3' and the display's gamut (CSS `color-gamut`). The bench kit summaries print one line per path. Read-back happens before the compositor, so no wide-gamut monitor is needed for this part.
+
+**Windows 11, WebView2, RTX 3060, sRGB monitor (2026-10-17):**
+
+| Path | Before the fix | After the fix |
+|---|---|---|
+| raw sRGB | 0 | 0 |
+| JPEG sRGB | 1 | 1 |
+| raw P3 | 0 | 0 |
+| JPEG P3 | **15, wrong** | 1 |
+
+Largest error per channel, in 8-bit codes. For scale, the same patches differ by up to 25 codes between their sRGB and P3 encodings. `drawingBufferColorSpace` keeps 'display-p3'.
+
+- **The bug: WebView2 converted P3 previews a second time.** The viewport set `unpackColorSpace` to the frame's space as well. A decoded JPEG bitmap counts as sRGB, so with 'display-p3' there WebView2 converted the already-P3 values from sRGB to P3 again, and the preview came out desaturated (a red patch at 159 read back as 151). Setting `UNPACK_COLORSPACE_CONVERSION_WEBGL` to `NONE` did not stop it. **The fix:** `unpackColorSpace` stays sRGB for every frame, so nothing converts at upload. Raw tiles ignore it either way.
+- The gated latency cases ran unchanged in the same runs (25 to 31 ms p95 in the autobench on this machine, as before).
+- **Still open:** the probe on macOS (WKWebView) and Linux (WebKitGTK), from the next bench kit runs; whether WebKitGTK keeps `drawingBufferColorSpace` is the open question there. And one look by a person at a P3 display (the Mac): an sRGB red and a P3 red side by side should differ there, and match on an sRGB display.
 
 ### macOS 26.3, M1 Max, WKWebView (WebKit 21623.2.7), bench kit 7a40671 (2026-10-16)
 

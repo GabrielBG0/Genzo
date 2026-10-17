@@ -13,6 +13,7 @@
 import type { EngineInfo } from '$contract/genzo';
 import type { Engine } from '../engine/types';
 import type { Zoom } from '../viewport/types';
+import type { ColorProbeResult } from './colorProbe';
 
 export type AutobenchSlider = 'Exposure' | 'Temp';
 
@@ -138,6 +139,8 @@ export interface AutobenchReport {
   engine: EngineInfo;
   page: { userAgent: string; devicePixelRatio: number; window: [number, number]; webgl: string | null };
   cases: CaseResult[];
+  /** The color check, run after the cases (0.E step 5). Absent in reports from before it existed. */
+  color?: ColorProbeResult;
 }
 
 /** Round trips through the transport, recorded by {@link timedEngine}. */
