@@ -95,6 +95,7 @@ The criterion benchmark (`cargo bench -p genzo-pipeline --bench spike`, 12 MP, R
 
 - lavapipe: the CI `gpu` job runs the tests on Ubuntu 22.04's mesa. Its first result has not been seen yet.
 - macOS (Metal, M1 Max): measured with the bench kit, see 0.E. Exposure and white balance drags take 0.25 to 0.71 ms of GPU time at 12 and 48 MP; the settled white balance render takes 7 ms at 12 MP and 26 ms at 48 MP.
+- macOS (Metal, base M1, 7 GPU cores, 8 GB): measured with the bench kit, see 0.E. Drags take 1.2 to 4.7 ms of GPU time (p50) at 12 and 48 MP, about 4 to 5 times the M1 Max, in line with its 7 GPU cores against 32. The settled white balance render takes 34 ms at 12 MP and 124 ms (p95 137 ms) at 48 MP; at 48 MP that pause after release is long enough to notice, which adds weight to finding 5.
 - Linux hardware: only the MX110 dry run (see 0.E); the RTX 3050 run is pending.
 - Real raw files instead of the synthetic scene arrive with 0.C (rawler).
 
@@ -304,7 +305,7 @@ Caveats, to settle before this counts as final:
   - Decode and upload: 3.5 to 5.3 ms on photos, against an unmeasured but smaller figure for the smooth frame, so at most about 2 ms more.
 
   That adds at most about 7 ms, so the expected figure is about 19 to 26 ms p95. It is an estimate from measured parts, not an end-to-end measurement: the spike cannot load a real image, so real-photo latency in the app has not been measured. The conclusion is unchanged: the preview stays well under 50 ms p95 on Windows, and the full-size JPEG alternative would not have (about 40 ms before the probe's queueing).
-- **macOS passes** (M1 Max, below). Linux is pending; the dry run on a weak laptop is below too.
+- **macOS passes** (M1 Max and base M1, below). Linux is pending; the dry run on a weak laptop is below too.
 - **Display P3 previews** are drawn as untagged bitmaps, so their colors are approximate during a drag. The spike only sends sRGB; the color check (step 5) is still open.
 - **At 1:1 zoom** the preview is not used (it would show at the wrong scale), so a 1:1 drag still sends full frames. That case needs its own answer in M1 (send only the visible region).
 - **The settled frame** still moves 11 MB raw, about 90 ms. Nobody waits on it during a drag, but it is the next thing to compress if the pause after release feels slow.
@@ -329,6 +330,42 @@ A friend's MacBook Pro (M1 Max, 32 GPU cores, 64 GB, on AC power, built-in Liqui
 - **The custom URI scheme is fast in WKWebView**: 10.5 MB in 4 to 5 ms (about 2 GB/s), against about 200 MB/s in WebKitGTK on the Linux laptop. Full frames at 1:1 are no problem here.
 - 48 MP fits easily in 64 GB of unified memory; GPU time per drag step is under 1 ms (0.D above).
 - The input is synthetic. Running the autobench once on the Windows machine of the 18.4 ms result would check that it agrees with the DevTools measurement.
+
+### macOS 26.6, base M1, WKWebView (WebKit 21624.5.1), bench kit 5755b0b (2026-10-17)
+
+A MacBook with the base M1 (8 CPU cores, 7 GPU cores, 8 GB), on battery with low power mode off, built-in 2560 × 1600 Retina display. Release build from the bench kit, synthetic input (autobench), 2560 × 1440 frame. The tester saw the image change. This is the weakest Apple silicon machine the app is likely to meet.
+
+| Case | Input → pixels p50 / p95 | One request alone, p50 / p95 | of which: send to event (engine) | event to draw (fetch, size) |
+|---|---|---|---|---|
+| 12 MP, Exposure, Fit | 23 / 32 ms | 17 / 18 ms | 5 / 5 ms (3 / 4) | 12 / 13 ms (0 / 1 ms, 39 KB) |
+| 12 MP, Temp, Fit | 22 / 32 ms | 17 / 18 ms | 6 / 6 ms (5 / 6) | 11 / 12 ms (0 / 1 ms, 27 KB) |
+| 12 MP, Exposure, 1:1 (full frames) | 27 / 32 ms | 17 / 18 ms | 5 / 5 ms (4 / 5) | 12 / 13 ms (3 / 4 ms, 10.5 MB) |
+| 48 MP, Exposure, Fit | 23 / 32 ms | 17 / 17 ms | 5 / 4 ms (3 / 4) | 12 / 13 ms (0 / 1 ms, 20 KB) |
+| 48 MP, Temp, Fit | 26 / 32 ms | 17 / 18 ms | 6 / 5 ms (5 / 5) | 11 / 13 ms (0 / 1 ms, 17 KB) |
+
+`genzo-cli bench gpu` on the same machine (2560 × 1440 frames, 30 steps per row):
+
+| Slider | Raw size | GPU p50 | GPU p95 | Engine p50 | Engine p95 |
+|---|---|---|---|---|---|
+| Exposure drag | 48 MP | 1.18 ms | 1.35 ms | 6.5 ms | 16.0 ms |
+| Exposure drag, preview | 48 MP | 1.59 ms | 2.12 ms | 5.0 ms | 8.6 ms |
+| White balance drag | 48 MP | 4.03 ms | 4.49 ms | 15.3 ms | 17.8 ms |
+| White balance drag, preview | 48 MP | 3.97 ms | 4.48 ms | 7.2 ms | 8.2 ms |
+| White balance settled (once per release) | 48 MP | 124.4 ms | 136.5 ms | 136.1 ms | 147.0 ms |
+| Exposure drag | 12 MP | 1.17 ms | 1.35 ms | 6.1 ms | 8.6 ms |
+| Exposure drag, preview | 12 MP | 1.63 ms | 2.01 ms | 5.1 ms | 5.5 ms |
+| White balance drag | 12 MP | 3.53 ms | 3.98 ms | 9.3 ms | 15.3 ms |
+| White balance drag, preview | 12 MP | 4.69 ms | 7.06 ms | 8.6 ms | 12.9 ms |
+| White balance settled (once per release) | 12 MP | 33.9 ms | 37.5 ms | 43.4 ms | 46.3 ms |
+
+Loading the synthetic raw took 47 ms at 12 MP and 181 ms at 48 MP.
+
+- **The gate passes on the base M1 too: 32 ms p95 against 50 ms**, the same as the M1 Max (33 ms), in every case, 1:1 included. macOS needs no ladder step on any Apple silicon Mac.
+- **The display still sets the pace.** One request takes 17 to 18 ms, one 60 Hz frame, as on the M1 Max. The engine and IPC take 5 to 6 ms here against about 3 ms there, which still fits inside the frame. The lower p50 (22 to 27 ms against 32) comes from the samples landing at different points of the 60 Hz cycle (they alternate between about 21, 28 and 32 ms); with 1 ms timer resolution and a p95 that matches, it is not a real speedup.
+- **GPU time is 4 to 5 times the M1 Max**, about the ratio of GPU cores (7 against 32), and still far under the 16 ms target for every drag. The settled white balance render is the cost that shows: 124 ms at 48 MP, so the image would take about an eighth of a second to sharpen after release. Tiling and a cheaper first pass for the visible area (finding 5 in 0.D) are the fix; this machine is the one to check it on.
+- **48 MP fits in 8 GB of unified memory.** The spike keeps about 2.4 GB of intermediates at 48 MP (finding 2 in 0.D); the run finished without errors. The M1 budget of under 1 GB matters most on machines like this one.
+- **The custom URI scheme stays fast**: 10.5 MB in 3 to 4 ms at 1:1.
+- The run was on battery. macOS does not throttle the M1 much on battery without low power mode, but numbers on AC could be slightly better.
 
 ### Linux dry run: Ubuntu 24.04, WebKitGTK 2.52.6, X11, GeForce MX110 2 GB (2026-10-16)
 
