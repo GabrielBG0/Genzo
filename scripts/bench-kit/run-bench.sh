@@ -16,7 +16,9 @@
 # Options: --no-questions  skip the "did the image change?" questions
 #          --app-timeout S  give up on one app run after S seconds (default 600)
 #          --skip-cli       skip step 3
-#          --only NAME      run one app variant: default, no-dmabuf or nvidia-offload
+#          --only NAME      run one app variant: default, no-dmabuf, or nvidia-offload
+#                           (offload only runs when asked: it aborted at start on the
+#                           RTX 3050 laptop, and the engine uses the NVIDIA GPU anyway)
 set -uo pipefail
 
 KIT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -168,7 +170,7 @@ done
 VARIANTS=("default|")
 [ "$OS" = Darwin ] || VARIANTS+=("no-dmabuf|WEBKIT_DISABLE_DMABUF_RENDERER=1")
 GPU_COUNT="$(lspci 2>/dev/null | grep -Eic 'vga|3d|display' || true)"
-if [ "$OS" != Darwin ] && have nvidia-smi && [ "${GPU_COUNT:-0}" -gt 1 ]; then
+if [ "$ONLY" = nvidia-offload ] && [ "$OS" != Darwin ] && have nvidia-smi && [ "${GPU_COUNT:-0}" -gt 1 ]; then
   # Hybrid laptop: also draw the page on the NVIDIA GPU instead of the integrated one.
   prime="__NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia __VK_LAYER_NV_optimus=NVIDIA_only"
   for f in /usr/share/glvnd/egl_vendor.d/10_nvidia.json /etc/glvnd/egl_vendor.d/10_nvidia.json; do
@@ -213,6 +215,15 @@ for v in "${VARIANTS[@]}"; do
   elif have systemd-inhibit; then
     systemd-inhibit --what=idle:sleep --who="Genzo benchmark" --why="measuring" sleep "$APP_TIMEOUT" >/dev/null 2>&1 & awake=$!
   fi
+  # GPU memory of the app every 250 ms, for its peak: 48 MP ran out of
+  # memory on 4 GB before the fix in kit aa6a785.
+  # Per process where the driver lists the app (Vulkan apps usually show as
+  # C+G), and the whole card as a fallback.
+  samplers=""
+  if have nvidia-smi; then
+    nvidia-smi --query-compute-apps=timestamp,pid,used_memory --format=csv,noheader,nounits -lms 250       > "$OUT/app-$name.gpu-mem.csv" 2>/dev/null & samplers="$!"
+    nvidia-smi --query-gpu=timestamp,memory.used --format=csv,noheader,nounits -lms 250       > "$OUT/app-$name.gpu-mem-card.csv" 2>/dev/null & samplers="$samplers $!"
+  fi
   status="timeout"
   snapped=0
   while :; do
@@ -231,6 +242,13 @@ for v in "${VARIANTS[@]}"; do
   kill "$pid" 2>/dev/null; sleep 1; kill -9 "$pid" 2>/dev/null
   wait "$pid" 2>/dev/null
   [ -n "$awake" ] && kill "$awake" 2>/dev/null
+  # shellcheck disable=SC2086
+  [ -n "$samplers" ] && kill $samplers 2>/dev/null
+  if [ -n "$samplers" ]; then
+    app_peak="$(awk -F', *' -v pid="$pid" '$2 == pid && $3 + 0 > m { m = $3 + 0 } END { print m + 0 }' "$OUT/app-$name.gpu-mem.csv" 2>/dev/null)"
+    card_peak="$(awk -F', *' '$2 + 0 > m { m = $2 + 0 } END { print m + 0 }' "$OUT/app-$name.gpu-mem-card.csv" 2>/dev/null)"
+    echo "peak GPU memory: app ${app_peak:-0} MiB (0: not listed by the driver), whole card ${card_peak:-0} MiB"       | tee "$OUT/app-$name.gpu-mem-peak.txt"
+  fi
   seen="not asked"
   if [ "$ASK" = 1 ]; then
     read -r -p "Did the photo visibly change while the sliders moved? [y/n] " seen
@@ -274,6 +292,14 @@ for f in sorted(out.glob("app-*.json")):
             print("      the page was hidden during this case: these numbers are suspect")
         for err in c.get("pageErrors", []):
             print(f"      page error: {err}")
+    col = r.get("color")
+    if col:
+        s = col["support"]
+        print(f"  colors: display gamut {s['displayGamut']}, P3 canvas {'yes' if s['drawingBufferColorSpace'] else 'NO'}")
+        for p in col["paths"]:
+            print(f"    {p['format']:15} max error {p['maxError']:.1f}  {'ok' if p['pass'] else 'WRONG'}")
+        if col.get("error"):
+            print(f"    color check failed: {col['error']}")
 EOF
 fi
 ARCHIVE="$KIT/genzo-bench-results-$OS_NAME-$COMMIT-$STAMP.tar.gz"

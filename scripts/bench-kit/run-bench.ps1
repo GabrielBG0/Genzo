@@ -165,6 +165,15 @@ if (Test-Path $report) {
     if ($c.pageHidden) { Write-Host '      the page was hidden during this case: these numbers are suspect' }
     foreach ($e in $c.pageErrors) { Write-Host "      page error: $e" }
   }
+  if ($r.color) {
+    $s = $r.color.support
+    $yn = { param($v) if ($v) { 'yes' } else { 'NO' } }
+    Write-Host "  colors: display gamut $($s.displayGamut), P3 canvas $(& $yn $s.drawingBufferColorSpace)"
+    foreach ($p in $r.color.paths) {
+      Write-Host ('    {0,-15} max error {1:N1}  {2}' -f $p.format, $p.maxError, $(if ($p.pass) { 'ok' } else { 'WRONG' }))
+    }
+    if ($r.color.error) { Write-Host "    color check failed: $($r.color.error)" }
+  }
 }
 $archive = Join-Path $Kit "genzo-bench-results-windows-$Commit-$Stamp.zip"
 Compress-Archive -Path $Out -DestinationPath $archive -Force

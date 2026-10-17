@@ -12,6 +12,7 @@
   import type { Engine } from './engine/types';
   import { provideRegistry } from './shortcuts/context';
   import { runAutobench, timedEngine, type AutobenchDriver, type Diagnostics } from './spike/autobench';
+  import { runColorProbe } from './spike/colorProbe';
   import { LatencyProbe } from './spike/latency';
   import type { Zoom } from './viewport/types';
 
@@ -140,6 +141,9 @@
     const report = await runAutobench(driver, info, undefined, undefined, (done, total) => {
       autobench = `Autobench running, case ${Math.min(done + 1, total)} of ${total}. Do not touch or cover this window.`;
     });
+    // After the cases, so it cannot change their numbers. It loads its own small image.
+    autobench = 'Autobench: checking colors.';
+    report.color = await runColorProbe(engine);
     await engine.execute({ type: 'saveAutobenchReport', report: JSON.stringify(report, null, 2) });
     autobench = 'Autobench done. The report is saved; the script closes the app.';
   }
