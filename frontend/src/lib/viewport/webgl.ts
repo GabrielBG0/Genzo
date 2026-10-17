@@ -186,9 +186,16 @@ export class WebGLViewport implements Viewport {
     });
   }
 
-  /** The color spaces the webview actually kept, after `setColorSpace`. */
+  /**
+   * The color spaces the webview actually kept, after `setColorSpace`, or
+   * 'unsupported' where it does not implement the property (assigning one
+   * then only adds a plain JavaScript property, which reads back anyway).
+   */
   colorSpaces(): { drawing: string; unpack: string } {
-    return { drawing: String(this.gl.drawingBufferColorSpace), unpack: String(this.gl.unpackColorSpace) };
+    const proto: object = Object.getPrototypeOf(this.gl);
+    const read = (p: 'drawingBufferColorSpace' | 'unpackColorSpace') =>
+      p in proto ? String(this.gl[p]) : 'unsupported';
+    return { drawing: read('drawingBufferColorSpace'), unpack: read('unpackColorSpace') };
   }
 
   destroy(): void {

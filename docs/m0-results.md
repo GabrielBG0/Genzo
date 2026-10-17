@@ -336,7 +336,12 @@ Largest error per channel, in 8-bit codes. For scale, the same patches differ by
 
 - **The bug: WebView2 converted P3 previews a second time.** The viewport set `unpackColorSpace` to the frame's space as well. A decoded JPEG bitmap counts as sRGB, so with 'display-p3' there WebView2 converted the already-P3 values from sRGB to P3 again, and the preview came out desaturated (a red patch at 159 read back as 151). Setting `UNPACK_COLORSPACE_CONVERSION_WEBGL` to `NONE` did not stop it. **The fix:** `unpackColorSpace` stays sRGB for every frame, so nothing converts at upload. Raw tiles ignore it either way.
 - The gated latency cases ran unchanged in the same runs (25 to 31 ms p95 in the autobench on this machine, as before).
-- **Still open:** the probe on macOS (WKWebView) and Linux (WebKitGTK), from the next bench kit runs; whether WebKitGTK keeps `drawingBufferColorSpace` is the open question there. And one look by a person at a P3 display (the Mac): an sRGB red and a P3 red side by side should differ there, and match on an sRGB display.
+**macOS Tahoe 26.6.2, WKWebView, base M1, kit bfab0cd (2026-10-17):** all four paths read back within 1 code (raw 0, JPEG 1), so WKWebView uploads P3 previews unchanged. The gated latency cases ran in the same run at 32 ms p95 each, as in the earlier base M1 run.
+
+- **WKWebView has no `unpackColorSpace`** (it reads back as `undefined`), yet that kit reported it as supported: assigning an unknown property just adds a plain JavaScript property, which reads back fine. The probe now checks that the context implements the property before trusting the read-back, and reports 'unsupported' per path otherwise. The same blind spot applied to `drawingBufferColorSpace`, so this run does not prove WKWebView honors it, though Safari has supported it since 16.4. The Linux run needs the fixed probe for its answer.
+- The page reported an **sRGB display gamut** (`color-gamut`), on a MacBook whose built-in display covers P3. Not explained yet; the visual check below would show whether P3 reaches the screen.
+
+- **Still open:** the probe on Linux (WebKitGTK), where whether `drawingBufferColorSpace` is implemented is the open question; and one look by a person at a P3 display (the Mac): an sRGB red and a P3 red side by side should differ there, and match on an sRGB display.
 
 ### macOS 26.3, M1 Max, WKWebView (WebKit 21623.2.7), bench kit 7a40671 (2026-10-16)
 

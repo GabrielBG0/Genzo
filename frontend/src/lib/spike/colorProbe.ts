@@ -39,9 +39,9 @@ export const PATCHES: [number, number][] = [0.5, 0.7].flatMap((v) =>
 );
 
 export interface ColorSupport {
-  /** Setting `drawingBufferColorSpace` to 'display-p3' sticks. */
+  /** The webview implements `drawingBufferColorSpace` and keeps 'display-p3' in it. */
   drawingBufferColorSpace: boolean;
-  /** Setting `unpackColorSpace` to 'display-p3' sticks (recorded only; the viewport keeps it sRGB). */
+  /** The same for `unpackColorSpace` (recorded only; the viewport leaves it alone). */
   unpackColorSpace: boolean;
   /** The monitor's gamut, as CSS media queries report it. */
   displayGamut: 'rec2020' | 'p3' | 'srgb' | 'unknown';
@@ -73,10 +73,8 @@ export function colorSupport(): ColorSupport {
   try {
     const gl = document.createElement('canvas').getContext('webgl2');
     if (gl) {
-      gl.drawingBufferColorSpace = 'display-p3';
-      drawing = gl.drawingBufferColorSpace === 'display-p3';
-      gl.unpackColorSpace = 'display-p3';
-      unpack = gl.unpackColorSpace === 'display-p3';
+      drawing = keepsP3(gl, 'drawingBufferColorSpace');
+      unpack = keepsP3(gl, 'unpackColorSpace');
       gl.getExtension('WEBGL_lose_context')?.loseContext();
     }
   } catch {
@@ -85,6 +83,21 @@ export function colorSupport(): ColorSupport {
   const gamut = (g: string) => typeof matchMedia === 'function' && matchMedia(`(color-gamut: ${g})`).matches;
   const displayGamut = gamut('rec2020') ? 'rec2020' : gamut('p3') ? 'p3' : gamut('srgb') ? 'srgb' : 'unknown';
   return { drawingBufferColorSpace: drawing, unpackColorSpace: unpack, displayGamut };
+}
+
+/**
+ * Whether the context implements `property` and keeps 'display-p3' in it.
+ * Reading back alone is not enough: on an engine without the property, the
+ * assignment just adds a plain JavaScript property, which reads back fine
+ * (seen for `unpackColorSpace` on WKWebView).
+ */
+export function keepsP3(
+  gl: WebGL2RenderingContext,
+  property: 'drawingBufferColorSpace' | 'unpackColorSpace',
+): boolean {
+  if (!(property in Object.getPrototypeOf(gl))) return false;
+  gl[property] = 'display-p3';
+  return gl[property] === 'display-p3';
 }
 
 /** The RGB of raw tiles at a normalized point of the image. */
