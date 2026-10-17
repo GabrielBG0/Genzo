@@ -4,7 +4,7 @@ Measured results of the M0 feasibility spikes, against the exit gate in [develop
 
 ## 0.D GPU pipeline
 
-**Status: done on Windows (hardware and WARP). lavapipe runs in CI (`gpu` job); its first result is pending. macOS (M1 Max, base M1) and Linux (RTX 3050 laptop) are measured with the bench kit, see 0.E.**
+**Status: done on Windows (hardware and WARP). lavapipe runs in CI (`gpu` job) and passes on every PR. macOS (M1 Max, base M1) and Linux (RTX 3050 laptop) are measured with the bench kit, see 0.E.**
 
 ### What was built
 
@@ -45,14 +45,14 @@ The WGSL RCD is a port of darktable's `demosaic_rcd.cl` (GPL-3.0-or-later). The 
 - **Fine lines.** The lines band is a Bayer worst case: each anti-diagonal holds only green, or only red and blue samples. RCD itself renders it green-tinted, ΔE 18.6 from the truth in darktable's own code. It is therefore checked against the reference, not against the truth.
 - **Against the true scene** (`reproduces_the_scene`): smooth regions measure 51 dB PSNR with mean ΔE 0.05. With every patch edge included, 41 dB with mean ΔE 0.13.
 
-### Golden-image tests: a deviation to confirm
+### Golden-image tests: the M0 deviation (confirmed 2026-10-17)
 
 CLAUDE.md asks for golden-image tests, with ΔE2000 and PSNR tolerances and lavapipe as the reference device. **No golden images are stored yet.** The tests compare instead against:
 
 - the synthetic scene's ground truth (PSNR and ΔE2000)
 - the literal CPU port of darktable's `rcd.c` (ΔE2000)
 
-Both hold on any adapter, and neither depends on a render someone stored. Stored goldens rendered on lavapipe can be added once the CI `gpu` job has run. The project owner should confirm this approach or ask for stored goldens.
+Both hold on any adapter, and neither depends on a render someone stored. **The owner accepted this for M0 only** (2026-10-17). From M1, every stage gets stored golden images rendered on lavapipe as well, and keeps these ground-truth tests; see the plan's Decided table.
 
 ### GPU time per slider change at 2560 px (target: under 16 ms)
 
@@ -93,7 +93,7 @@ The criterion benchmark (`cargo bench -p genzo-pipeline --bench spike`, 12 MP, R
 
 ### Open
 
-- lavapipe: the CI `gpu` job runs the tests on Ubuntu 22.04's mesa. Its first result has not been seen yet.
+- lavapipe: the CI `gpu` job runs the GPU tests on Ubuntu 22.04's mesa on every PR, and they pass. Its bench numbers are the baseline for the CI performance gate (`benchmarks/baseline-lavapipe.json`).
 - macOS (Metal, M1 Max): measured with the bench kit, see 0.E. Exposure and white balance drags take 0.25 to 0.71 ms of GPU time at 12 and 48 MP; the settled white balance render takes 7 ms at 12 MP and 26 ms at 48 MP.
 - macOS (Metal, base M1, 7 GPU cores, 8 GB): measured with the bench kit, see 0.E. Drags take 1.2 to 4.7 ms of GPU time (p50) at 12 and 48 MP, about 4 to 5 times the M1 Max, in line with its 7 GPU cores against 32. The settled white balance render takes 34 ms at 12 MP and 124 ms (p95 137 ms) at 48 MP; at 48 MP that pause after release is long enough to notice, which adds weight to finding 5.
 - Linux (Vulkan, GeForce RTX 3050 Laptop, 4 GB): measured with the bench kit, see 0.E. Drags take 0.33 to 1.24 ms of GPU time at 12 and 48 MP; the settled white balance render takes 11 ms at 12 MP and 42 ms at 48 MP.
