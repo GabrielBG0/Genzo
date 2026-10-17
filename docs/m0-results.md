@@ -405,10 +405,25 @@ Loading the synthetic raw took 126 ms at 12 MP and 516 ms at 48 MP.
 - **In the default mode the gate passes in the three gated cases that ran: 31 to 43 ms p95 against 50 ms.** The fourth gated case (48 MP, Temp) was not measured, because the GPU ran out of memory (below). That leaves less room than macOS (32 ms) or Windows (18.4 ms): the worst samples reach 44 to 45 ms. The case should be run again once a failed allocation no longer kills the render thread.
 - **The default mode is the one to ship; turning DMABUF off makes everything slower here** (109 to 126 ms p95, a fail). That is the opposite of the MX110 dry run, where the no-DMABUF runs were faster than the watched default run. The split shows the cost is not only in the webview: the engine itself takes 16 ms instead of 7, the IPC about 8 ms instead of under 1, and a 39 KB fetch 15 ms instead of 1. One possible cause, not checked: with DMABUF off, WebKit's web process draws on the NVIDIA GPU too (`nvidia-smi` lists `WebKitWebProcess` there only in that mode), so it competes with the render thread.
 - **The custom URI scheme is not the problem it looked like in the dry run.** In the default mode a 20 to 39 KB preview fetch takes 1 to 2 ms, and 10.5 MB at 1:1 takes 36 to 43 ms (about 270 MB/s). The 11 to 15 ms small fetches seen on the MX110 appear only with DMABUF off, here as there. Full frames at 1:1 stay slow on Linux (111 / 125 ms), which is the 1:1 item already open for M1.
-- **48 MP runs out of GPU memory on 4 GB in the app**, as it did on 2 GB: `wgpu error: Out of Memory` on the render thread, in both modes, during the 48 MP Temp case after the 48 MP Exposure drags had worked. With the 12 MP image loaded, the app already held 1.0 to 1.2 GB (`nvidia-smi`). The CLI rendered every 48 MP case, settled white balance included, on the same GPU, so the app's case is close to the limit rather than far over it. Both M1 items stand: tile the full-resolution intermediates (finding 2 in 0.D), and turn a failed allocation into an error instead of a dead render thread.
+- **48 MP runs out of GPU memory on 4 GB in the app**, as it did on 2 GB: `wgpu error: Out of Memory` on the render thread, in both modes, during the 48 MP Temp case after the 48 MP Exposure drags had worked. With the 12 MP image loaded, the app already held 1.0 to 1.2 GB (`nvidia-smi`). The cause was found afterwards (see "GPU memory before and after the fix" below): loading an image allocated the new textures while the old ones were still held, so the 48 MP reload at the start of the Temp case briefly needed two 48 MP images, about 5.3 GB. Fixed in PR #22, which also turns a failed allocation into an error instead of a dead render thread. Tiling the full-resolution intermediates (finding 2 in 0.D) is still the M1 item.
 - **One request alone takes about 16 ms at p50** on a 120 Hz display, two display frames. Whether WebKitGTK paces animation frames at 60 Hz here was not checked.
 - **The kit's PRIME offload variant does not work on this setup**: WebKit aborts at start, unable to create a GBM EGL display with the NVIDIA EGL vendor forced. It is not needed (the engine already renders on the NVIDIA GPU), but the kit should either drop the variant or detect the failure and say it was skipped.
 - GPU time per drag step is 0.33 to 1.24 ms, three to four times the desktop RTX 3060, and the settled white balance render takes 42 ms at 48 MP, about twice the RTX 3060.
+
+### GPU memory before and after the fix (Windows, RTX 3060, 2026-10-17)
+
+Both Linux laptops ran out of GPU memory in the 48 MP Temp case. PR #22 frees the old image's textures before allocating the new ones, and catches device errors on the render thread. To check whether 48 MP now fits in 4 GB before the next Linux run, the Windows kits from before (5755b0b) and after the fix (aa6a785) ran the same autobench on the owner's RTX 3060 (12 GB), with `genzo.exe`'s dedicated GPU memory (the Windows `GPU Process Memory` counter) sampled every 0.3 s:
+
+| Stage | Before the fix | After the fix |
+|---|---|---|
+| 12 MP cases | 1.22 GB | 0.71 GB |
+| 48 MP cases | 2.99 GB | 2.74 GB |
+| Peak | **5.32 GB**, a short spike at the start of the 48 MP Temp case | **2.74 GB**, no spike |
+
+- **The spike was one extra 48 MP image** (about 2.3 GB): the autobench loads the image again for each case, and the old `set_image` held both copies for a moment. That is the case that died on both Linux laptops. The 12 MP stage shows the same doubling, smaller.
+- **The Windows figures carry over to Linux**: with the 12 MP image loaded, the RTX 3050 laptop reported 1,222 MiB before the fix and this machine 1,221 MiB. The new peak of 2.74 GB, plus about 0.1 GB for WebKit and the desktop, leaves about 1.2 GB of a 4 GB card free. The 0.3 s sampling could miss a shorter spike; none showed after the fix.
+- All five cases ran on both kits (12 GB is enough either way), with the same latency as before, about 22 ms p95 at Fit.
+- This is an estimate for the 4 GB card, not a run on it; the rerun of the Linux kit (aa6a785) on the RTX 3050 laptop decides the 48 MP Temp case.
 
 ### Linux dry run: Ubuntu 24.04, WebKitGTK 2.52.6, X11, GeForce MX110 2 GB (2026-10-16)
 
