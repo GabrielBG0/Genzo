@@ -469,9 +469,9 @@ fn lossless_jpeg_tile(
         let ljpeg = LjpegDecompressor::new(bytes)?;
         let (w, h) = (ljpeg.width(), ljpeg.height());
         // The stream is read as a flat run of samples, as TIFF lays out a
-        // tile. It must cover the tile and not claim far more.
+        // tile. It must cover the tile, with at most a few rows to spare.
         match w.checked_mul(h) {
-            Some(n) if n >= tile_samples && n <= 4 * tile_samples => {}
+            Some(n) if n >= tile_samples && n <= tile_samples + 4 * row_len => {}
             _ => {
                 return Err(format!(
                     "a {w}x{h} stream for a {row_len}x{} tile",
@@ -479,7 +479,10 @@ fn lossless_jpeg_tile(
                 ));
             }
         }
-        let mut out = vec![0u16; w * h];
+        let mut out = Vec::new();
+        out.try_reserve_exact(w * h)
+            .map_err(|_| format!("no memory for a {w}x{h} stream"))?;
+        out.resize(w * h, 0u16);
         ljpeg.decode(&mut out, 0, w, w, h, false)?;
         Ok(out)
     })
