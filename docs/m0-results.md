@@ -360,7 +360,7 @@ A MacBook with the base M1 (8 CPU cores, 7 GPU cores, 8 GB), on battery with low
 
 Loading the synthetic raw took 47 ms at 12 MP and 181 ms at 48 MP.
 
-- **The gate passes on the base M1 too: 32 ms p95 against 50 ms**, the same as the M1 Max (33 ms), in every case, 1:1 included. macOS needs no ladder step on any Apple silicon Mac.
+- **The gate passes on the base M1 too: 32 ms p95 against 50 ms** in all four gated cases (Fit, 12 and 48 MP), the same as the M1 Max (33 ms). macOS needs no ladder step on any Apple silicon Mac. The 1:1 case is reported, not gated; with full frames it also measures 32 ms p95.
 - **The display still sets the pace.** One request takes 17 to 18 ms, one 60 Hz frame, as on the M1 Max. The engine and IPC take 5 to 6 ms here against about 3 ms there, which still fits inside the frame. The lower p50 (22 to 27 ms against 32) comes from the samples landing at different points of the 60 Hz cycle (they alternate between about 21, 28 and 32 ms); with 1 ms timer resolution and a p95 that matches, it is not a real speedup.
 - **GPU time is 4 to 5 times the M1 Max**, about the ratio of GPU cores (7 against 32), and still far under the 16 ms target for every drag. The settled white balance render is the cost that shows: 124 ms at 48 MP, so the image would take about an eighth of a second to sharpen after release. Tiling and a cheaper first pass for the visible area (finding 5 in 0.D) are the fix; this machine is the one to check it on.
 - **48 MP fits in 8 GB of unified memory.** The spike keeps about 2.4 GB of intermediates at 48 MP (finding 2 in 0.D); the run finished without errors. The M1 budget of under 1 GB matters most on machines like this one.
