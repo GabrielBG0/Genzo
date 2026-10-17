@@ -201,7 +201,16 @@ Adobe DNG Converter 18.6 runs headless: `"Adobe DNG Converter.exe" -c -l -u -d <
 
 - **Adobe reads Nikon High Efficiency**: the Z 8 HE file converted fine. So we have an Adobe reference for a file neither rawler nor LibRaw can decode, which is also proof that a correct decoder exists.
 - **Adobe also reads the iPhone 16 Pro file** and writes it as plain 16-bit LinearRaw. rawler reads these outputs in 17 to 72 ms (`raw_gap_report ../corpus/reference`), so they can be loaded as pixel references without any special decoder. Black levels stay in the file (for example 2048 for the Sony), so apply them when comparing.
-- **Not covered: Apple Photos renders.** Those need a Mac. The owner would export the same iPhone files as TIFF or JPEG from Photos into `corpus/reference/<stem>/`.
+- **Apple Photos renders** (2026-10-17): Photos on macOS Tahoe 26.6.2 (the base M1 MacBook), each file opened without edits and exported full size as **16-bit TIFF with a Display P3 profile** into `corpus/reference/<stem>/<stem>.tiff` (gitignored):
+
+  | File | iPhone | Export | Also has an Adobe reference |
+  |---|---|---|---|
+  | `IMG_1361` | 12 Pro (raw.pixls.us) | 3024 × 4032, 73 MB | yes |
+  | `IPhone16proRaw` (`IMG_6884`) | 16 Pro | 6048 × 8064, 293 MB | yes |
+  | `IMG_6889` | 16 Pro | 6048 × 8064, 293 MB | no (the DNG is on the owner's Linux machine) |
+
+  - The exports are **portrait**: Photos applies the DNG's Orientation 6 (rotate 90° clockwise), while the Adobe references and our reader keep the stored landscape layout. Rotate before comparing.
+  - They are Apple's finished look (tone curve, local adjustments, sharpening, the gain table map), not a linear image, so they are a target for how a photo should look by default, not a pixel-exact reference like the Adobe DNGs. The 13 Pro Max file (`IMG_8104`) has no Photos export yet.
 
 ### Proposed camera priority order (step 7)
 
