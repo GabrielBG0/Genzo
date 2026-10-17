@@ -1,8 +1,12 @@
 //! A DNG reader for linear (demosaiced) raw images: Apple ProRAW and other
-//! LinearRaw DNGs. It exists for the files rawler cannot read, above all DNG
-//! 1.7 files whose tiles are JPEG XL (compression 52546): every ProRAW from
-//! the iPhone 16 Pro on, and Samsung Expert RAW. Uncompressed tiles are read
-//! too. CFA (Bayer) DNGs and lossless JPEG tiles stay with rawler.
+//! LinearRaw DNGs. Every ProRAW goes through it, so the LinearizationTable
+//! is applied one way, exactly: rawler 0.8 dithers it, panics on samples past
+//! its end and wraps the brightest highlights to black (docs/m0-results.md).
+//!
+//! Tiles may be JPEG XL (compression 52546, DNG 1.7: iPhone 16 Pro on,
+//! Samsung Expert RAW), lossless JPEG (compression 7: iPhone 12 to 15 Pro;
+//! decoded by rawler's lossless JPEG decompressor, so only with the `raw`
+//! feature) or uncompressed. CFA (Bayer) DNGs stay with rawler.
 //!
 //! The input is untrusted: every offset and size is checked, sizes are capped
 //! before anything is allocated, and nothing here panics on bad data.
@@ -14,6 +18,8 @@ use jxl_oxide::{AllocTracker, JxlImage};
 /// TIFF compression code for JPEG XL tiles (DNG 1.7).
 pub const COMPRESSION_JPEG_XL: u16 = 52546;
 const COMPRESSION_NONE: u16 = 1;
+/// TIFF compression code for lossless JPEG tiles.
+pub const COMPRESSION_LOSSLESS_JPEG: u16 = 7;
 const PHOTOMETRIC_LINEAR_RAW: u16 = 34892;
 const PHOTOMETRIC_CFA: u16 = 32803;
 
@@ -150,15 +156,17 @@ pub fn decode_linear(data: &[u8]) -> Result<LinearDng, DngError> {
     }
     let compression = tiff.first_int(&raw, tag::COMPRESSION).unwrap_or(1);
     let compression = u16::try_from(compression).unwrap_or(0);
-    if compression != COMPRESSION_JPEG_XL && compression != COMPRESSION_NONE {
-        return Err(DngError::Unsupported(format!(
-            "compression {compression}{}",
-            if compression == 7 {
-                " (lossless JPEG; the raw decoder reads it)"
-            } else {
-                ""
-            }
-        )));
+    match compression {
+        COMPRESSION_JPEG_XL | COMPRESSION_NONE => {}
+        COMPRESSION_LOSSLESS_JPEG if cfg!(feature = "raw") => {}
+        COMPRESSION_LOSSLESS_JPEG => {
+            return Err(DngError::Unsupported(
+                "compression 7 (lossless JPEG; needs the `raw` feature)".into(),
+            ));
+        }
+        _ => {
+            return Err(DngError::Unsupported(format!("compression {compression}")));
+        }
     }
     if tiff.first_int(&raw, tag::PLANAR_CONFIGURATION).unwrap_or(1) != 1 {
         return Err(DngError::Unsupported("planar sample layout".into()));
@@ -280,6 +288,10 @@ pub fn decode_linear(data: &[u8]) -> Result<LinearDng, DngError> {
                 };
                 clamped += match compression {
                     COMPRESSION_JPEG_XL => jxl_tile(bytes, &layout, tile, out, &table, &tracker)?,
+                    #[cfg(feature = "raw")]
+                    COMPRESSION_LOSSLESS_JPEG => {
+                        lossless_jpeg_tile(bytes, &layout, tile, out, &table)?
+                    }
                     _ => uncompressed_tile(bytes, &layout, tile, out, &table)?,
                 };
             }
@@ -430,6 +442,60 @@ fn jxl_tile(
         let out = &mut band[(y * layout.width + tile.x0) * spp..][..cols * spp];
         for (o, &v) in out.iter_mut().zip(&row) {
             let stored = (v * scale).round().clamp(0.0, 65535.0) as u16;
+            let (value, past_end) = linearize(stored, table);
+            *o = value;
+            clamped += u64::from(past_end);
+        }
+    }
+    Ok(clamped)
+}
+
+/// Decodes one lossless JPEG tile into its band with rawler's decompressor.
+/// Returns the clamped sample count.
+#[cfg(feature = "raw")]
+fn lossless_jpeg_tile(
+    bytes: &[u8],
+    layout: &Layout,
+    tile: Placement,
+    band: &mut [u16],
+    table: &[u16],
+) -> Result<u64, DngError> {
+    use rawler::decompressors::ljpeg::LjpegDecompressor;
+    let row_len = layout.tile_w * layout.spp;
+    let tile_samples = row_len * layout.tile_h;
+    // rawler is not hardened against bad input the way this module is: keep
+    // a panic in it from taking the process down.
+    let decoded = std::panic::catch_unwind(|| -> Result<Vec<u16>, String> {
+        let ljpeg = LjpegDecompressor::new(bytes)?;
+        let (w, h) = (ljpeg.width(), ljpeg.height());
+        // The stream is read as a flat run of samples, as TIFF lays out a
+        // tile. It must cover the tile, with at most a few rows to spare.
+        match w.checked_mul(h) {
+            Some(n) if n >= tile_samples && n <= tile_samples + 4 * row_len => {}
+            _ => {
+                return Err(format!(
+                    "a {w}x{h} stream for a {row_len}x{} tile",
+                    layout.tile_h
+                ));
+            }
+        }
+        let mut out = Vec::new();
+        out.try_reserve_exact(w * h)
+            .map_err(|_| format!("no memory for a {w}x{h} stream"))?;
+        out.resize(w * h, 0u16);
+        ljpeg.decode(&mut out, 0, w, w, h, false)?;
+        Ok(out)
+    })
+    .map_err(|_| corrupt("lossless JPEG tile: the decoder panicked"))?
+    .map_err(|e| corrupt(format!("lossless JPEG tile: {e}")))?;
+
+    let (cols, rows) = layout.visible(tile);
+    let spp = layout.spp;
+    let mut clamped = 0;
+    for y in 0..rows {
+        let src = &decoded[y * row_len..][..cols * spp];
+        let out = &mut band[(y * layout.width + tile.x0) * spp..][..cols * spp];
+        for (o, &stored) in out.iter_mut().zip(src) {
             let (value, past_end) = linearize(stored, table);
             *o = value;
             clamped += u64::from(past_end);
@@ -665,16 +731,21 @@ mod tests {
     const H: u32 = 27;
     const T: u32 = 16;
 
-    /// The synthetic image of tests/fixtures/dng/make-jxl-tiles.py.
+    /// The synthetic image of tests/fixtures/dng/make-tiles.py.
     fn sample(x: u32, y: u32, c: u32) -> u16 {
         ((37 * x + 91 * y + 13 * c) % 1100) as u16
     }
 
-    fn jxl_tiles(bits: u8) -> Vec<Vec<u8>> {
+    /// Tiles `<prefix>_<i>.<ext>` of tests/fixtures/dng.
+    fn fixture_tiles(prefix: &str, ext: &str) -> Vec<Vec<u8>> {
         let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/dng");
         (0..6)
-            .map(|i| std::fs::read(format!("{dir}/t{bits}_{i}.jxl")).unwrap())
+            .map(|i| std::fs::read(format!("{dir}/{prefix}_{i}.{ext}")).unwrap())
             .collect()
+    }
+
+    fn jxl_tiles(bits: u8) -> Vec<Vec<u8>> {
+        fixture_tiles(&format!("t{bits}"), "jxl")
     }
 
     /// Full-size uncompressed 16-bit tiles of the same image.
@@ -949,6 +1020,45 @@ mod tests {
         }
     }
 
+    /// 12-bit lossless JPEG tiles as the iPhone 12 and 13 Pro write them.
+    #[cfg(feature = "raw")]
+    #[test]
+    fn lossless_jpeg_tiles() {
+        for be in [false, true] {
+            let mut s = spec(fixture_tiles("lj12", "ljpg"), COMPRESSION_LOSSLESS_JPEG);
+            s.be = be;
+            s.bits = 12;
+            let img = decode_linear(&build(&s)).unwrap();
+            assert_eq!(img.compression, COMPRESSION_LOSSLESS_JPEG);
+            check(&img, true);
+        }
+        // A JPEG XL stream where lossless JPEG is declared, and a tile cut
+        // short: errors, not panics.
+        let s = spec(jxl_tiles(16), COMPRESSION_LOSSLESS_JPEG);
+        assert!(matches!(error(&s), DngError::Corrupt(m) if m.contains("lossless JPEG")));
+        let mut s = spec(fixture_tiles("lj12", "ljpg"), COMPRESSION_LOSSLESS_JPEG);
+        s.tiles[2].truncate(40);
+        assert!(matches!(error(&s), DngError::Corrupt(_)));
+    }
+
+    /// A fuzzer input with a damaged lossless JPEG Huffman table: rawler's
+    /// decompressor panics on it (huffman.rs, index out of bounds), and the
+    /// panic must come back as an error, not unwind into the caller.
+    #[cfg(feature = "raw")]
+    #[test]
+    fn a_panic_in_the_lossless_jpeg_decoder_is_an_error() {
+        let file = std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/dng/fuzz-ljpeg-huffman-panic.dng"
+        ))
+        .unwrap();
+        // Bands decode in parallel, so the error reported may be another
+        // tile's; what matters is that the panic does not escape.
+        let result = decode_linear(&file);
+        println!("{result:?}");
+        assert!(matches!(result, Err(DngError::Corrupt(_))));
+    }
+
     #[test]
     fn uncompressed_tiles_without_a_table() {
         for be in [false, true] {
@@ -976,8 +1086,12 @@ mod tests {
         s.photometric = PHOTOMETRIC_CFA;
         assert!(matches!(error(&s), DngError::Unsupported(m) if m.contains("CFA")));
 
-        let s = spec(jxl_tiles(16), 7);
-        assert!(matches!(error(&s), DngError::Unsupported(m) if m.contains("lossless JPEG")));
+        if !cfg!(feature = "raw") {
+            let s = spec(jxl_tiles(16), COMPRESSION_LOSSLESS_JPEG);
+            assert!(matches!(error(&s), DngError::Unsupported(m) if m.contains("`raw` feature")));
+        }
+        let s = spec(jxl_tiles(16), 34713);
+        assert!(matches!(error(&s), DngError::Unsupported(m) if m.contains("34713")));
 
         let mut s = spec(raw_tiles(false), COMPRESSION_NONE);
         s.bits = 12;
@@ -1032,6 +1146,9 @@ mod tests {
         let mut plain = spec(raw_tiles(true), COMPRESSION_NONE);
         plain.be = true;
         std::fs::write(format!("{dir}/uncompressed-big-endian.dng"), build(&plain)).unwrap();
+        let mut ljpeg = spec(fixture_tiles("lj12", "ljpg"), COMPRESSION_LOSSLESS_JPEG);
+        ljpeg.bits = 12;
+        std::fs::write(format!("{dir}/lossless-jpeg-tiles.dng"), build(&ljpeg)).unwrap();
     }
 
     #[test]

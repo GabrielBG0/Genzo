@@ -111,15 +111,51 @@ fn check_16_pro(data: &[u8]) {
     }
 }
 
-/// The iPhone 13 Pro Max ProRAW uses lossless JPEG tiles, which stay with
-/// rawler: the reader must say so, not misread them.
+/// The iPhone 13 Pro Max ProRAW has lossless JPEG tiles, decoded with
+/// rawler's decompressor under the `raw` feature. Its recorded values were
+/// checked against libjpeg-turbo: every sample identical.
 #[test]
-fn iphone_13_pro_max_is_left_to_rawler() {
+fn iphone_13_pro_max_lossless_jpeg() {
     for (path, data) in corpus_files("iPhone 13 Pro Max") {
         println!("{}", path.display());
-        match dng::decode_linear(&data) {
-            Err(DngError::Unsupported(m)) => assert!(m.contains("lossless JPEG"), "{m}"),
-            other => panic!("expected Unsupported, got {other:?}"),
+        let result = dng::decode_linear(&data);
+        if !cfg!(feature = "raw") {
+            match result {
+                Err(DngError::Unsupported(m)) => assert!(m.contains("`raw` feature"), "{m}"),
+                other => panic!("expected Unsupported, got {other:?}"),
+            }
+            continue;
+        }
+        let img = result.unwrap();
+        assert_eq!(
+            (img.width, img.height, img.samples_per_pixel),
+            (4032, 3024, 3)
+        );
+        assert_eq!(img.compression, dng::COMPRESSION_LOSSLESS_JPEG);
+        assert_eq!(img.linearization_entries, 4096);
+        assert!(img.has_gain_table_map);
+        let exposure = img.baseline_exposure.unwrap();
+        assert!(
+            (exposure - 2.50).abs() < 0.01,
+            "BaselineExposure {exposure}"
+        );
+        // IMG_8104.dng; lossless, so the means are exact.
+        if data.len() == 36_083_682 {
+            assert_eq!(img.clamped, 0);
+            let n = (img.pixels.len() / 3) as u64;
+            let means: Vec<u64> = (0..3)
+                .map(|c| {
+                    let sum: u64 = img
+                        .pixels
+                        .iter()
+                        .skip(c)
+                        .step_by(3)
+                        .map(|&v| u64::from(v))
+                        .sum();
+                    (sum + n / 2) / n
+                })
+                .collect();
+            assert_eq!(means, [1288, 1274, 1268]);
         }
     }
 }

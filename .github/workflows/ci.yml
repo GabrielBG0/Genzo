@@ -48,6 +48,12 @@ jobs:
         run: |
           cargo check --locked -p genzo-engine --no-default-features
           cargo test --locked -p genzo-imgio --no-default-features
+      # The raw feature (rawler) is off by default but carries the DNG
+      # reader's lossless JPEG path; test and lint it too.
+      - if: runner.os == 'Linux'
+        run: |
+          cargo clippy --locked -p genzo-imgio --all-targets --features raw
+          cargo test --locked -p genzo-imgio --features raw
       # GPU tests run here on whatever adapter the runner has (WARP on Windows,
       # Metal on macOS) and are skipped without one; the gpu job below requires
       # the reference device.

@@ -8,7 +8,11 @@ tile 3 (bottom left), which is padded to full size: DNG writers do both.
 
 Each tile is written lossless at a declared bit depth of 16 (t16_<i>.jxl) and
 12 (t12_<i>.jxl); the reader must return the same integers for both.
-Regenerate with: uv run --no-project --with imagecodecs --with numpy python make-jxl-tiles.py
+
+The same tiles are also written as 12-bit lossless JPEG (SOF3, 3 components,
+predictor 7, as the iPhone 12 and 13 Pro write them) to lj12_<i>.ljpg, every
+one padded to the full 16x16: TIFF tiles are full size.
+Regenerate with: uv run --no-project --with imagecodecs --with numpy python make-tiles.py
 """
 from pathlib import Path
 
@@ -36,3 +40,10 @@ for i in range(6):
         data = imagecodecs.jpegxl_encode(tile, lossless=True, bitspersample=bits)
         assert (imagecodecs.jpegxl_decode(data) == tile).all()
         (HERE / f"t{bits}_{i}.jxl").write_bytes(data)
+    full = np.array(
+        [[[sample(x0 + x, y0 + y, c) for c in range(3)] for x in range(T)] for y in range(T)],
+        dtype=np.uint16,
+    )
+    data = imagecodecs.jpeg8_encode(full, lossless=True, bitspersample=12, predictor=7)
+    assert data.find(b"\xff\xc3") >= 0 and (imagecodecs.jpeg8_decode(data) == full).all()
+    (HERE / f"lj12_{i}.ljpg").write_bytes(data)
