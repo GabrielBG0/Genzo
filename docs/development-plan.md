@@ -242,7 +242,7 @@ These are open questions, not conflicts. Neither source answers them.
 7. **Fake engine** in TypeScript that implements the generated contract, with a static tile source. Add the **transport module**, the only file that touches Tauri.
 
 **Exit checklist**
-- [ ] Latency gate passed, or a ladder step chosen, on all three OSes. (Windows passed with the JPEG preview, 18.4 ms p95; macOS passed, 33 ms p95 on an M1 Max; Linux pending the RTX 3050 run. See `docs/m0-results.md`.)
+- [ ] Latency gate passed, or a ladder step chosen, on all three OSes. (Windows passed with the JPEG preview, 18.4 ms p95; macOS passed, 33 ms p95 on an M1 Max and 32 ms on a base M1; Linux passed 3 of 4 gated cases in WebKitGTK's default mode on an RTX 3050 laptop, 31 to 43 ms p95, and the 48 MP Temp case ran out of GPU memory, so it needs a rerun once that is an error instead of a dead render thread. See `docs/m0-results.md`.)
 - [x] ProRAW decodes on every device in the corpus: the iPhone 13 Pro Max and 16 Pro through the linear DNG reader (checked against libjpeg-turbo and libjxl), the iPhone 12 Pro in rawler (not yet re-run through the reader). Wiring the reader into `imgio::decode` is M1 step 2. See `docs/m0-results.md`.
 - [x] Software adapter runs the spike pipeline (lavapipe job on every push; WARP locally)
 - [x] License review written, fonts included (signed off for M0 in `docs/licenses.md`)
