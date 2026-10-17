@@ -54,6 +54,11 @@ pub enum GpuError {
     Readback(String),
     NoImage,
     ThreadGone,
+    /// The GPU ran out of memory. The render thread keeps running.
+    OutOfMemory,
+    /// The device reported an error during a request (wgpu validation or
+    /// internal error). The render thread keeps running.
+    Request(String),
 }
 
 impl fmt::Display for GpuError {
@@ -65,6 +70,8 @@ impl fmt::Display for GpuError {
             Self::Readback(e) => write!(f, "GPU readback failed: {e}"),
             Self::NoImage => write!(f, "no image loaded"),
             Self::ThreadGone => write!(f, "the render thread stopped"),
+            Self::OutOfMemory => write!(f, "the GPU ran out of memory"),
+            Self::Request(e) => write!(f, "GPU error: {e}"),
         }
     }
 }

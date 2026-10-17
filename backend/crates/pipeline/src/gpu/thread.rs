@@ -114,8 +114,15 @@ fn run(gpu: Gpu, rx: Receiver<Request>) {
         for (i, req) in batch.into_iter().enumerate() {
             match req {
                 Request::SetImage(image, reply) => {
-                    pipeline.set_image(&gpu, &image);
-                    let _ = reply.send(Ok(()));
+                    let result = guarded(&gpu, || {
+                        pipeline.set_image(&gpu, &image);
+                        Ok(())
+                    });
+                    if result.is_err() {
+                        // A half-allocated image cannot be rendered.
+                        pipeline.clear_image();
+                    }
+                    let _ = reply.send(result);
                 }
                 Request::Render { reply, .. } if Some(i) != newest_render => {
                     let _ = reply.send(Ok(None));
@@ -125,9 +132,40 @@ fn run(gpu: Gpu, rx: Receiver<Request>) {
                     bounds,
                     reply,
                 } => {
-                    let _ = reply.send(pipeline.render(&gpu, params, bounds).map(Some));
+                    let result = guarded(&gpu, || pipeline.render(&gpu, params, bounds));
+                    if result.is_err() {
+                        pipeline.forget_renders();
+                    }
+                    let _ = reply.send(result.map(Some));
                 }
             }
         }
     }
+}
+
+/// Runs `f` with the device's errors captured instead of left to wgpu's
+/// default handler, which panics and would stop the render thread for good.
+/// An out-of-memory error wins over the validation errors that follow from
+/// using the resource that failed to allocate.
+fn guarded<T>(gpu: &Gpu, f: impl FnOnce() -> Result<T, GpuError>) -> Result<T, GpuError> {
+    let validation = gpu.device.push_error_scope(wgpu::ErrorFilter::Validation);
+    let internal = gpu.device.push_error_scope(wgpu::ErrorFilter::Internal);
+    let oom = gpu.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
+    let result = f();
+    let oom = pollster::block_on(oom.pop());
+    let internal = pollster::block_on(internal.pop());
+    let validation = pollster::block_on(validation.pop());
+    if oom.is_some() {
+        return Err(GpuError::OutOfMemory);
+    }
+    if let Some(e) = internal.or(validation) {
+        let first_line = e
+            .to_string()
+            .lines()
+            .find(|l| !l.trim().is_empty())
+            .unwrap_or_default()
+            .to_owned();
+        return Err(GpuError::Request(first_line));
+    }
+    result
 }

@@ -531,6 +531,12 @@ impl SpikePipeline {
 
     /// Uploads a raw image and allocates its full-resolution textures.
     pub fn set_image(&mut self, gpu: &Gpu, img: &BayerImage) {
+        // Free the old image's textures first, so the old and the new image
+        // are never in GPU memory at the same time.
+        self.clear_image();
+        // wgpu frees a dropped texture once no submitted work uses it; waiting
+        // here makes sure that has happened before the new allocations.
+        let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
         let device = &gpu.device;
         let size = (img.width, img.height);
         use wgpu::TextureFormat::{R16Uint, R32Float, Rg32Float, Rgba16Float};
@@ -657,6 +663,19 @@ impl SpikePipeline {
             mip_count,
             full,
         });
+        self.forget_renders();
+    }
+
+    /// Drops the image and everything allocated for it.
+    pub fn clear_image(&mut self) {
+        self.image = None;
+        self.forget_renders();
+    }
+
+    /// Drops the viewport textures and the cached render state, so the next
+    /// render starts over from the image. Used after a failed render, whose
+    /// intermediates cannot be trusted.
+    pub fn forget_renders(&mut self) {
         self.view = None;
         self.last = None;
         self.demosaic_wb = None;
@@ -876,23 +895,36 @@ impl SpikePipeline {
         let started = Instant::now();
         gpu.queue.submit([encoder.finish()]);
         let (tx, rx) = mpsc::channel();
-        let tx2 = tx.clone();
         out_buf.map_async(wgpu::MapMode::Read, .., move |r| {
             let _ = tx.send(r);
         });
-        if let Some(t) = &self.timer {
+        let timer_rx = self.timer.as_ref().map(|t| {
+            let (tx, rx) = mpsc::channel();
             t.readback.map_async(wgpu::MapMode::Read, .., move |r| {
-                let _ = tx2.send(r);
+                let _ = tx.send(r);
             });
-        } else {
-            drop(tx2);
-        }
+            rx
+        });
         gpu.device
             .poll(wgpu::PollType::wait_indefinitely())
             .map_err(|e| GpuError::Readback(e.to_string()))?;
         let wall_ms = started.elapsed().as_secs_f64() * 1000.0;
-        for r in rx.iter() {
-            r.map_err(|e| GpuError::Readback(e.to_string()))?;
+        let out_mapped = rx.recv().map_err(|e| GpuError::Readback(e.to_string()))?;
+        let timer_mapped = timer_rx.map(|rx| match rx.recv() {
+            Ok(r) => r.map_err(|e| e.to_string()),
+            Err(e) => Err(e.to_string()),
+        });
+        // On failure, leave no buffer mapped, or the next render's copy into
+        // it fails.
+        if let Err(e) = out_mapped {
+            if let (Some(t), Some(Ok(()))) = (&self.timer, &timer_mapped) {
+                t.readback.unmap();
+            }
+            return Err(GpuError::Readback(e.to_string()));
+        }
+        if let Some(Err(e)) = timer_mapped {
+            out_buf.unmap();
+            return Err(GpuError::Readback(e));
         }
 
         let read_started = Instant::now();

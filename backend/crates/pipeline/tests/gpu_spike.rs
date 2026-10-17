@@ -266,6 +266,37 @@ fn render_thread_coalesces_to_the_latest() {
     assert!(frames.iter().any(Option::is_some));
 }
 
+#[test]
+fn render_thread_survives_a_failed_allocation() {
+    let Some((_lock, gpu)) = gpu() else { return };
+    let too_wide = gpu.device.limits().max_texture_dimension_2d * 2;
+    drop(gpu);
+    let thread = RenderThread::spawn(AdapterChoice::from_env()).unwrap();
+    thread.set_image(Arc::new(scene_mosaic(W, H))).unwrap();
+    // Wider than any texture the device allows: the device reports an error,
+    // which used to panic the render thread.
+    let err = thread
+        .set_image(Arc::new(scene_mosaic(too_wide, 2)))
+        .unwrap_err();
+    assert!(
+        matches!(err, GpuError::Request(_) | GpuError::OutOfMemory),
+        "{err}"
+    );
+    // The failed image is gone, and the thread still serves requests.
+    assert!(matches!(
+        thread.render(SpikeParams::default(), (W, H)),
+        Err(GpuError::NoImage)
+    ));
+    thread.set_image(Arc::new(scene_mosaic(W, H))).unwrap();
+    let frame = thread
+        .render(SpikeParams::default(), (W, H))
+        .unwrap()
+        .expect("nothing else queued");
+    // The same region and bound as `reproduces_the_scene`'s "with edges".
+    let s = compare(&frame.rgba, W, H, |_, y| (y as f32) < H as f32 * 0.8);
+    assert!(s.psnr > 35.0, "{}", s.psnr);
+}
+
 /// Writes the scene render to GENZO_DUMP (raw RGBA8) for a visual check.
 #[test]
 #[ignore = "debug aid"]
