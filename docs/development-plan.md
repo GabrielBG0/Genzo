@@ -243,7 +243,7 @@ These are open questions, not conflicts. Neither source answers them.
 
 **Exit checklist**
 - [ ] Latency gate passed, or a ladder step chosen, on all three OSes. (Windows passed with the JPEG preview, 18.4 ms p95; macOS passed, 33 ms p95 on an M1 Max and 32 ms on a base M1; Linux passed 3 of 4 gated cases in WebKitGTK's default mode on an RTX 3050 laptop, 31 to 43 ms p95, and the 48 MP Temp case ran out of GPU memory, so it needs a rerun once that is an error instead of a dead render thread. See `docs/m0-results.md`.)
-- [x] ProRAW decodes on every device in the corpus: the iPhone 13 Pro Max and 16 Pro through the linear DNG reader (checked against libjpeg-turbo and libjxl), the iPhone 12 Pro in rawler (not yet re-run through the reader). Wiring the reader into `imgio::decode` is M1 step 2. See `docs/m0-results.md`.
+- [x] ProRAW decodes on every device in the corpus: the iPhone 13 Pro Max and 16 Pro through the linear DNG reader (checked against libjpeg-turbo and libjxl), and the iPhone 12 Pro through the reader too (checked against libjpeg). Wiring the reader into `imgio::decode` is M1 step 2. See `docs/m0-results.md`.
 - [x] Software adapter runs the spike pipeline (lavapipe job on every push; WARP locally)
 - [x] License review written, fonts included (signed off for M0 in `docs/licenses.md`)
 - [x] Performance targets confirmed or revised in the spec (revision 64: GPU time confirmed, input to pixels measured on Windows only, 48 MP GPU memory and 48 MP open time flagged for M1)
