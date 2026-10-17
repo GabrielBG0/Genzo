@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { TileHeader } from '$contract/genzo';
 import type { Tile } from '../engine/tiles';
-import { PATCHES, maxError, pixelAt } from './colorProbe';
+import { PATCHES, keepsP3, maxError, pixelAt } from './colorProbe';
 
 function tile(x: number, y: number, width: number, height: number, rgb: (x: number, y: number) => number[]): Tile {
   const header: TileHeader = {
@@ -37,5 +37,14 @@ describe('color probe', () => {
   it('reports the largest channel error, or Infinity when points are missing', () => {
     expect(maxError([[10, 20, 30], [0, 0, 0]], [[11, 17, 30], [0, 0, 2]])).toBe(3);
     expect(maxError([[1, 2, 3]], [])).toBe(Infinity);
+  });
+
+  it('does not take a plain JavaScript property for color space support', () => {
+    // An engine without the property: assigning it adds an own property that reads back.
+    const without = Object.create({}) as WebGL2RenderingContext;
+    expect(keepsP3(without, 'unpackColorSpace')).toBe(false);
+    const proto = { drawingBufferColorSpace: 'srgb' as PredefinedColorSpace };
+    const withIt = Object.create(proto) as WebGL2RenderingContext;
+    expect(keepsP3(withIt, 'drawingBufferColorSpace')).toBe(true);
   });
 });
