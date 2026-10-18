@@ -635,7 +635,7 @@ Generative remove, expand and fill stay **out**, by decision.
 
 ## Cross-cutting rules (every phase)
 
-- Each feature's spec is written from the FEATURES.md template before its milestone starts. Its acceptance criteria become the feature's tests.
+- Each feature's spec is written from the FEATURES.md template, as `docs/specs/<ID>.md`, before its milestone starts. Its acceptance criteria become the feature's tests.
 - Every contract change is reviewed through the generated TypeScript diff and comes with a version bump.
 - Every new decoder gets a fuzz target. Every new stage gets golden images and a criterion benchmark.
 - Every new screen works against the fake engine first, with Vitest and Playwright tests, and is compared with the handoff's full-size screen.
