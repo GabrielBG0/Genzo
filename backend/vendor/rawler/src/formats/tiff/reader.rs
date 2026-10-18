@@ -167,7 +167,16 @@ pub trait TiffReader {
 
     next_ifd = apply_corr(next_ifd, self.file().corr);
     let mut chain = Vec::new();
+    // Changed by the Genzo project on 2026-10-18 (LGPL-2.1 section 2a): the
+    // chain stops at an IFD offset seen before (a cycle looped forever) and
+    // after MAX_CHAIN IFDs. See backend/vendor/README.md.
+    const MAX_CHAIN: usize = 64;
+    let mut seen = std::collections::HashSet::new();
     while next_ifd != 0 {
+      if !seen.insert(next_ifd) || chain.len() >= MAX_CHAIN {
+        log::warn!("TIFF: IFD chain loops or is too long, stopping at {} IFDs", chain.len());
+        break;
+      }
       // TODO: check if offset is in range
       let mut multi_sub_tags = self.wellknown_sub_ifd_tags();
       multi_sub_tags.extend_from_slice(sub_tags);

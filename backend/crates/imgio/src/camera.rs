@@ -387,13 +387,19 @@ mod tests {
         std::fs::read(format!("{dir}/{name}")).unwrap()
     }
 
-    /// Inputs the `decode` fuzz target found. One made rawler's TIFF parser
-    /// allocate 13.7 GB for a tag's claimed count (now checked against the
-    /// file, vendor/rawler/src/formats/tiff/entry.rs); the other overflows in
-    /// rawler's rectangle arithmetic (a caught panic). Both are errors.
+    /// Inputs the `decode` fuzz target found, all errors now:
+    /// - a TIFF tag claiming 13.7 GB of values (counts are now checked
+    ///   against the file, vendor/rawler/src/formats/tiff/entry.rs);
+    /// - an overflow in rawler's rectangle arithmetic (a caught panic);
+    /// - IFDs whose entries and SubIFDs together grew past 4 GB (IFD
+    ///   chain, SubIFD and per-IFD data limits, formats/tiff/ifd.rs).
     #[test]
     fn fuzz_finds_are_errors() {
-        for name in ["fuzz-rawler-tag-count-oom.bin", "fuzz-rawler-rect-overflow.bin"] {
+        for name in [
+            "fuzz-rawler-tag-count-oom.bin",
+            "fuzz-rawler-rect-overflow.bin",
+            "fuzz-rawler-ifd-memory.bin",
+        ] {
             let result = crate::decode(&fixture(name), crate::DecodeOptions::default());
             assert!(result.is_err(), "{name}: {result:?}");
         }

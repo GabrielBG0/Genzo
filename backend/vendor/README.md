@@ -26,6 +26,11 @@ After it, all three match LibRaw on every sample (`crates/imgio/tests/cfa_corpus
 
 `src/formats/tiff/entry.rs` (with `EndianReader::remaining` in `reader.rs`): a TIFF entry's value count, read from the file, is checked against the bytes left in the stream before the values are allocated. The `decode` fuzz target found an entry that claimed 13.7 GB. A failed entry is skipped like rawler's other invalid entries, so the rest of the file still parses. The input is `crates/imgio/tests/fixtures/dng/fuzz-rawler-tag-count-oom.bin`.
 
+`src/formats/tiff/reader.rs` and `ifd.rs` set three more limits, each found by the fuzz target growing memory past 4 GB (`fuzz-rawler-ifd-memory.bin`). Legitimate files are far inside all three:
+- The IFD chain stops at an offset seen before, or after 64 IFDs. A cycle looped forever.
+- At most 16 SubIFDs are parsed per tag.
+- The entries of one IFD may copy at most the file's size in values.
+
 In both workspaces that build release binaries, `[profile.release.package.rawler] overflow-checks = true` turns rawler's integer overflows into caught panics, as under fuzzing, instead of wrapped sizes or indices.
 
 ### Known rawler 0.8 problems worked around outside the vendored code

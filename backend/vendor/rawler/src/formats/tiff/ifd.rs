@@ -119,6 +119,12 @@ impl IFD {
     let mut next_pos = reader.position()?;
     debug!("Parse entries");
     let mut consecutive_errors = 0;
+    // Changed by the Genzo project on 2026-10-18 (LGPL-2.1 section 2a): the
+    // entries of one IFD may copy at most the stream's size in values. Each
+    // entry is checked against the file on its own, but thousands of them
+    // could each copy the whole file. See backend/vendor/README.md.
+    let budget = u64::from(reader.position()?) + reader.remaining()?;
+    let mut copied: u64 = 0;
 
     for i in 0..entry_count {
       if i as usize >= MAX_IFD_ENTRIES {
@@ -172,7 +178,12 @@ impl IFD {
               }
             }
           }
+          copied = copied.saturating_add(entry.value.byte_size() as u64);
           entries.insert(entry.tag, entry);
+          if copied > budget {
+            log::warn!("TIFF: IFD entries hold more data than the file, stopping parse");
+            break;
+          }
         }
         Err(err) => {
           consecutive_errors += 1;
@@ -205,7 +216,11 @@ impl IFD {
     let reader = reader.into_inner();
     for subs in sub_ifd_offsets {
       let mut ifds = Vec::new();
-      for offset in subs.1 {
+      // Changed by the Genzo project on 2026-10-18 (LGPL-2.1 section 2a):
+      // at most MAX_SUB_IFDS SubIFDs per tag (a tag listing thousands, each
+      // parsed in full, exhausted memory). See backend/vendor/README.md.
+      const MAX_SUB_IFDS: usize = 16;
+      for offset in subs.1.into_iter().take(MAX_SUB_IFDS) {
         match Self::new(reader, apply_corr(offset, corr), base, corr, endian, &[]) {
           Ok(ifd) => ifds.push(ifd),
           Err(err) => {
