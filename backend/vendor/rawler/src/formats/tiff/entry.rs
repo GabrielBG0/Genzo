@@ -106,6 +106,16 @@ impl Entry {
     }
 
     reader.goto(base + offset)?;
+    // Changed by the Genzo project on 2026-10-18 (LGPL-2.1 section 2a): a
+    // count read from the file is checked against the bytes left before
+    // the values are allocated. A damaged entry could claim 4 billion values
+    // and abort the process. See backend/vendor/README.md.
+    if bytesize as u64 > reader.remaining()? {
+      return Err(TiffError::Overflow(format!(
+        "Tag 0x{:X} claims {} bytes, past the end of the file",
+        tag, bytesize
+      )));
+    }
     let entry = match typ {
       TYPE_BYTE => {
         let mut v = vec![0; count as usize];

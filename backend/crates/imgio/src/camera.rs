@@ -382,6 +382,23 @@ fn cct(illuminant: u16) -> f64 {
 mod tests {
     use super::*;
 
+    fn fixture(name: &str) -> Vec<u8> {
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/dng");
+        std::fs::read(format!("{dir}/{name}")).unwrap()
+    }
+
+    /// Inputs the `decode` fuzz target found. One made rawler's TIFF parser
+    /// allocate 13.7 GB for a tag's claimed count (now checked against the
+    /// file, vendor/rawler/src/formats/tiff/entry.rs); the other overflows in
+    /// rawler's rectangle arithmetic (a caught panic). Both are errors.
+    #[test]
+    fn fuzz_finds_are_errors() {
+        for name in ["fuzz-rawler-tag-count-oom.bin", "fuzz-rawler-rect-overflow.bin"] {
+            let result = crate::decode(&fixture(name), crate::DecodeOptions::default());
+            assert!(result.is_err(), "{name}: {result:?}");
+        }
+    }
+
     #[test]
     fn orientation_round_trips_every_exif_value() {
         for v in 1..=8u16 {

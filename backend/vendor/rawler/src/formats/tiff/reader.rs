@@ -293,6 +293,17 @@ impl<'a, R: Read + Seek + 'a> EndianReader<'a, R> {
 
   // TODO: try_from?
 
+  /// Changed by the Genzo project on 2026-10-18 (LGPL-2.1 section 2a):
+  /// the bytes from the current position to the end of the stream, so
+  /// callers can check a size read from the file before allocating it.
+  /// See backend/vendor/README.md.
+  pub fn remaining(&mut self) -> Result<u64> {
+    let here = self.inner.stream_position()?;
+    let end = self.inner.seek(SeekFrom::End(0))?;
+    self.inner.seek(SeekFrom::Start(here))?;
+    Ok(end.saturating_sub(here))
+  }
+
   pub fn goto(&mut self, offset: u32) -> Result<()> {
     self.inner.seek(SeekFrom::Start(offset as u64))?;
     Ok(())

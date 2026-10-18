@@ -2,7 +2,7 @@
 
 ## rawler 0.8.0 (LGPL-2.1-only), patched
 
-`rawler/` is [rawler](https://crates.io/crates/rawler) 0.8.0 from crates.io, from the dnglab project, with two changes. It replaces the registry crate through `[patch.crates-io]` in `backend/Cargo.toml`, `backend/fuzz/Cargo.toml` and `shell/Cargo.toml`. Only rawler's own test images (`data/testdata`, 18 MB) were left out.
+`rawler/` is [rawler](https://crates.io/crates/rawler) 0.8.0 from crates.io, from the dnglab project, with three changes: exact curve lookups, size limits before allocating, and the TIFF entry count check below. It replaces the registry crate through `[patch.crates-io]` in `backend/Cargo.toml`, `backend/fuzz/Cargo.toml` and `shell/Cargo.toml`. Only rawler's own test images (`data/testdata`, 18 MB) were left out.
 
 ### First change (2026-10-18): exact curve lookups
 
@@ -20,9 +20,11 @@ Against LibRaw 0.22.1 on the corpus, before the patch:
 
 After it, all three match LibRaw on every sample (`crates/imgio/tests/cfa_corpus.rs`). The function keeps its name and signature, so every caller is covered by the one change.
 
-### Second change (2026-10-18): a size limit on image buffers
+### Second change (2026-10-18): size limits before allocating
 
 `src/pixarray.rs`: `Pix2D::new`, `Pix2D::new_uninit`, `Color2D::new` and `Color2D::new_with_default` panic before allocating more than 400 million pixels, or when width × height overflows. A damaged or crafted header can claim any size, and an allocation that large aborts the process. No caller can catch that, while this panic is caught (by rawler's own `catch_unwind` and by Genzo's). Upstream has the same check commented out in its `alloc_image` macros.
+
+`src/formats/tiff/entry.rs` (with `EndianReader::remaining` in `reader.rs`): a TIFF entry's value count, read from the file, is checked against the bytes left in the stream before the values are allocated. The `decode` fuzz target found an entry that claimed 13.7 GB. A failed entry is skipped like rawler's other invalid entries, so the rest of the file still parses. The input is `crates/imgio/tests/fixtures/dng/fuzz-rawler-tag-count-oom.bin`.
 
 In both workspaces that build release binaries, `[profile.release.package.rawler] overflow-checks = true` turns rawler's integer overflows into caught panics, as under fuzzing, instead of wrapped sizes or indices.
 
