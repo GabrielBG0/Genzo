@@ -16,13 +16,16 @@ use rayon::prelude::*;
 use jxl_oxide::{AllocTracker, JxlImage};
 
 use crate::raw::{
-    AsShot, CameraColor, ColorMatrix, DefaultCrop, Levels, Opcode, OpcodeLists, RawMetadata, Rect,
-    parse_opcode_list,
+    AsShot, CameraColor, CfaPattern, ColorMatrix, DefaultCrop, Levels, Opcode, OpcodeLists,
+    RawMetadata, Rect, parse_opcode_list,
 };
 
 /// TIFF compression code for JPEG XL tiles (DNG 1.7).
 pub const COMPRESSION_JPEG_XL: u16 = 52546;
 const COMPRESSION_NONE: u16 = 1;
+/// GoPro's VC-5 (CineForm) tiles in GPR files.
+#[cfg(feature = "raw")]
+const COMPRESSION_VC5: u32 = 9;
 /// TIFF compression code for lossless JPEG tiles.
 pub const COMPRESSION_LOSSLESS_JPEG: u16 = 7;
 const PHOTOMETRIC_LINEAR_RAW: u16 = 34892;
@@ -47,6 +50,9 @@ const JXL_MEMORY_LIMIT: usize = 2 << 30;
 mod tag {
     pub const NEW_SUBFILE_TYPE: u16 = 254;
     pub const ORIENTATION: u16 = 274;
+    pub const CFA_REPEAT_PATTERN_DIM: u16 = 33421;
+    pub const CFA_PATTERN: u16 = 33422;
+    pub const CFA_PLANE_COLOR: u16 = 50710;
     pub const WIDTH: u16 = 256;
     pub const HEIGHT: u16 = 257;
     pub const BITS_PER_SAMPLE: u16 = 258;
@@ -159,6 +165,137 @@ fn raw_ifd(tiff: &Tiff) -> Result<(Vec<Entry>, Vec<Entry>), DngError> {
         .find(|ifd| tiff.first_int(ifd, tag::NEW_SUBFILE_TYPE).unwrap_or(0) == 0)
         .ok_or(DngError::NoRawImage)?;
     Ok((ifd0, raw))
+}
+
+/// The PhotometricInterpretation of a DNG's raw image: what tells linear
+/// DNGs (this reader) from CFA DNGs (rawler) apart.
+pub(crate) fn photometric(data: &[u8]) -> Result<u16, DngError> {
+    let tiff = Tiff::new(data).ok_or(DngError::NotTiff)?;
+    let (_, raw) = raw_ifd(&tiff)?;
+    let p = tiff.required_int(&raw, tag::PHOTOMETRIC)?;
+    u16::try_from(p).map_err(|_| corrupt(format!("photometric interpretation {p}")))
+}
+
+pub(crate) const PHOTOMETRIC_CFA_DNG: u16 = PHOTOMETRIC_CFA;
+pub(crate) const PHOTOMETRIC_LINEAR_DNG: u16 = PHOTOMETRIC_LINEAR_RAW;
+
+/// The color filter pattern of a CFA DNG, with site (0, 0) at the raw
+/// image's first sample. The DNG stores it relative to the ActiveArea's top
+/// left, so it is shifted back by that offset. rawler shifts the other way,
+/// which only agrees for patterns of period 2 (backend/vendor/README.md), so
+/// the pattern is read here.
+pub(crate) fn cfa_pattern(data: &[u8]) -> Result<CfaPattern, DngError> {
+    let tiff = Tiff::new(data).ok_or(DngError::NotTiff)?;
+    let (ifd0, raw) = raw_ifd(&tiff)?;
+    let get = |t| find(&raw, t).or_else(|| find(&ifd0, t));
+    let (rows, cols) = match get(tag::CFA_REPEAT_PATTERN_DIM)
+        .map(|e| tiff.ints(e))
+        .transpose()?
+    {
+        Some(v) => match v[..] {
+            [r, c] if (1..=8).contains(&r) && (1..=8).contains(&c) => (r as usize, c as usize),
+            _ => return Err(DngError::Unsupported(format!("a CFA pattern of {v:?}"))),
+        },
+        None => (2, 2),
+    };
+    let codes = get(tag::CFA_PATTERN)
+        .map(|e| tiff.ints(e))
+        .transpose()?
+        .ok_or_else(|| corrupt("a CFA image without CFAPattern"))?;
+    if codes.len() != rows * cols {
+        return Err(corrupt(format!(
+            "{} CFAPattern entries for a {rows}x{cols} pattern",
+            codes.len()
+        )));
+    }
+    // CFAPattern holds plane indices; CFAPlaneColor names each plane's
+    // color (0 red, 1 green, 2 blue), RGB by default.
+    let planes = match get(tag::CFA_PLANE_COLOR)
+        .map(|e| tiff.ints(e))
+        .transpose()?
+    {
+        Some(p) => p,
+        None => vec![0, 1, 2],
+    };
+    let color = |code: u32| -> Result<u8, DngError> {
+        match planes.get(code as usize) {
+            Some(&c @ 0..=2) => Ok(c as u8),
+            _ => Err(DngError::Unsupported(format!(
+                "CFA plane colors {planes:?}"
+            ))),
+        }
+    };
+    let (top, left) = match get(tag::ACTIVE_AREA).map(|e| tiff.ints(e)).transpose()? {
+        Some(v) if v.len() == 4 => (v[0] as usize, v[1] as usize),
+        _ => (0, 0),
+    };
+    let mut colors = Vec::with_capacity(rows * cols);
+    for y in 0..rows {
+        for x in 0..cols {
+            // Site (y, x) of the data lies (y - top, x - left) from the
+            // pattern's origin.
+            let py = (y + rows - top % rows) % rows;
+            let px = (x + cols - left % cols) % cols;
+            colors.push(color(codes[py * cols + px])?);
+        }
+    }
+    Ok(CfaPattern {
+        width: cols as u8,
+        height: rows as u8,
+        colors,
+    })
+}
+
+/// Checks a CFA DNG for what rawler, which decodes its pixels, gets wrong,
+/// and returns the raw image's size. rawler ignores lossless JPEG restart
+/// intervals (wrong samples, no error) and dithers the LinearizationTable,
+/// wrapping the brightest highlights to black (docs/m0-results.md). No CFA
+/// DNG in the corpus has either; one that does is unsupported.
+#[cfg(feature = "raw")]
+pub(crate) fn check_cfa_for_rawler(data: &[u8]) -> Result<(u32, u32), DngError> {
+    let tiff = Tiff::new(data).ok_or(DngError::NotTiff)?;
+    let (_, raw) = raw_ifd(&tiff)?;
+    if find(&raw, tag::LINEARIZATION_TABLE).is_some() {
+        return Err(DngError::Unsupported(
+            "a CFA DNG with a LinearizationTable".into(),
+        ));
+    }
+    // GoPro's GPR files are DNGs with VC-5 (CineForm) tiles, which no
+    // decoder here reads.
+    if tiff.first_int(&raw, tag::COMPRESSION) == Some(COMPRESSION_VC5) {
+        return Err(DngError::Unsupported(
+            "GoPro GPR (VC-5 compression) is not supported".into(),
+        ));
+    }
+    if tiff.first_int(&raw, tag::COMPRESSION) == Some(u32::from(COMPRESSION_LOSSLESS_JPEG)) {
+        let tiles = [
+            (tag::TILE_OFFSETS, tag::TILE_BYTE_COUNTS),
+            (tag::STRIP_OFFSETS, tag::STRIP_BYTE_COUNTS),
+        ];
+        for (offsets, counts) in tiles {
+            let (Some(o), Some(n)) = (find(&raw, offsets), find(&raw, counts)) else {
+                continue;
+            };
+            for (&o, &n) in tiff.ints(o)?.iter().zip(&tiff.ints(n)?) {
+                let (o, n) = (o as usize, n as usize);
+                let bytes = o
+                    .checked_add(n)
+                    .and_then(|end| data.get(o..end))
+                    .ok_or_else(|| corrupt("a tile lies outside the file"))?;
+                if crate::ljpeg::has_restarts(bytes) {
+                    return Err(DngError::Unsupported(
+                        "a CFA DNG with lossless JPEG restart intervals".into(),
+                    ));
+                }
+            }
+        }
+    }
+    let width = tiff.required_int(&raw, tag::WIDTH)?;
+    let height = tiff.required_int(&raw, tag::HEIGHT)?;
+    if u64::from(width) * u64::from(height) > MAX_PIXELS {
+        return Err(DngError::TooLarge(format!("{width}x{height}")));
+    }
+    Ok((width, height))
 }
 
 /// Reads the metadata of any DNG, linear or CFA, without decoding its
@@ -983,6 +1120,7 @@ mod tests {
             .collect()
     }
 
+    #[derive(Clone)]
     enum Val {
         Short(Vec<u16>),
         Long(Vec<u32>),
@@ -1095,6 +1233,8 @@ mod tests {
         sub_ifd: bool,
         /// Strips of this many rows instead of tiles (`tile` is ignored).
         strips: Option<u32>,
+        /// More tags for the raw IFD.
+        extra: Vec<(u16, Val)>,
     }
 
     fn spec(tiles: Vec<Vec<u8>>, compression: u16) -> Spec {
@@ -1110,6 +1250,7 @@ mod tests {
             table: true,
             sub_ifd: true,
             strips: None,
+            extra: Vec::new(),
         }
     }
 
@@ -1176,6 +1317,9 @@ mod tests {
             (tag::DEFAULT_CROP_SIZE, Val::Long(vec![30, 20])),
             (tag::OPCODE_LIST_2, Val::Undefined(gain_map_list())),
         ]);
+        for (t, v) in &s.extra {
+            raw.push((*t, v.clone()));
+        }
         if s.table {
             raw.push((tag::LINEARIZATION_TABLE, Val::Short(table())));
         }
@@ -1420,6 +1564,73 @@ mod tests {
         check(&decode_linear(&build(&restart_strip())).unwrap(), true);
     }
 
+    /// A CFA DNG of one uncompressed 16-bit strip, the samples of `sample`
+    /// for channel 0, with the given pattern. The builder's ActiveArea starts
+    /// at row 1, column 2, so the pattern (stored relative to it) must be
+    /// shifted to apply at the data's origin.
+    #[cfg(feature = "raw")]
+    fn cfa_dng(rows: u16, cols: u16, codes: Vec<u8>) -> Vec<u8> {
+        let strip: Vec<u8> = (0..H)
+            .flat_map(|y| (0..W).flat_map(move |x| sample(x, y, 0).to_le_bytes()))
+            .collect();
+        let mut s = spec(vec![strip], COMPRESSION_NONE);
+        s.photometric = PHOTOMETRIC_CFA;
+        s.spp = 1;
+        s.strips = Some(H);
+        s.table = false;
+        s.extra = vec![
+            (tag::CFA_REPEAT_PATTERN_DIM, Val::Short(vec![rows, cols])),
+            (tag::CFA_PATTERN, Val::Byte(codes)),
+        ];
+        build(&s)
+    }
+
+    #[cfg(feature = "raw")]
+    fn decoded_cfa(file: &[u8]) -> (CfaPattern, Vec<u16>) {
+        match crate::decode(file, crate::DecodeOptions::default())
+            .unwrap()
+            .pixels
+        {
+            crate::Pixels::Cfa { pattern, data, .. } => (pattern, data),
+            other => panic!("expected a CFA image, got {other:?}"),
+        }
+    }
+
+    #[cfg(feature = "raw")]
+    #[test]
+    fn cfa_dng_pattern_applies_at_the_data_origin() {
+        // RGGB from the active area's (1, 2): the data's first row is the
+        // pattern's second, so GB over RG.
+        let (pattern, data) = decoded_cfa(&cfa_dng(2, 2, vec![0, 1, 1, 2]));
+        assert_eq!((pattern.width, pattern.height), (2, 2));
+        assert_eq!(pattern.colors, [1, 2, 0, 1]);
+        for y in 0..H {
+            for x in 0..W {
+                assert_eq!(data[(y * W + x) as usize], sample(x, y, 0), "({x}, {y})");
+            }
+        }
+        // X-Trans (6 x 6), where shifting by the offset the wrong way (as
+        // rawler 0.8 does for DNG) gives a different answer: data site
+        // (y, x) is pattern site ((y - 1) mod 6, (x - 2) mod 6).
+        let codes: Vec<u8> = "GGRGGBGGBGGRBRGRBGGGBGGRGGRGGBRBGBRG"
+            .bytes()
+            .map(|c| match c {
+                b'R' => 0,
+                b'G' => 1,
+                _ => 2,
+            })
+            .collect();
+        let (pattern, _) = decoded_cfa(&cfa_dng(6, 6, codes.clone()));
+        for y in 0..6 {
+            for x in 0..6 {
+                let want = codes[((y + 5) % 6) * 6 + (x + 4) % 6];
+                assert_eq!(pattern.color_at(y, x), want, "({x}, {y})");
+            }
+        }
+        // ... which is not what shifting the other way gives.
+        assert_ne!(pattern.color_at(0, 0), codes[6 + 2]);
+    }
+
     #[test]
     fn raw_image_in_ifd0() {
         let mut s = spec(jxl_tiles(16), COMPRESSION_JPEG_XL);
@@ -1516,6 +1727,12 @@ mod tests {
         std::fs::write(
             format!("{dir}/lossless-jpeg-strip-restarts.dng"),
             build(&restart_strip()),
+        )
+        .unwrap();
+        #[cfg(feature = "raw")]
+        std::fs::write(
+            format!("{dir}/cfa-xtrans-strip.dng"),
+            cfa_dng(6, 6, (0..36).map(|i| [1, 1, 0, 1, 1, 2][i % 6]).collect()),
         )
         .unwrap();
     }

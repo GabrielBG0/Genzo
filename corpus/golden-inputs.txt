@@ -3,3 +3,8 @@
 # (scripts/fetch-raw-corpus.py --list) and caches them; every one must be CC0.
 raw/Apple/iPhone 12 Pro/IMG_1361.DNG
 raw/Samsung/Galaxy S23 Ultra/20230817_120455.dng
+raw/Canon/Canon EOS R5m2/APS-C_CRAW.CR3
+raw/Kodak/DCS760C/86L57188.DCR
+raw/OM Digital Solutions/OM-3/P5048182.ORF
+raw/Fujifilm/X-T5/DSCF0021.RAF
+raw/Pentax/K10D/IMGP5398.DNG

@@ -162,6 +162,13 @@ fn decode_one(b: &[u8], max_samples: usize) -> Result<Samples, Error> {
     .map_err(Error::Corrupt)
 }
 
+/// Whether a stream declares a restart interval: what rawler's own
+/// decoders get wrong. A stream whose header does not parse counts as having
+/// none; the decoder that reads it reports the damage.
+pub(crate) fn has_restarts(b: &[u8]) -> bool {
+    header(b).is_ok_and(|h| h.restart != 0)
+}
+
 /// Decodes a lossless JPEG stream of at most `max_samples` samples.
 pub(crate) fn decode(b: &[u8], max_samples: usize) -> Result<Samples, Error> {
     let h = header(b)?;

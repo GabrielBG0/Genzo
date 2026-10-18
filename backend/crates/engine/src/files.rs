@@ -41,6 +41,9 @@ fn describe(pixels: &Pixels) -> String {
         Pixels::Linear {
             samples_per_pixel, ..
         } => format!("linear camera samples, {samples_per_pixel} per pixel"),
+        Pixels::Cfa { pattern, .. } => {
+            format!("CFA mosaic, {}x{} pattern", pattern.width, pattern.height)
+        }
     }
 }
 

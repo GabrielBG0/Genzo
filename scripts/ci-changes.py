@@ -31,6 +31,9 @@ RULES = [
     ("backend/Cargo.toml", {"backend", "gpu", "bench", "architecture", "deny", "shell"}),
     ("backend/Cargo.lock", {"backend", "gpu", "bench", "architecture", "deny", "shell"}),
     ("backend/crates/*", {"backend", "gpu", "bench", "architecture", "shell"}),
+    # Vendored crates (rawler, patched): built into backend and shell, and
+    # their licenses checked.
+    ("backend/vendor/*", {"backend", "gpu", "bench", "architecture", "deny", "shell"}),
     (".gitmodules", {"backend", "gpu", "bench", "shell"}),
     # The fuzz targets are their own workspace, and no CI job builds them.
     ("backend/fuzz/*", set()),
@@ -49,6 +52,7 @@ RULES = [
     ("scripts/bench-kit/*", set()),
     (".github/workflows/bench-kit.yml", set()),
     ("scripts/make-dng-references.ps1", set()),
+    ("scripts/cfa-reference.py", set()),
     ("scripts/gpu-check.sh", set()),
     ("scripts/accept-goldens.py", set()),
     ("corpus/*", set()),

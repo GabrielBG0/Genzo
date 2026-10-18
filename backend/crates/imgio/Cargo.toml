@@ -43,6 +43,10 @@ name = "dng_jxl_probe"
 required-features = ["dng"]
 
 [[example]]
+name = "cfa_report"
+required-features = ["raw"]
+
+[[example]]
 name = "dng_inventory"
 required-features = ["dng"]
 
@@ -54,3 +58,4 @@ criterion.workspace = true
 name = "decode"
 harness = false
 required-features = ["raw"]
+

@@ -7,6 +7,8 @@
 //! feature). rawler for CFA DNG and camera RAW, and JPEG, TIFF and PNG, are
 //! still to come.
 
+#[cfg(feature = "raw")]
+mod camera;
 #[cfg(feature = "dng")]
 pub mod dng;
 mod heic;
@@ -129,6 +131,15 @@ pub enum Pixels {
         data: Vec<u16>,
         raw: Box<RawMetadata>,
     },
+    /// The sensor mosaic of a camera RAW or CFA DNG, one sample per site,
+    /// row by row over the whole sensor (masked borders included; the active
+    /// area is in `raw`). Before the levels and the demosaic, which the
+    /// pipeline applies.
+    Cfa {
+        pattern: raw::CfaPattern,
+        data: Vec<u16>,
+        raw: Box<RawMetadata>,
+    },
 }
 
 /// The normalized decode output every decoder produces.
@@ -178,8 +189,22 @@ pub fn decode(data: &[u8], options: DecodeOptions) -> Result<DecodedImage, Decod
     match sniff(data).ok_or(DecodeError::UnknownFormat)? {
         FileFormat::Heif => heic::decode(data, options),
         FileFormat::Tiff => decode_tiff(data),
+        f @ (FileFormat::Cr3 | FileFormat::Raf | FileFormat::Rw2 | FileFormat::Orf) => {
+            decode_camera(data, f)
+        }
         other => Err(DecodeError::not_yet(other)),
     }
+}
+
+/// Camera RAW through rawler (the `raw` feature).
+#[cfg(feature = "raw")]
+fn decode_camera(data: &[u8], format: FileFormat) -> Result<DecodedImage, DecodeError> {
+    camera::decode(data, format)
+}
+
+#[cfg(not(feature = "raw"))]
+fn decode_camera(_: &[u8], format: FileFormat) -> Result<DecodedImage, DecodeError> {
+    Err(DecodeError::NotBuiltIn(format, "raw"))
 }
 
 /// DNG, told apart from plain TIFF and TIFF-based camera RAW by its
@@ -188,10 +213,23 @@ pub fn decode(data: &[u8], options: DecodeOptions) -> Result<DecodedImage, Decod
 fn decode_tiff(data: &[u8]) -> Result<DecodedImage, DecodeError> {
     use dng::DngError;
     let format = FileFormat::Tiff;
-    if !dng::is_dng(data) {
-        return Err(DecodeError::not_yet(format));
-    }
     let corrupt = |message: String| DecodeError::Corrupt { format, message };
+    // Plain TIFF and TIFF-based camera RAW (NEF, ARW, 3FR, IIQ, ...) have no
+    // DNGVersion. rawler reads the camera RAW; plain TIFF comes later.
+    if !dng::is_dng(data) {
+        return decode_camera(data, format);
+    }
+    match dng::photometric(data) {
+        Ok(dng::PHOTOMETRIC_LINEAR_DNG) => {}
+        Ok(dng::PHOTOMETRIC_CFA_DNG) => return decode_cfa_dng(data),
+        Ok(p) => {
+            return Err(DecodeError::Unsupported(
+                format,
+                format!("a DNG with photometric interpretation {p}"),
+            ));
+        }
+        Err(e) => return Err(corrupt(e.to_string())),
+    }
     let img = dng::decode_linear(data).map_err(|e| match e {
         DngError::Unsupported(m) => DecodeError::Unsupported(format, m),
         DngError::NotBuiltIn(_, feature) => DecodeError::NotBuiltIn(format, feature),
@@ -223,6 +261,16 @@ fn decode_tiff(data: &[u8]) -> Result<DecodedImage, DecodeError> {
         orientation: img.orientation,
         exif: None,
     })
+}
+
+#[cfg(all(feature = "dng", feature = "raw"))]
+fn decode_cfa_dng(data: &[u8]) -> Result<DecodedImage, DecodeError> {
+    camera::decode_dng(data)
+}
+
+#[cfg(all(feature = "dng", not(feature = "raw")))]
+fn decode_cfa_dng(_: &[u8]) -> Result<DecodedImage, DecodeError> {
+    Err(DecodeError::NotBuiltIn(FileFormat::Tiff, "raw"))
 }
 
 #[cfg(not(feature = "dng"))]
@@ -269,8 +317,16 @@ mod tests {
         // A TIFF without DNGVersion: plain TIFF or camera RAW, not read yet.
         let plain_tiff = b"II*\0\x08\0\0\0\0\0\0\0\0\0";
         let err = decode(plain_tiff, DecodeOptions::default()).unwrap_err();
-        if cfg!(feature = "dng") {
-            assert!(matches!(err, DecodeError::Unsupported(FileFormat::Tiff, _)));
+        if cfg!(feature = "raw") {
+            assert!(
+                matches!(&err, DecodeError::Unsupported(FileFormat::Tiff, m) if m == "plain TIFF images are not supported yet"),
+                "{err:?}"
+            );
+        } else if cfg!(feature = "dng") {
+            assert!(matches!(
+                err,
+                DecodeError::NotBuiltIn(FileFormat::Tiff, "raw")
+            ));
         } else {
             assert!(matches!(
                 err,

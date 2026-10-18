@@ -30,3 +30,13 @@ lto = "thin"
 codegen-units = 1
 
 [workspace]
+
+# rawler 0.8.0 with Genzo's patch, as in backend/Cargo.toml (backend/vendor/README.md).
+[patch.crates-io]
+rawler = { path = "../backend/vendor/rawler" }
+
+# rawler parses untrusted files with unchecked arithmetic. With overflow
+# checks, an overflow is a panic that the decoder catches, as under fuzzing,
+# instead of a wrapped size or index (backend/vendor/README.md).
+[profile.release.package.rawler]
+overflow-checks = true

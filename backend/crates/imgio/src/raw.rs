@@ -3,6 +3,25 @@
 //! every RAW path, so the pipeline never sees which decoder or file format
 //! produced them.
 
+/// The color filter pattern of a CFA sensor: which color each site of the
+/// repeating pattern records, with site (0, 0) at the sensor data's first
+/// sample (not the active area's). 2 × 2 for Bayer, 6 × 6 for X-Trans.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CfaPattern {
+    pub width: u8,
+    pub height: u8,
+    /// Row by row: 0 red, 1 green, 2 blue.
+    pub colors: Vec<u8>,
+}
+
+impl CfaPattern {
+    /// The color recorded at sensor row `y`, column `x`.
+    pub fn color_at(&self, y: usize, x: usize) -> u8 {
+        let (w, h) = (usize::from(self.width), usize::from(self.height));
+        self.colors[(y % h) * w + x % w]
+    }
+}
+
 /// Black and white levels, as the file states them. The pipeline applies
 /// them in stage 1; the decoder never does.
 #[derive(Debug, Clone, PartialEq)]
