@@ -89,12 +89,13 @@ Large linear DNGs decode their tiles in parallel and stream them into stage 1. N
 | iPhone 16 Pro Bayer DNG (Halide) | 3 | WarpRectilinear2, FixVignetteRadial | **no** |
 | iPhone 12 Pro and 16 Pro ProRAW, Pentax K10D | | none | |
 
-Adobe DNG Converter's output of the camera RAW files carries no opcodes. Under the rules below, the Leica Q2 and the Halide DNG are unsupported until M1 implements their opcodes or the rule for non-optional lens opcodes changes (open question for the owner).
+Adobe DNG Converter's output of the camera RAW files carries no opcodes. So M1 implements FixBadPixelsConstant and skips the lens opcodes whether or not they are optional (decided 2026-10-18, spec rev 86): the Leica Q2 and the Halide DNG render, without lens corrections.
 
 - GainMap (OpcodeList2, used by Samsung and Pixel phones) is applied in M1 whatever the inventory shows.
+- FixBadPixelsConstant (OpcodeList1, Leica) is applied in M1.
 - An opcode M1 does not implement is skipped when it is marked optional.
-- When an unimplemented opcode is not marked optional, the photo is *unsupported*.
-- The lens opcodes (WarpRectilinear, FixVignetteRadial) are skipped while marked optional, and stage 5 takes them up in M3.
+- When an unimplemented opcode is not marked optional, the photo is *unsupported*, except for the lens opcodes.
+- The lens opcodes (WarpRectilinear, WarpRectilinear2, FixVignetteRadial) are skipped in M1 whether or not they are marked optional (decided 2026-10-18). When a non-optional one is skipped, the status bar says "Lens corrections from the file are not applied yet". Stage 5 takes them up in M3.
 
 ### Stage 1: linearize
 
