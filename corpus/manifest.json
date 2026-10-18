@@ -1,91 +1,115 @@
 {
+  "raw/Apple/iPhone 12 Pro/IMG_1361.DNG": {
+    "bytes": 29195592,
+    "license": "CC0-1.0",
+    "sha256": "e91e77a4533ed7cce551d83330676ea5c47dd5e55fb38adda7819366afdbdfc2",
+    "why": "ProRAW, lossless JPEG, not white balanced in the camera"
+  },
   "raw/Canon/Canon EOS R5m2/APS-C_CRAW.CR3": {
     "bytes": 7564960,
+    "license": "CC0-1.0",
     "sha256": "6a597497776a6abbfab8fcf12d0086ac7a3f8afea2879d61accf6bbf48d357d7",
     "why": "CR3 on a recent body"
   },
   "raw/Fujifilm/GFX100S/Fujifilm-GFX100S-14bits-compress-4_3.RAF": {
     "bytes": 64267568,
+    "license": "CC0-1.0",
     "sha256": "1be3e443b42a1ed2a5607eb25013bd06bc6da2bb86bac0a1220cbe82338dac50",
     "why": "medium format"
   },
   "raw/Fujifilm/X-T5/DSCF0021.RAF": {
     "bytes": 43113376,
+    "license": "CC0-1.0",
     "sha256": "b2a067e7fda16338f15c2532caa12b238b2415dc1c75a96a6d24d3445cfd0ae3",
     "why": "X-Trans sensor"
   },
   "raw/GoPro/HERO6 Black/GOPR8921.GPR": {
     "bytes": 3622730,
+    "license": "CC0-1.0",
     "sha256": "17a24d42735464525773048172c888ea24d13ba4b907e64580b63c3bab987ae5",
     "why": "GPR"
   },
   "raw/Hasselblad/H3D/A9391120.3FR": {
     "bytes": 53594112,
+    "license": "CC0-1.0",
     "sha256": "34fdb93cb215e4f419ae0f7252c57b881fa381003124b4f9c143d27741f211b3",
     "why": "3FR"
   },
   "raw/Kodak/DCS760C/86L57188.DCR": {
     "bytes": 7547392,
+    "license": "CC0-1.0",
     "sha256": "d0e6bd0a3339daff884e73a08fed8e75b20fe05bba438fc185e3f0bd019d0da8",
     "why": "legacy"
   },
   "raw/Leica/Q2/L1000750.DNG": {
     "bytes": 87194624,
+    "license": "CC0-1.0",
     "sha256": "a71f98405e9e9c1e4ac0f2d2e6c52d65daae3234fc0a9f6eed2a84ee4ce794ad",
     "why": "DNG from a maker"
   },
   "raw/Nikon/D850/Nikon-D850-12bit-compressed.NEF": {
     "bytes": 38427598,
+    "license": "CC0-1.0",
     "sha256": "ba11bc767b4f67144a8b7b5d27fa0fe2be8e69e5fcc5e0161f80623794f294f4",
     "why": "classic NEF, lossless compressed"
   },
   "raw/Nikon/Z 8/Nikon_Z8_high_efficiency_low.NEF": {
     "bytes": 24384512,
+    "license": "CC0-1.0",
     "sha256": "82df041542b8d328738443bb5ff3373b396e406ecc8cbe7dc3b35252790c53e7",
     "why": "High Efficiency RAW check"
   },
   "raw/Nikon/Z 9/Nikon_-_NIKON_Z_9_-_14bit_compressed_(Lossless).NEF": {
     "bytes": 57580695,
+    "license": "CC0-1.0",
     "sha256": "99d0fe24a38f0f7623aeab21440d266a5ac09f9665cf5283f590337e84323c38",
     "why": "lossless baseline for the same body"
   },
   "raw/Nikon/Z 9/Nikon_-_NIKON_Z_9_-_14bit_compressed_(Lossy_High_Efficiency).NEF": {
     "bytes": 24839168,
+    "license": "CC0-1.0",
     "sha256": "be91bac25573adf7ec6320a542105d87b4fb9c956d7b620ec90d57ac2ae6c3f0",
     "why": "High Efficiency RAW check"
   },
   "raw/OM Digital Solutions/OM-3/P5048182.ORF": {
     "bytes": 21636473,
+    "license": "CC0-1.0",
     "sha256": "1cee7deb661e45101ab3ca6c4240d24ed949b167ed423703fca15c09dd8ec176",
     "why": "newest OM body"
   },
   "raw/Olympus/E-M1MarkII/Olympus_EM1mk2_Standard_20MP.ORF": {
     "bytes": 17272835,
+    "license": "CC0-1.0",
     "sha256": "4bc52d99e4fbf2f09335a3301a4634bc261a98441edb824434ec069f7026cd71",
     "why": "ORF"
   },
   "raw/Panasonic/DC-S5M2/P1126458_mechanical.RW2": {
     "bytes": 37309952,
+    "license": "CC0-1.0",
     "sha256": "53a171521a7f9af6910b4ab61c5a4a42de0cceb24166e15b07eee1e00675028f",
     "why": "RW2"
   },
   "raw/Pentax/K10D/IMGP5398.DNG": {
     "bytes": 16913175,
+    "license": "CC0-1.0",
     "sha256": "e7ea961edfea725ad2753f261d20da5e6addd5d641e5bcbc373999710f27941f",
     "why": "PEF"
   },
   "raw/Phase One/P65+/CF027310.IIQ": {
     "bytes": 71921221,
+    "license": "CC0-1.0",
     "sha256": "a724cd059480f801a5d9a9176ed38edd643dfd5bf38ca90c6243164b062826b8",
     "why": "IIQ"
   },
   "raw/Samsung/Galaxy S23 Ultra/20230817_120455.dng": {
     "bytes": 31311854,
+    "license": "CC0-1.0",
     "sha256": "4f9d1b085b328b6c7ae21437c4106889cb38d52fab604a786091bf5fe5ef3da4",
     "why": "phone DNG, 200 MP"
   },
   "raw/Sony/ILCE-7RM5/7RM5-LosslessCompressedLarge.ARW": {
     "bytes": 85950464,
+    "license": "CC0-1.0",
     "sha256": "c294c388ad9bccbee169f87b9ceb661001515fb039d63f587dcabba76df5636d",
     "why": "61 MP ARW, lossless compressed"
   }

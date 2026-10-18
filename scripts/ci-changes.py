@@ -48,10 +48,16 @@ RULES = [
     # here reads them.
     ("scripts/bench-kit/*", set()),
     (".github/workflows/bench-kit.yml", set()),
-    ("scripts/fetch-raw-corpus.py", set()),
     ("scripts/make-dng-references.ps1", set()),
     ("scripts/gpu-check.sh", set()),
+    ("scripts/accept-goldens.py", set()),
     ("corpus/*", set()),
+    # The corpus files the golden-image tests read, and the script that fetches
+    # them, decide what the backend and GPU jobs test. The rest of corpus/ is
+    # local only (the rule above).
+    ("corpus/manifest.json", {"backend", "gpu"}),
+    ("corpus/golden-inputs.txt", {"backend", "gpu"}),
+    ("scripts/fetch-raw-corpus.py", {"backend", "gpu"}),
     # What decides the jobs reruns all of them.
     ("scripts/ci-changes.py", set(JOBS)),
     (".github/workflows/ci.yml", set(JOBS)),

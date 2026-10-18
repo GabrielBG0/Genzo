@@ -1,0 +1,4 @@
+# Corpus files the golden-image tests read: one corpus/manifest.json key per
+# line. CI fetches exactly these (scripts/fetch-raw-corpus.py --list) and
+# caches them; every one must be CC0.
+raw/Apple/iPhone 12 Pro/IMG_1361.DNG

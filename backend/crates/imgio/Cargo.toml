@@ -40,3 +40,6 @@ required-features = ["raw"]
 [[example]]
 name = "dng_jxl_probe"
 required-features = ["dng"]
+
+[dev-dependencies]
+genzo-golden.workspace = true

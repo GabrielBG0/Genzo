@@ -363,7 +363,11 @@ Each criterion names the check that proves it. These become the tests. "Corpus" 
    - These numbers are a target. The PR that first runs the test records the measured values here, with the reason for any change.
 
    *Check:* corpus test (local; the references are 58 to 350 MB each).
-5. **Golden images.** Each stage on the CC0 set matches its stored golden image on lavapipe: mean ΔE2000 ≤ 0.5, max ≤ 2, PSNR ≥ 45 dB. The same goldens hold on real GPUs. *Check:* the golden harness in CI on every PR, and `scripts/gpu-check.sh` on the RTX 3060 before merging pipeline changes. Changing a golden needs a stated reason in the PR.
+5. **Golden images.** Each stage on the CC0 set matches its stored golden image on lavapipe: mean ΔE2000 ≤ 0.5, max ≤ 2, PSNR ≥ 45 dB. How they are measured depends on what the stage outputs (`backend/crates/golden`):
+    - **Linear data** (camera RGB in stages 0 to 3, scene-linear AP1 in stage 4) is compared over its full float range, negatives and values above 1 included. PSNR uses a peak of 1.0, the normalized white level, and the largest absolute error is reported. ΔE2000 is taken through a fixed view: a matrix into linear sRGB (the identity for camera RGB, which only has to stay fixed, not be accurate), a fixed exposure, a clip, then sRGB encoding.
+    - **Display output** (after stage 9) is compared directly as encoded sRGB.
+    - Goldens are small (about 256 px), stored losslessly as f16, and written only on lavapipe or by CPU code; `scripts/accept-goldens.py` refuses renders from any other adapter.
+ The same goldens hold on real GPUs. *Check:* the golden harness in CI on every PR, and `scripts/gpu-check.sh` on the RTX 3060 before merging pipeline changes. Changing a golden needs a stated reason in the PR.
 6. **No tile seams.** A 3000 × 2000 image rendered with 1024 px tiles and as one tile differs by at most 1 code. *Check:* a pipeline test on lavapipe.
 7. **Fit matches 1:1.** The Fit render and the 1:1 render downsampled to Fit differ by mean ΔE2000 ≤ 1.0, with Highlights at −100 and Shadows at +100, which is where local tone mapping shows. *Check:* a pipeline test.
 8. **Non-RAW is an identity when unedited.**

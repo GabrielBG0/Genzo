@@ -25,6 +25,7 @@ Genzo is GPL-3.0-only. A dependency is acceptable when its license is compatible
 | jpeg-encoder 0.7.1 | backend (`imgio`) | (MIT OR Apache-2.0) AND IJG | Drag-preview frames (0.E). Read from the registry metadata. The IJG license is on the FSF's list of GPL-compatible licenses. It requires that documentation shipped with binaries states that the software is based in part on the work of the Independent JPEG Group: add that line to the About box and the README when the first release is built. `deny.toml` allows `IJG` for this crate only |
 | rayon 1.12 | backend (`engine`) | MIT OR Apache-2.0 | CPU parallelism, as the architecture rules prescribe. Already in the tree through jxl-oxide and rawler |
 | criterion 0.8.2 | backend (`pipeline`), benchmarks only | Apache-2.0 OR MIT | Not distributed |
+| png 0.17.16, half 2.7.1 | backend (`golden`), tests only | MIT OR Apache-2.0 | Golden-image storage. Read from the registry metadata. Their tree adds fdeflate, crc32fast (MIT OR Apache-2.0) and miniz_oxide (MIT OR Zlib OR Apache-2.0). Not distributed |
 | @tauri-apps/api | frontend | Apache-2.0 OR MIT | |
 | Public Sans (`@fontsource/public-sans`) | frontend, bundled | OFL-1.1 | Checked in `node_modules/@fontsource/public-sans/LICENSE`. OFL allows bundling with any software; the font may not be sold on its own |
 | JetBrains Mono (`@fontsource/jetbrains-mono`) | frontend, bundled | OFL-1.1 | Same as Public Sans |
