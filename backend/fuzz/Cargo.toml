@@ -87,3 +87,12 @@ path = "fuzz_targets/tiff.rs"
 test = false
 doc = false
 bench = false
+
+# imgio::decode_preview: the embedded-preview scan and decode. Seeds: the
+# dng_linear, jpeg and tiff seeds together.
+[[bin]]
+name = "preview"
+path = "fuzz_targets/preview.rs"
+test = false
+doc = false
+bench = false

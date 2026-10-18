@@ -29,6 +29,7 @@ Genzo is GPL-3.0-only. A dependency is acceptable when its license is compatible
 | half 2.7.1 | backend (`golden`, and `imgio` through tiff) | MIT OR Apache-2.0 | |
 | zune-jpeg 0.5.15, zune-core 0.5.3 | backend (`imgio`) | MIT OR Apache-2.0 OR Zlib | JPEG decode (M1, 2026-10-18), the spec's choice. Already in rawler's tree, at the same version |
 | tiff 0.11.3 | backend (`imgio`) | MIT | TIFF decode (M1, 2026-10-18), image-rs. Built with the deflate, lzw and jpeg features (not fax). Its tree adds weezl 0.1.12 and flate2 1.1.10 (MIT OR Apache-2.0), quick-error 2.0.1 (MIT/Apache-2.0), simd-adler32 0.3.10 (MIT), adler2 (0BSD OR MIT OR Apache-2.0), half and zune-jpeg |
+| memchr 2.8.3 | backend (`imgio`) | Unlicense OR MIT | Byte search for embedded previews (M1, 2026-10-18). Already in the tree through rawler, tiff and others |
 | @tauri-apps/api | frontend | Apache-2.0 OR MIT | |
 | Public Sans (`@fontsource/public-sans`) | frontend, bundled | OFL-1.1 | Checked in `node_modules/@fontsource/public-sans/LICENSE`. OFL allows bundling with any software; the font may not be sold on its own |
 | JetBrains Mono (`@fontsource/jetbrains-mono`) | frontend, bundled | OFL-1.1 | Same as Public Sans |

@@ -18,6 +18,7 @@ pub mod jpeg;
 mod ljpeg;
 pub mod opcodes;
 mod png_image;
+mod preview;
 mod raster;
 pub mod raw;
 mod tiff_ifd;
@@ -60,12 +61,6 @@ pub enum DecodeError {
     /// Truncated, or failing a decoder's bounds checks.
     #[error("corrupt or unreadable {format:?} file: {message}")]
     Corrupt { format: FileFormat, message: String },
-}
-
-impl DecodeError {
-    fn not_yet(format: FileFormat) -> Self {
-        Self::Unsupported(format, "decoding it is not implemented yet".into())
-    }
 }
 
 /// Identifies a file from its first bytes. Never panics, whatever the input.
@@ -178,6 +173,13 @@ pub struct Preview {
     pub height: u32,
     /// Interleaved RGBA, 8 bits per channel.
     pub rgba: Vec<u8>,
+    /// The orientation to show it in, 1 to 8, not applied to the pixels, as
+    /// for [`DecodedImage`]. Cameras store previews unrotated, so this is
+    /// the file's orientation.
+    pub orientation: u8,
+    /// How its 8-bit values are encoded: sRGB unless the preview or its
+    /// file says otherwise.
+    pub color: ColorEncoding,
 }
 
 /// Decode settings.
@@ -325,11 +327,71 @@ fn decode_cfa_dng(_: &[u8]) -> Result<DecodedImage, DecodeError> {
 
 /// Decodes a file's embedded preview, if it has one. Fast enough for the
 /// "first pixels within one frame" budget.
+///
+/// Everything but HEIC is searched for embedded JPEG streams (see
+/// `preview.rs`), so a file whose image cannot be decoded (Nikon High
+/// Efficiency, a damaged file) still shows its preview. `Ok(None)` when the
+/// file holds none: PNG, a plain TIFF, Phase One IIQ, Kodak DCR.
 pub fn decode_preview(data: &[u8]) -> Result<Option<Preview>, DecodeError> {
     match sniff(data).ok_or(DecodeError::UnknownFormat)? {
         FileFormat::Heif => heic::decode_preview(data),
-        other => Err(DecodeError::not_yet(other)),
+        // Only the EXIF thumbnail is a JPEG file's preview: not its own
+        // image, nor the MPF images or gain maps (Ultra HDR) after it.
+        FileFormat::Jpeg => Ok(jpeg_app1_exif(data)
+            .and_then(|app1| preview::decode(app1, &preview_hints(data, FileFormat::Jpeg)))),
+        format => Ok(preview::decode(data, &preview_hints(data, format))),
     }
+}
+
+/// What a file declares about its preview: the orientation and the DCF
+/// Adobe RGB marker, from IFD0 of TIFF-based files, from the CMT1 box of a
+/// CR3, and from the APP1 EXIF of a JPEG (whose preview is its thumbnail).
+/// RAF and the rest leave it to the preview's own EXIF.
+fn preview_hints(data: &[u8], format: FileFormat) -> preview::FileHints {
+    let tiff: Option<&[u8]> = match format {
+        FileFormat::Tiff | FileFormat::Orf | FileFormat::Rw2 => Some(data),
+        FileFormat::Cr3 => cr3_cmt1(data),
+        FileFormat::Jpeg => jpeg_app1_exif(data).map(exif::tiff_payload),
+        _ => None,
+    };
+    let Some(tiff) = tiff else {
+        return preview::FileHints::default();
+    };
+    preview::FileHints {
+        orientation: exif::orientation_tag(tiff),
+        color: exif::is_adobe_rgb(tiff).then_some(ColorEncoding::AdobeRgb),
+    }
+}
+
+/// The TIFF structure in a CR3's CMT1 box (IFD0 of the camera's EXIF),
+/// found by its box type in the file's head.
+fn cr3_cmt1(data: &[u8]) -> Option<&[u8]> {
+    let head = &data[..data.len().min(1 << 20)];
+    let at = memchr::memmem::find(head, b"CMT1")?;
+    let box_start = at.checked_sub(4)?;
+    let size = u32::from_be_bytes(data.get(box_start..at)?.try_into().ok()?) as usize;
+    data.get(at + 4..box_start.checked_add(size)?)
+}
+
+/// The body of a JPEG's APP1 EXIF segment, walking the markers from SOI.
+fn jpeg_app1_exif(data: &[u8]) -> Option<&[u8]> {
+    let mut at = 2;
+    for _ in 0..64 {
+        if *data.get(at)? != 0xFF {
+            return None;
+        }
+        let marker = *data.get(at + 1)?;
+        let len = usize::from(u16::from_be_bytes([*data.get(at + 2)?, *data.get(at + 3)?]));
+        let body = data.get(at + 4..at + 2 + len)?;
+        if marker == 0xE1 && body.starts_with(b"Exif\0\0") {
+            return Some(body);
+        }
+        if marker == 0xDA || len < 2 {
+            return None;
+        }
+        at += 2 + len;
+    }
+    None
 }
 
 #[cfg(test)]

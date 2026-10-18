@@ -8,27 +8,47 @@ use genzo_imgio::{ColorEncoding, DecodeOptions, Pixels};
 
 use crate::EngineError;
 
-/// What `genzo-cli inspect` prints about a file.
+/// What `genzo-cli inspect` prints about a file: its image when it decodes,
+/// why when it does not, and its embedded preview either way (a file Genzo
+/// cannot decode still shows its preview, DEV-01 States).
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileReport {
+    pub image: Option<ImageReport>,
+    /// Why the image did not decode, if it did not.
+    pub decode_error: Option<String>,
+    pub decode_ms: f64,
+    pub preview: Option<PreviewReport>,
+    /// Why the embedded preview could not be read, if it could not.
+    pub preview_error: Option<String>,
+    pub preview_ms: f64,
+}
+
+/// The decoded image.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImageReport {
     pub format: String,
     pub width: u32,
     pub height: u32,
     pub source_bits: u8,
     pub has_alpha: bool,
-    /// What the pixels are: encoded RGB and its color encoding, or linear
-    /// camera samples.
+    /// What the pixels are: encoded RGB and its color encoding, linear
+    /// camera samples, or a CFA mosaic.
     pub color: String,
     /// EXIF or DNG orientation, 1 to 8, not yet applied to the pixels.
     pub orientation: u8,
     pub exif_bytes: Option<usize>,
-    /// Size of the embedded preview, if the file has one.
-    pub preview: Option<(u32, u32)>,
-    /// Why the embedded preview could not be read, if it could not.
-    pub preview_error: Option<String>,
-    pub preview_ms: f64,
-    pub decode_ms: f64,
+}
+
+/// The embedded preview.
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PreviewReport {
+    pub width: u32,
+    pub height: u32,
+    pub orientation: u8,
+    pub color: String,
 }
 
 fn read(path: &Path) -> Result<Vec<u8>, EngineError> {
@@ -76,24 +96,43 @@ pub fn inspect(path: &Path) -> Result<FileReport, EngineError> {
     let preview = genzo_imgio::decode_preview(&data);
     let preview_ms = ms_since(started);
     let started = Instant::now();
-    let img = genzo_imgio::decode(&data, DecodeOptions::default()).map_err(EngineError::decode)?;
+    let img = genzo_imgio::decode(&data, DecodeOptions::default());
     let decode_ms = ms_since(started);
+    let (preview, preview_error) = match preview {
+        Ok(p) => (
+            p.map(|p| PreviewReport {
+                width: p.width,
+                height: p.height,
+                orientation: p.orientation,
+                color: describe_encoding(&p.color),
+            }),
+            None,
+        ),
+        Err(e) => (None, Some(e.to_string())),
+    };
+    let (image, decode_error) = match img {
+        Ok(img) => (
+            Some(ImageReport {
+                format: format!("{:?}", img.format),
+                width: img.width,
+                height: img.height,
+                source_bits: img.source_bits,
+                has_alpha: img.has_alpha,
+                color: describe(&img.pixels),
+                orientation: img.orientation,
+                exif_bytes: img.exif.as_ref().map(Vec::len),
+            }),
+            None,
+        ),
+        Err(e) => (None, Some(e.to_string())),
+    };
     Ok(FileReport {
-        format: format!("{:?}", img.format),
-        width: img.width,
-        height: img.height,
-        source_bits: img.source_bits,
-        has_alpha: img.has_alpha,
-        color: describe(&img.pixels),
-        orientation: img.orientation,
-        exif_bytes: img.exif.as_ref().map(Vec::len),
-        preview: preview
-            .as_ref()
-            .ok()
-            .and_then(|p| p.as_ref().map(|p| (p.width, p.height))),
-        preview_error: preview.err().map(|e| e.to_string()),
-        preview_ms,
+        image,
+        decode_error,
         decode_ms,
+        preview,
+        preview_error,
+        preview_ms,
     })
 }
 

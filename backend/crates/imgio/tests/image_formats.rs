@@ -340,3 +340,30 @@ fn a_broken_palette_is_damaged_not_a_panic() {
         other => panic!("expected damaged, got {other:?}"),
     }
 }
+
+/// A JPEG file's preview is its EXIF thumbnail only. A big image after its
+/// EOI (an Ultra HDR gain map, an MPF image) is not one, however large.
+#[test]
+fn a_jpeg_preview_is_never_its_gain_map() {
+    // jpeg-exif6-xmp.jpg has EXIF but no thumbnail.
+    let mut file = read("jpeg-exif6-xmp.jpg");
+    file.extend_from_slice(&read("jpeg-wide.jpg"));
+    let preview = genzo_imgio::decode_preview(&file).unwrap();
+    assert!(
+        preview.is_none(),
+        "got {:?}",
+        preview.map(|p| (p.width, p.height))
+    );
+}
+
+/// A CR3 sniffed from bytes 4..12 with its CMT1 box type at offset 0.
+#[test]
+fn crafted_cr3_heads_never_panic() {
+    for data in [
+        &b"CMT1ftypcrx "[..],
+        b"\0\0\0\x08CMT1ftypcrx ",
+        b"\0\0\0\x18ftypcrx CMT1",
+    ] {
+        let _ = genzo_imgio::decode_preview(data);
+    }
+}
