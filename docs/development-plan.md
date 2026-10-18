@@ -2,7 +2,7 @@
 
 Built from these sources:
 
-- **Spec:** *Genzo: Technical Spec (draft 2)*, revision 79 (revision 57, plus the M0 results recorded on 2026-10-15 and 2026-10-17, plus the M1 decisions of 2026-10-17 and 2026-10-18). The artifact is still listed as "Photo Editor: Technical Spec (draft 1)".
+- **Spec:** *Genzo: Technical Spec (draft 2)*, revision 85 (revision 57, plus the M0 results recorded on 2026-10-15 and 2026-10-17, plus the M1 decisions of 2026-10-17 and 2026-10-18). The artifact is still listed as "Photo Editor: Technical Spec (draft 1)".
 - **UI handoff:** [`docs/UI/fixer-ui-handoff.html`](UI/fixer-ui-handoff.html). It holds the approved Carbon Glass direction, every mockup screen, the design system and the component list. "Fixer" was the working name before Genzo.
 - **Feature list:** [`docs/UI/FEATURES.md`](UI/FEATURES.md). It gives every UI feature an ID, a priority (P0, P1, P2) and its screens.
 
@@ -121,9 +121,9 @@ Parked decisions that have been settled, with the date and what follows from eac
 | Viewport fallback ladder on Windows | Step 1 plus step 2: while a slider is dragged at Fit zoom, a half-size JPEG preview; the full lossless frame on release | 2026-10-15 | Measured 18 ms p95 against the 50 ms gate (was 230 ms), on the spike's synthetic scene; real photos are estimated at 19 to 26 ms from measured parts and not yet measured in the app. Contract 0.3.0. macOS and Linux still to measure, and 1:1 zoom drags still send full frames. See `docs/m0-results.md` |
 | WebKitGTK on two distros (0.E step 3) | Ubuntu only for M0: 22.04 and 24.04, which covered two WebKitGTK versions (2.50.4 and 2.52.6). No run on a second distro family | 2026-10-17 | The owner uses Ubuntu, and testing another family now is not worth the time. Other distros rest on the minimum versions above and on reports from people who try them: the bench kit starts on any distro with glibc 2.35 or newer and prints the install command for Fedora, Arch and openSUSE. A distro-specific problem found later is fixed then |
 | Golden images in M0 | Not stored for the M0 spike. Its GPU tests compare against the synthetic scene's ground truth (PSNR, ΔE2000) and the CPU port of darktable's `rcd.c` (ΔE2000), on every adapter including lavapipe | 2026-10-17 | Accepted for M0 only, because the spike pipeline is rewritten in M1. **From M1 on, testing gets stricter:** every pipeline stage gets stored golden images as the plan says (rendered on lavapipe, ΔE2000 and PSNR tolerances, inputs from the CC0 raw.pixls.us files since the owner's photos cannot be published), and keeps its ground-truth tests alongside them. A stage is not done without both. Changing a golden image needs a stated reason in the PR |
-| Real-GPU checks | A self-hosted GitHub runner on the owner's RTX 3060 desktop runs the real-GPU golden images and the performance benchmarks nightly and on every push to `main`, against a 10 percent baseline. lavapipe keeps its coarse gate on every PR | 2026-10-17 | A regression on real hardware is flagged after it merges, not blocked: PRs are gated by lavapipe only. The M1 exit gate is measured on this runner. The repo is public, so fork pull requests must never reach it: the repository's Actions setting requires approval before workflows from outside contributors run. `benchmarks/` gets a `baseline-<runner>.json` with the default 10 percent |
+| Real-GPU checks | Manual: `scripts/gpu-check.sh`, run on the owner's RTX 3060 desktop before merging a PR that touches the pipeline, the engine or the benchmarks, with its summary in the PR. It checks the adapter, the GPU tests and the benchmarks against `benchmarks/baseline-rtx3060.json` at 10 percent. lavapipe stays the CI gate on every PR | 2026-10-17, changed 2026-10-18 | First decided as a self-hosted CI runner; replaced on 2026-10-18 by the owner, so nothing depends on the desktop being on. The runner was unregistered and its service removed. The M1 exit gate is measured with the same script. Fork pull requests from every outside contributor still need approval before workflows run (repo setting, kept) |
 | Edit storage in M1 | In memory for the session: each photo's edit and undo history live in the engine until the app closes. Export is how a result is kept | 2026-10-17 | No sidecar or temporary file format to migrate. The filmstrip's edited dot means edited this session. The M2 catalog stores the same versioned edit struct |
-| Nikon High Efficiency in M1 | Build a JPEG XS decoder in M1, instead of showing only the embedded preview | 2026-10-17 | A patent and license check comes first and is recorded in `docs/licenses.md`. Verified against Adobe DNG Converter's output for the Z 8 file, with a fuzz target. Estimated at 20 to 40 hours, run as its own track |
+| Nikon High Efficiency in M1 | Build a JPEG XS decoder in M1, in its own crate behind a cargo feature that release builds leave off | 2026-10-17, flag added 2026-10-18 | JPEG XS decoding is covered by an active patent pool (101 patents, granted from 2018) with no open-source exemption, and a royalty license would conflict with GPL-3.0 section 12; see `docs/licenses.md`. Release builds show HE files' embedded preview with a notice; self-builders can turn the feature on. Revisit before the first public release, with HEVC. Verified against Adobe DNG Converter's output for the Z 8 file, with a fuzz target. Estimated at 20 to 40 hours, run as its own track |
 | X-Trans demosaic | A Markesteijn-class demosaic in M1 | 2026-10-17 | Fujifilm is in the first priority tier. Checked against a literal CPU port of darktable's code, as RCD was in M0 |
 | ProRAW gain table map | Read and kept, not applied by default | 2026-10-17 | Lightroom renders ProRAW without it (a ΔE00 of 19 with it applied, measured by LightCraft). Applying it can come later as an opt-in |
 | Camera profiles in M1 | Genzo's own, since Adobe's are proprietary: Genzo Standard (the camera matrix plus Genzo's base tone curve) and Genzo Linear (the matrix only). B&W starts from Genzo Standard | 2026-10-17 | DCP files and the profile tables embedded in DNG are not read in M1. The base tone curve is defined in the DEV-02 spec |
@@ -277,7 +277,7 @@ These are open questions, not conflicts. Neither source answers them.
 
 A screen is not built before its spec exists.
 
-**Exit gate:** meets the slider and photo-open budgets on the reference GPU (RTX 3060 class), measured on the self-hosted runner. The bench kit also runs the latency cases on macOS (base M1) and Linux (RTX 3050 laptop); those runs are reported, not gated.
+**Exit gate:** meets the slider and photo-open budgets on the reference GPU (RTX 3060 class), measured with `scripts/gpu-check.sh` on the owner's desktop. The bench kit also runs the latency cases on macOS (base M1) and Linux (RTX 3050 laptop); those runs are reported, not gated.
 
 | Target | Value | Measured by |
 |---|---|---|
@@ -316,7 +316,7 @@ These come from `docs/m0-results.md` and decide how the steps below are built:
    - **ProRAW and other linear DNG:** wire `dng::decode_linear` into `imgio::decode`. Apply AsShotNeutral and BaselineExposure. Read and keep the gain table map, but do not apply it (decided).
    - **Camera RAW and CFA DNG** through rawler, Bayer and X-Trans. Levels as arrays.
    - **DNG opcode lists:** parse them for every DNG. Apply the opcodes the corpus files carry (Samsung's OpcodeList2 first). An unknown opcode marked optional is skipped; one not marked optional is reported, and the photo shows its embedded preview.
-   - **Nikon High Efficiency:** a JPEG XS decoder (decided). The patent and license check comes first and is recorded in `docs/licenses.md`. Verified against Adobe DNG Converter's output for the Z 8 file. Estimated at 20 to 40 hours, so it runs as its own track beside the pipeline work.
+   - **Nikon High Efficiency:** a JPEG XS decoder (decided), in its own crate behind a cargo feature that release builds leave off, because of the JPEG XS patent pool (`docs/licenses.md`). Verified against Adobe DNG Converter's output for the Z 8 file. Estimated at 20 to 40 hours, so it runs as its own track beside the pipeline work.
    - **48 MP JPEG XL ProRAW** decodes its tiles in parallel and streams them into the mip pyramid, with no full-size copy held. Measure the parallel decode on the reference desktop before building on it: the 2 s fit-view budget is not proven (1.8 s one tile after another on the desktop, 2.6 to 5.3 s in parallel on the owner's laptop).
    - HEIC (libheif), JPEG, TIFF and PNG. EXIF, including orientation.
    - **No LibRaw fallback** (decided).
@@ -392,7 +392,7 @@ Stricter than M0 (see Decided, "Golden images in M0"). A stage or decoder is not
   - The stored goldens are small crops or downscales, rendered on lavapipe and committed, with ΔE2000 and PSNR tolerances.
   - Each stage keeps its ground-truth tests beside them (the synthetic scene, the darktable references for RCD and Markesteijn).
   - Changing a golden image needs a stated reason in the PR.
-- **Real GPUs:** the self-hosted RTX 3060 runner (decided) runs the goldens and benchmarks nightly and on pushes to `main`, against a 10 percent baseline. It flags a regression after merge; PRs are gated by lavapipe only. It is not a required check, so a powered-off desktop never blocks a merge. Fork pull requests never reach it: the repository's Actions setting requires approval for workflows from outside contributors.
+- **Real GPUs:** `scripts/gpu-check.sh` (decided), run by hand on the owner's RTX 3060 desktop before merging a PR that touches the pipeline, the engine or the benchmarks. It checks the adapter, the GPU tests and the benchmarks against a 10 percent baseline, and its summary goes in the PR. CI gates PRs with lavapipe only.
 - **lavapipe** keeps its coarse gate on every PR (25 percent against the slowest run seen, `benchmarks/README.md`).
 - A criterion benchmark per stage, and a fuzz target per decoder.
 - The bench kit measures the latency cases on all three OSes at checkpoints and at exit. Its PRIME offload variant is dropped, or skipped with a message when it cannot start.
@@ -403,12 +403,12 @@ One PR per numbered item, unless it says otherwise. The frontend track (item 9) 
 
 1. The feature specs, DEV-01 first.
 2. Groundwork, in parallel:
-   - the self-hosted runner;
+   - the manual real-GPU check (`scripts/gpu-check.sh`);
    - the golden-image harness;
-   - the JPEG XS patent and license check;
+   - the JPEG XS patent and license check (done 2026-10-18: behind a feature flag, off in releases);
    - the measurement of parallel 48 MP decode on the reference desktop.
 3. Normalized decode: linear DNG, then rawler (Bayer and X-Trans data), then the non-raw formats, then opcode lists. Each path comes with its fuzz target and corpus tests.
-4. The JPEG XS decoder, as its own track from here on.
+4. The JPEG XS decoder, in its own crate behind a feature flag, as its own track from here on.
 5. Tiled stages 1 to 4, with RCD, Markesteijn and the memory test.
 6. What reaches the viewport: the Fit preview, 1:1 visible tiles, readback of the visible tiles only.
 7. Stages 6 and 7, B&W, crop and rotate, the output transform, and the histogram.

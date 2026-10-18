@@ -57,7 +57,7 @@ Contract workflow: change the Rust types in `backend/crates/model`, bump `CONTRA
 
 - Every new pipeline stage gets golden-image tests (ΔE2000 and PSNR tolerances, lavapipe as the reference device) and a criterion benchmark.
 - Every new decoder gets a `cargo-fuzz` target.
-- Performance budgets are enforced in CI: a p95 regression above 10 percent fails the build. On the shared lavapipe runner the baseline uses a 25 percent threshold against the slowest run seen, because that hardware varies by about 2x between runs; see `benchmarks/README.md`. A private runner with a real GPU gets the 10 percent rule.
+- Performance budgets are enforced in CI: a p95 regression above 10 percent fails the build. On the shared lavapipe runner the baseline uses a 25 percent threshold against the slowest run seen, because that hardware varies by about 2x between runs; see `benchmarks/README.md`. The reference GPU (the owner's RTX 3060) keeps the 10 percent rule through a manual check, `scripts/gpu-check.sh`, run before merging pipeline, engine or benchmark changes; its summary goes in the PR.
 - Check the license of every native dependency before adopting it (`cargo-deny`).
 - Before building a feature, its spec must be written using the template in `docs/UI/FEATURES.md`, as `docs/specs/<ID>.md`, and linked from the feature's entry there.
 

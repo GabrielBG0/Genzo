@@ -10,7 +10,7 @@ The pipeline turns a decoded file and an edit into pixels, the same way for the 
 
 Its rules bind every later stage.
 
-Sources: the spec's *Image pipeline and performance* and *RAW and format support* sections (revision 79), the M1 section of `docs/development-plan.md`, and `docs/m0-results.md`. Where this spec and the technical spec disagree, the technical spec wins and this file is corrected.
+Sources: the spec's *Image pipeline and performance* and *RAW and format support* sections (revision 85), the M1 section of `docs/development-plan.md`, and `docs/m0-results.md`. Where this spec and the technical spec disagree, the technical spec wins and this file is corrected.
 
 **Out of scope for M1**, with their milestone:
 - stage 5, lens and perspective (M3)
@@ -73,7 +73,7 @@ Which decoder reads which format:
 
 - **Linear DNG** (every ProRAW generation, Samsung DNG): `dng::decode_linear`. The LinearizationTable is applied exactly, and samples past its end take its last entry.
 - **CFA DNG and camera RAW:** rawler. Our own TIFF tag reader adds the DNG tags rawler leaves empty: the opcode lists, ForwardMatrix and the gain table map.
-- **Nikon High Efficiency:** the JPEG XS decoder (decided). Until it lands, these files are *unsupported* (see States).
+- **Nikon High Efficiency:** the JPEG XS decoder (decided), behind the `jpeg-xs` cargo feature that release builds leave off (patent pool, see `docs/licenses.md`). Without the feature, and until the decoder lands, these files are *unsupported* (see States).
 - **HEIC:** libheif. **JPEG:** zune-jpeg (the spec's choice). **TIFF, PNG:** pure-Rust decoders chosen in the implementation PR, after a license check.
 
 Large linear DNGs decode their tiles in parallel and stream them into stage 1. No full-size `u16` copy is held beside the input, so a 48 MP ProRAW peaks below the 445 MiB measured in M0.
@@ -247,7 +247,7 @@ DEV-01 has no shortcuts of its own; DEV-02 and DEV-12 own the controls. Its inpu
 | **Opening** | The embedded preview within one frame, if the file has one; otherwise a neutral `bg` fill and the file name. The fit render replaces it when ready | Edit. Sliders work, and the first render applies them |
 | **Ready** | The rendered photo | Everything |
 | **Rendering after a change** | The last frame stays until the new one arrives. The status bar shows the preview state (interactive or settled) | Everything |
-| **Unsupported**: an unknown format, an unsupported compression (Nikon HE until its decoder lands), a non-optional opcode M1 lacks, missing color data, CMYK JPEG | The embedded preview if there is one, and the reason in the status bar ("Nikon High Efficiency RAW is not supported yet") | View only. The Develop controls are disabled |
+| **Unsupported**: an unknown format, an unsupported compression (Nikon HE in builds without the `jpeg-xs` feature), a non-optional opcode M1 lacks, missing color data, CMYK JPEG | The embedded preview if there is one, and the reason in the status bar ("Nikon High Efficiency RAW is not supported yet") | View only. The Develop controls are disabled |
 | **Damaged file**: truncated, or failing a decoder's bounds checks | As unsupported, with "This file is damaged" | View only |
 | **Software adapter** | As Ready, slower, with the notice in the status bar | Everything |
 | **Out of GPU memory** | The engine frees the level-0 tile cache and the viewport caches and retries once. If it fails again: the embedded preview, and "Not enough GPU memory to render this photo" | View only, until another photo is selected. The render thread stays alive (PR #22's error scopes) |
@@ -363,7 +363,7 @@ Each criterion names the check that proves it. These become the tests. "Corpus" 
    - These numbers are a target. The PR that first runs the test records the measured values here, with the reason for any change.
 
    *Check:* corpus test (local; the references are 58 to 350 MB each).
-5. **Golden images.** Each stage on the CC0 set matches its stored golden image on lavapipe: mean ΔE2000 ≤ 0.5, max ≤ 2, PSNR ≥ 45 dB. The same goldens hold on real GPUs. *Check:* the golden harness in CI on every PR, and nightly on the RTX 3060 runner. Changing a golden needs a stated reason in the PR.
+5. **Golden images.** Each stage on the CC0 set matches its stored golden image on lavapipe: mean ΔE2000 ≤ 0.5, max ≤ 2, PSNR ≥ 45 dB. The same goldens hold on real GPUs. *Check:* the golden harness in CI on every PR, and `scripts/gpu-check.sh` on the RTX 3060 before merging pipeline changes. Changing a golden needs a stated reason in the PR.
 6. **No tile seams.** A 3000 × 2000 image rendered with 1024 px tiles and as one tile differs by at most 1 code. *Check:* a pipeline test on lavapipe.
 7. **Fit matches 1:1.** The Fit render and the 1:1 render downsampled to Fit differ by mean ΔE2000 ≤ 1.0, with Highlights at −100 and Shadows at +100, which is where local tone mapping shows. *Check:* a pipeline test.
 8. **Non-RAW is an identity when unedited.**
@@ -389,7 +389,7 @@ Each criterion names the check that proves it. These become the tests. "Corpus" 
 
     *Check:* pipeline tests on the synthetic scene.
 13. **GPU memory.** The accounted allocations for a 48 MP image stay under 1 GB, with the breakdown above as the expected values ±10 %. *Check:* the memory-accounting test (every texture and buffer goes through one tracking allocator), plus the bench kit's GPU process counter on the RTX 3060 (peak under 1 GB).
-14. **Performance.** Each row is checked by the bench listed in the plan's M1 budget table, on the self-hosted RTX 3060 runner:
+14. **Performance.** Each row is checked by the bench listed in the plan's M1 budget table, on the RTX 3060, with `scripts/gpu-check.sh`:
     - GPU time under 16 ms at 2560 px for every M1 slider, Highlights and Shadows included;
     - full fit render under 1 s at 12 MP and 2 s at 48 MP;
     - 1:1 newly exposed area under 100 ms.
@@ -397,6 +397,6 @@ Each criterion names the check that proves it. These become the tests. "Corpus" 
     Each stage also has a criterion benchmark.
 15. **Fuzzing.** Every decoder path (linear DNG, the rawler path, JPEG XS, JPEG, TIFF, PNG, HEIC) has a cargo-fuzz target. Each runs 10 minutes with no crash, hang or out-of-memory in the PR that adds it.
 16. **Errors keep the app alive.** An injected out-of-memory, from a lowered device limit, returns an error. The retry frees the caches, the render thread stays alive, and the next photo renders. *Check:* a pipeline test (extends PR #22's).
-17. **Unsupported files.** A Nikon HE file before the JPEG XS decoder lands, a CMYK JPEG, and a DNG with a non-optional unknown opcode each show their embedded preview and the reason, and disable the controls. *Check:* engine tests; a Playwright flow against the fake engine for the UI part.
+17. **Unsupported files.** A Nikon HE file in a build without the `jpeg-xs` feature, a CMYK JPEG, and a DNG with a non-optional unknown opcode each show their embedded preview and the reason, and disable the controls. *Check:* engine tests; a Playwright flow against the fake engine for the UI part.
 
 Apple Photos exports are a target for how a photo should look by default (DEV-02's base curve), not a pixel reference. No test compares against them.

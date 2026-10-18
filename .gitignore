@@ -8,3 +8,6 @@
 
 # Benchmark kits built by scripts/bench-kit/make-kit.sh
 /dist/
+
+# scripts/gpu-check.sh output
+/target-gpu-check/
