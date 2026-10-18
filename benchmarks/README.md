@@ -34,12 +34,13 @@ A metric baselined from fewer than 5 runs is **advisory**: it is printed and fla
 but cannot fail the build yet. The `... preview` metrics were baselined from 2 runs.
 
 The 10 percent rule is meant for a stable device. The owner's RTX 3060 desktop is that
-device: a self-hosted runner (`.github/workflows/gpu-nightly.yml`, nightly and on pushes
-to `main`) compares against `baseline-rtx3060.json` with the default 10 percent. It
-never runs for pull requests, so it flags a regression after merge; this lavapipe
-baseline stays the coarse check every PR passes. Build `baseline-rtx3060.json` the same
-way as below, from that workflow's `bench-rtx3060` artifacts and without `--envelope`
-or `--threshold`.
+device, checked by hand rather than by CI: `scripts/gpu-check.sh` checks the adapter,
+runs the GPU tests and the same benchmark cases, and compares them with
+`baseline-rtx3060.json` at the default 10 percent. Run it before merging a PR that
+touches the pipeline, the engine or the benchmarks, and paste its summary into the PR.
+Each run leaves a `baseline-candidate.json` under `target-gpu-check/`; build
+`baseline-rtx3060.json` from five of them the same way as below, without `--envelope`
+or `--threshold`. This lavapipe baseline stays the check every PR passes in CI.
 
 ## Arming or updating the gate
 

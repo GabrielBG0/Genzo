@@ -77,6 +77,23 @@ The decoder is isolated so it can be removed in one change:
 1. Build without it: `genzo-engine` and `genzo-imgio` have a `heic` feature, on by default. With it off, HEIC files are still recognized and fail with "HEIC support is not included in this build". CI checks that this build compiles.
 2. To remove it completely, also delete `backend/crates/heif` and its two submodules (`git submodule deinit` and `git rm`), the `genzo-heif` entries in `backend/Cargo.toml`, `scripts/check-architecture.py` and `backend/fuzz`, and the libheif and libde265 rows in this file.
 
+## JPEG XS patent position (decided)
+
+Nikon High Efficiency RAW (Z 6III, Z 8, Z 9, Z f in HE mode) is JPEG XS coded (ISO/IEC 21122). Read 2026-10-18 from the pool's own documents:
+
+- **There is an active pool.** The JPEG XS patent pool, run by Vectis IP, licenses the essential patents of intoPIX and Fraunhofer IIS. Its July 2026 [patent list](https://www.jpegxspool.com/patent-list) has 101 patents, granted from 2018 on: 14 in the US, much of Europe (EP, the Unitary Patent, DE, FR, GB and others), Japan, China, Korea, Brazil, India and more. So most run into the late 2030s.
+- **Decoding is covered.** In the [overview of terms](https://www.jpegxspool.com/s/JPEG-XS-PPL-Overview-of-Terms-v50-01-Apr-2025.pdf) (v5.0, April 2025):
+  - an *Instance* is "a single operation which consists of either encoding, decoding, editing, or analyzing one JPEG XS Stream";
+  - a *Product* is "a ready-to-use End-User solution (e.g., hardware device or software application) capable of encoding, decoding, editing, and/or analyzing one or more JPEG XS streams".
+- **There is no free or open-source exemption.** Royalties start at 3.00 USD per HD instance, or 0.60 USD per product at volume, reported quarterly. Licensed products must be marked with the patent numbers.
+- **A pool license does not fit GPL-3.0.** A license that charges royalties for copies would stop Genzo from being distributed under GPL-3.0 at all (section 12). So licensing is not an option for this project, and the choice is the same as for HEVC.
+
+**Decision (project owner, 2026-10-18):**
+- The JPEG XS decoder is built in M1, in its own crate, behind a `jpeg-xs` cargo feature that **release builds leave off**.
+- Without it, HE files show their embedded preview and say why. Self-builders can turn it on.
+- Revisit before the first public release, together with HEVC.
+- The other options were shipping it on by default and accepting the risk, as with HEVC, or not building it.
+
 ## Release obligations
 
 - [ ] Ship the LGPL-3.0 and GPL-3.0 texts and the libheif and libde265 copyright notices with every bundle (MSI or NSIS, deb, rpm, AppImage, dmg), for example in an About dialog and a `licenses/` folder.
@@ -86,6 +103,7 @@ The decoder is isolated so it can be removed in one change:
 
 - [x] Each M0 candidate's license read from its upstream repository, version pinned (2026-10-14)
 - [x] HEVC position decided (2026-10-14)
+- [x] JPEG XS position decided: decoder behind a feature flag, off in release builds (2026-10-18)
 - [x] `deny.toml` updated for each adopted candidate (rawler exception; everything else was already allowed)
 - [x] ICC library chosen: moxcms (2026-10-14)
 
