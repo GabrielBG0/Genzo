@@ -5,6 +5,7 @@
 //! exposure, output transform). The tiling is shared by every renderer, and
 //! the CPU test pattern still feeds the 0.E webview spike.
 
+pub mod camera_color;
 pub mod gpu;
 pub mod raw;
 pub mod reference;

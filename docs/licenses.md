@@ -66,6 +66,7 @@ Source code ported from other projects into Genzo's own files. Each file keeps t
 
 | Origin | Files | License | Notes |
 |---|---|---|---|
+| Adobe DNG SDK 1.4 (`dng_color_spec.cpp`, `dng_camera_profile.cpp`, `dng_temperature.cpp`, `dng_xy_coord.cpp`; Copyright 1999-2014 Adobe Systems Incorporated), the copy in gopro/gpr | `backend/crates/color/src/camera.rs` | BSD-3-Clause | Compatible with GPL-3.0. The file carries the notice; a binary release lists it with the other notices (Release obligations). `scripts/dng-sdk-probe/` links the SDK as a test tool only and is not distributed |
 | darktable `data/kernels/demosaic_rcd.cl` and `src/iop/demosaicing/rcd.c` (Copyright 2010-2026 darktable developers); the RCD algorithm by Luis Sanz Rodríguez | `backend/crates/pipeline/src/gpu/shaders/rcd_*.wgsl` and `tile_rcd_*.wgsl`, `backend/crates/pipeline/tests/rcd_reference/` (test-only) | GPL-3.0-or-later (darktable); RCD itself GPL-3.0 | Compatible: Genzo is GPL-3.0. Ported to WGSL with full-resolution buffers |
 
 ## HEVC patent position (decided)
@@ -102,6 +103,7 @@ Nikon High Efficiency RAW (Z 6III, Z 8, Z 9, Z f in HE mode) is JPEG XS coded (I
 
 - [ ] Ship the LGPL-3.0 and GPL-3.0 texts and the libheif and libde265 copyright notices with every bundle (MSI or NSIS, deb, rpm, AppImage, dmg), for example in an About dialog and a `licenses/` folder.
 - [ ] Ship the OFL-1.1 text with the bundled fonts.
+- [ ] Ship the BSD-3-Clause notice of the Adobe DNG SDK, which `color::camera` is ported from.
 
 ## Sign-off
 

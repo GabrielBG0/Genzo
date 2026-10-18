@@ -542,6 +542,9 @@ name = "genzo-color"
 version = "0.1.0"
 dependencies = [
  "genzo-model",
+ "serde",
+ "serde_json",
+ "thiserror",
 ]
 
 [[package]]

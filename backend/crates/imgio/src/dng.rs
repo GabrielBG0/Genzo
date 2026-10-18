@@ -88,6 +88,8 @@ mod tag {
     pub const BASELINE_EXPOSURE: u16 = 50730;
     pub const CALIBRATION_ILLUMINANT_1: u16 = 50778;
     pub const CALIBRATION_ILLUMINANT_2: u16 = 50779;
+    pub const CAMERA_CALIBRATION_SIGNATURE: u16 = 50931;
+    pub const PROFILE_CALIBRATION_SIGNATURE: u16 = 50932;
     pub const ACTIVE_AREA: u16 = 50829;
     pub const FORWARD_MATRIX_1: u16 = 50964;
     pub const FORWARD_MATRIX_2: u16 = 50965;
@@ -443,6 +445,17 @@ fn metadata(
     let white_xy = numbers(tag::AS_SHOT_WHITE_XY)?
         .and_then(|v| <[f64; 2]>::try_from(&v[..]).ok())
         .filter(|xy| xy.iter().all(|c| c.is_finite() && *c > 0.0));
+    // ASCII or BYTE (UTF-8), up to the first NUL.
+    let signature = |t| -> Result<String, DngError> {
+        Ok(match get(t) {
+            Some(e) => {
+                let b = tiff.blob(e)?;
+                let end = b.iter().position(|&c| c == 0).unwrap_or(b.len());
+                String::from_utf8_lossy(&b[..end]).into_owned()
+            }
+            None => String::new(),
+        })
+    };
     let color = CameraColor {
         color_matrix_1: matrix(tag::COLOR_MATRIX_1, tag::CALIBRATION_ILLUMINANT_1)?,
         color_matrix_2: matrix(tag::COLOR_MATRIX_2, tag::CALIBRATION_ILLUMINANT_2)?,
@@ -450,6 +463,8 @@ fn metadata(
         forward_matrix_2: numbers(tag::FORWARD_MATRIX_2)?,
         camera_calibration_1: numbers(tag::CAMERA_CALIBRATION_1)?,
         camera_calibration_2: numbers(tag::CAMERA_CALIBRATION_2)?,
+        camera_calibration_signature: signature(tag::CAMERA_CALIBRATION_SIGNATURE)?,
+        profile_calibration_signature: signature(tag::PROFILE_CALIBRATION_SIGNATURE)?,
         analog_balance: numbers(tag::ANALOG_BALANCE)?,
         as_shot: neutral
             .map(AsShot::Neutral)

@@ -174,16 +174,70 @@ While a slider is dragged, white balance runs as a ratio after the cached demosa
 ### Stage 4: camera matrix
 
 - **The white point.** It comes from the edit's Temp and Tint (Data: *White balance*).
-- **Camera to XYZ:**
+- **The math is the Adobe DNG SDK's** (version 1.4: `dng_color_spec`, `dng_camera_profile`, `dng_temperature`), ported step by step to f64 in `color::camera` and tested against the SDK itself (see *The DNG SDK as reference* below). It gives Lightroom's colors for the same profile.
+- **Camera to XYZ D50** (the DNG profile connection space, white xy 0.3457, 0.3585):
   - With ForwardMatrix tags, they are interpolated by the white point, as the DNG specification describes.
-  - Without them, ColorMatrix1 and 2 are interpolated by inverse correlated color temperature between their calibration illuminants. The result is inverted, then adapted from the white point to D65 with the Bradford transform.
-- **XYZ to the working space:** XYZ (D65) to linear ACES AP1 primaries with a D65 white (decided 2026-10-14). The pyramid is stored as RGBA16F.
+  - Without them, ColorMatrix1 and 2 are interpolated by inverse correlated color temperature between their calibration illuminants. The result is inverted, after a Bradford adaptation from D50 to the white point.
+- **XYZ to the working space:** the D50 result is adapted to D65 with the same linearized Bradford transform, then converted to linear ACES AP1 primaries with a D65 white (decided 2026-10-14). The pyramid is stored as RGBA16F.
+- **The split between stages 2 and 4.** The SDK gives a camera white (the white point's camera values, the largest at 1) and a CameraToPCS matrix. Stage 2's multipliers are 1 / camera white, so the smallest is 1. Stage 4's matrix is `XYZ_to_AP1 × Bradford(D50 → D65) × CameraToPCS × diag(camera white)`, so a white balanced neutral (1, 1, 1) comes out as AP1 (1, 1, 1). Together they are the SDK's chain.
 - **Non-RAW files** enter here: decoded values are linearized with their transfer function and converted from their primaries or ICC profile (moxcms) into the working space.
 - **AnalogBalance and CameraCalibration** enter the matrix as the DNG specification describes (chapter 6): XYZ to camera is AnalogBalance × CameraCalibration × ColorMatrix, and with ForwardMatrix tags, camera to XYZ is ForwardMatrix × D × (AnalogBalance × CameraCalibration)⁻¹, where D scales the reference neutral to 1. Both are real in the corpus: the iPhone 16 Pro ProRAW has AnalogBalance (2.35, 1, 1.86) with AsShotNeutral (1, 1, 1), and the Galaxy S23 Ultra has CameraCalibration1 and 2 that are not identity. Absent tags mean identity.
 - **BaselineExposure** is applied here as a gain of 2^BaselineExposure (+2.50 EV on the iPhone 13 Pro Max file, so it decides the default look).
 - **Highlight desaturation.** Pixels whose largest camera channel lies within the top 5 percent below the clip level are blended toward their own luminance, reaching neutral at the clip level. The edge of a clipped area then carries no color fringe.
 
 The output of stage 4 builds the mip pyramid (see Tiling).
+
+#### Camera color: the SDK's details
+
+These are easy to miss and each changes the result. All are in `color::camera`, with the SDK function named in its comments.
+
+- **Loading the profile.**
+  - Each ColorMatrix is scaled so the D50 white's largest camera value is 1, but only when it is outside 0.99 to 1.01. It is then rounded to 4 decimals.
+  - ForwardMatrix and CameraCalibration are rounded to 4 decimals.
+  - A ForwardMatrix must map camera (1, 1, 1) to within 0.01 of D50, or the profile is refused. It is then scaled row by row to map to D50 exactly.
+  - ForwardMatrix2 and CalibrationIlluminant2 count only with a ColorMatrix2.
+- **The negative's values.**
+  - AnalogBalance is scaled so its smallest gain is 1 and rounded to 6 decimals.
+  - AsShotNeutral is scaled so its largest value is 1 and rounded to 6 decimals.
+  - AsShotWhiteXY is rounded to 6 decimals.
+- **CameraCalibration** is used only when CameraCalibrationSignature equals ProfileCalibrationSignature, two absent ones included. Both cases are in the corpus. The Galaxy S23 Ultra's own DNG has no signatures, so its calibration is used. Adobe's conversion of the same file has only a profile signature, so its calibration is not.
+- **Calibration temperatures** come from the illuminant codes:
+
+  | Illuminant | Temperature |
+  |---|---|
+  | A, tungsten | 2850 K |
+  | ISO studio tungsten | 3200 K |
+  | D50 | 5000 K |
+  | D55, daylight, fine weather, flash, B | 5500 K |
+  | D65, C, cloudy | 6500 K |
+  | D75, shade | 7500 K |
+  | Fluorescents | the middle of their ranges |
+  | Unknown and other | 0 |
+
+  - **One matrix** stands for both calibrations at 5000 K when there is no ColorMatrix2, when a temperature is 0, or when the two are equal.
+  - **Reversed order:** two calibrations stored warm first are swapped with their forward matrices and calibrations. The Galaxy S23 Ultra stores D65 first, then A.
+- **Interpolation.** One weight `g = (1/T − 1/T2) / (1/T1 − 1/T2)`, clamped to 0 to 1, is used for the color matrix, the forward matrix and the camera calibration. T is the white point's Robertson temperature.
+- **The neutral to a white point** (`NeutralToXY`):
+  - Iterate from D50 for at most 30 passes, until the step is under 1e-7 in |dx| + |dy|.
+  - On the last pass, take the mean of the last two estimates.
+  - A singular matrix gives no white point. The photo then falls back to D55 and the status bar says so.
+- **The camera white** is pinned to 0.001 to 1 per channel. The Bradford scales are limited to 0.1 to 10.
+- **Not read:** DNG 1.6's third calibration (CalibrationIlluminant3, ColorMatrix3, IlluminantData). SDK 1.4 predates it and no corpus file has it; `scripts/color-reference.py` asserts that. ColorimetricReference (output-referred DNG) is not read either. With it, the SDK uses D50 and ignores AsShotNeutral.
+- **Only three color channels.** Four-color sensors (CYGM, RGBE) have no profile here.
+
+#### The DNG SDK as reference
+
+- `scripts/dng-sdk-probe/` holds a small C++ program that links the DNG SDK 1.4 copy in gopro/gpr. That copy is under the BSD-3-Clause license. The probe is a test tool and is never built into Genzo; `color::camera`, the port, carries Adobe's notice (`docs/licenses.md`).
+- For each DNG, the probe prints the SDK's results: the as-shot white (xy, Temp, Tint), and the camera white and CameraToPCS at that white and at D50, D55, D65 and A.
+- `scripts/color-reference.py` runs the probe over 17 corpus DNGs and two patched copies, and stores each file's color tags (read with tifffile) beside the SDK's results in `color/tests/fixtures/dng-sdk-color.jsonl`. The 17 are 6 camera and phone DNGs and Adobe DNG Converter's 11 references.
+- **The patched copies:**
+  - **The iPhone 16 Pro ProRAW** is DNG 1.7 with JPEG XL tiles, which SDK 1.4 refuses. Its copy says DNGBackwardVersion 1.4 and Compression 7. Only tags are read, so the color math is unaffected.
+  - **The Leica Q2** copy has CalibrationIlluminant2 set to 0, which exercises the one-matrix branch.
+- **Tests:**
+  - **`color/tests/dng_sdk.rs`** needs no corpus. It holds Genzo to the SDK within 1e-11 in xy and camera white, 1e-10 in the matrix, 1e-7 K and 5e-9 in Tint; the measured differences are under 1e-11. Its negative controls must fail: a flipped calibration gate either way, the matrices in the wrong order, and a change of two rounding steps in one matrix entry.
+  - **`pipeline/tests/camera_color.rs`** checks that the decoder reads the same tag values from the corpus files, and that the white it renders with is the SDK's.
+  - **`dng-sdk-temperature.jsonl`** holds the SDK's conversion from Temp and Tint to xy, for a check of `xy_from_temperature`.
+- **Non-DNG RAW files** go through the same code, with the color matrices and illuminants from rawler's camera data. These are in the DNG convention (XYZ to camera) and have no forward matrices, so they take the matrix-only path that the checks cover. The checks cover the math, not rawler's matrix values.
 
 ### Geometry: orientation, rotation, crop
 
@@ -359,7 +413,7 @@ While `white_balance.mode` is `AsShot`, the engine fills `temp` and `tint` with 
 - Tint is the distance from the Planckian locus, `Duv = −tint / 3000`, the scale of Adobe's DNG SDK. So Temp and Tint values read like Lightroom's.
 - **As shot:** the white point is solved from AsShotNeutral, or from the camera's white balance coefficients, with the iterative method in the DNG specification. The matrix depends on the white point, so the two are solved together, with the same XYZ-to-camera matrix stage 4 uses (AnalogBalance × CameraCalibration × ColorMatrix). The iPhone 16 Pro needs that: its AsShotNeutral is (1, 1, 1), and its real gains sit in AnalogBalance. Then it is expressed as Temp and Tint.
 - **The multipliers** are the inverse of the camera neutral at that white point.
-- **A file with no as-shot data** (the Kodak DCS760C) uses D65, and the status bar says the as-shot white balance is unavailable.
+- **A file with no as-shot data** (the Kodak DCS760C) uses D55, as the DNG SDK's renderer does (decided 2026-10-18; this spec said D65 before). The status bar says the as-shot white balance is unavailable.
 
 **Non-RAW.** The pixels are already balanced, so Temp and Tint are relative shifts from the encoded white:
 - **Temp:** the source white is the white whose reciprocal temperature is `153.8 − temp` mired (6500 K at 0). It lies on the CIE daylight locus from 4000 K up, and on the Planckian locus below. So −100 is about 3940 K, cooler, and +100 is about 18,600 K, warmer.
