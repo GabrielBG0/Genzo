@@ -33,9 +33,13 @@ It catches a big regression like the 4x one fixed in 0.E, not a 15 percent drift
 A metric baselined from fewer than 5 runs is **advisory**: it is printed and flagged
 but cannot fail the build yet. The `... preview` metrics were baselined from 2 runs.
 
-The 10 percent rule is meant for a stable device. When a private runner with a real
-GPU exists, give it its own `baseline-<runner>.json` with the default 10 percent, and
-keep this one as a coarse check on the software adapter.
+The 10 percent rule is meant for a stable device. The owner's RTX 3060 desktop is that
+device: a self-hosted runner (`.github/workflows/gpu-nightly.yml`, nightly and on pushes
+to `main`) compares against `baseline-rtx3060.json` with the default 10 percent. It
+never runs for pull requests, so it flags a regression after merge; this lavapipe
+baseline stays the coarse check every PR passes. Build `baseline-rtx3060.json` the same
+way as below, from that workflow's `bench-rtx3060` artifacts and without `--envelope`
+or `--threshold`.
 
 ## Arming or updating the gate
 
