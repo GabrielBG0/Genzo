@@ -66,7 +66,13 @@ The order is fixed, as the spec sets it. The table shows which stages M1 builds 
   - BaselineExposure.
 - **The opcode lists** (1, 2 and 3), parsed into a typed list. Each opcode keeps its optional flag.
 - **Orientation**, the EXIF or DNG value 1 to 8, *not* applied to the pixels (see Geometry).
-- **The embedded preview**, also through `imgio::decode_preview`.
+- **The embedded preview**, through `imgio::decode_preview`, as RGBA8 with its orientation (not applied, as for the image) and color encoding.
+  - **How it is found:** every embedded baseline or progressive JPEG stream in the file is a candidate, found by its bytes, not by each format's container. One scan serves DNG, NEF, CR3, ARW, RAF, ORF, RW2 and the rest, and still works when the container is damaged. A JPEG file's own image is not its preview: only its APP1 EXIF block is searched, so the thumbnail is, and an Ultra HDR gain map or MPF image after the main image never is.
+  - **Which one:** the smallest whose long edge is at least 1280 px, else the largest. Cameras store a 1616 to 2016 px preview beside the full-size one, and that decodes in 10 to 20 ms. Fujifilm, Olympus, Pentax, Samsung and Halide files carry only large previews: 44 to 98 ms on the reference desktop, within the 100 ms first-pixels budget but close to it. If that is not enough, the next step is the 160 px thumbnail as an instant first frame.
+  - **False matches:** a candidate must hold DQT, SOF and SOS in order with sane values, end at its EOI, and be large enough for its size. It is decoded in strict mode, so a truncated stream fails and the next candidate is tried.
+  - **Orientation and color:** the file's own declarations win (IFD0 of TIFF-based files, the CR3 CMT1 box, a JPEG's APP1), then the stream's EXIF. Cameras store previews unrotated; the iPhone DNGs (orientation 6) have landscape previews. HEIC previews come from libheif with the item's rotation applied, so they report 1.
+  - **Files with none:** PNG, plain TIFF, GoPro GPR, Hasselblad 3FR, Kodak DCR and Phase One IIQ return none. Nikon High Efficiency files, which cannot be decoded yet, return their 1620 px preview.
+  - **Checked** against an independent parser plus libjpeg-turbo on 21 corpus files (`scripts/preview-reference.py`, `imgio/tests/preview_corpus.rs`): same size, per-channel means within 0.5 step.
 - **The gain table map**, read and kept, never applied in M1.
 
 Which decoder reads which format:

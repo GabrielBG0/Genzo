@@ -50,9 +50,11 @@ pub(crate) struct Tiff<'a> {
 
 impl<'a> Tiff<'a> {
     pub(crate) fn new(data: &'a [u8]) -> Option<Self> {
+        // TIFF, and the TIFF structures behind the Olympus (IIRO, IIRS,
+        // MMOR) and Panasonic (IIU) magics.
         let big_endian = match data.get(..4)? {
-            b"II*\0" => false,
-            b"MM\0*" => true,
+            b"II*\0" | b"IIRO" | b"IIRS" | b"IIU\0" => false,
+            b"MM\0*" | b"MMOR" => true,
             _ => return None,
         };
         Some(Self { data, big_endian })

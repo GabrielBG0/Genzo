@@ -17,15 +17,17 @@ pub(crate) fn tiff_payload(exif: &[u8]) -> &[u8] {
 
 /// The orientation in IFD0, 1 to 8; 1 when absent, invalid or unreadable.
 pub(crate) fn orientation(tiff: &[u8]) -> u8 {
-    (|| {
-        let t = Tiff::new(tiff)?;
-        let ifd0 = t.ifd(t.u32(4)? as usize).ok()?;
-        match t.first_int(&ifd0, ORIENTATION)? {
-            v @ 1..=8 => Some(v as u8),
-            _ => None,
-        }
-    })()
-    .unwrap_or(1)
+    orientation_tag(tiff).unwrap_or(1)
+}
+
+/// The orientation in IFD0, if the tag is there and valid.
+pub(crate) fn orientation_tag(tiff: &[u8]) -> Option<u8> {
+    let t = Tiff::new(tiff)?;
+    let ifd0 = t.ifd(t.u32(4)? as usize).ok()?;
+    match t.first_int(&ifd0, ORIENTATION)? {
+        v @ 1..=8 => Some(v as u8),
+        _ => None,
+    }
 }
 
 /// Whether the EXIF block declares Adobe RGB the way DCF cameras do when

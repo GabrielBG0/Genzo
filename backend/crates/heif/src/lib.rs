@@ -59,6 +59,8 @@ pub struct Thumbnail {
     pub width: u32,
     pub height: u32,
     pub rgba: Vec<u8>,
+    /// The primary image's color profile, which the thumbnail shares.
+    pub color: ColorProfile,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -349,6 +351,7 @@ pub fn decode(data: &[u8], options: Options) -> Result<Decoded, Error> {
 /// full decode; used to show first pixels while the full image decodes.
 pub fn decode_thumbnail(data: &[u8]) -> Result<Option<Thumbnail>, Error> {
     let file = File::open(data, Options { threads: 1 })?;
+    let color = file.color()?;
     // SAFETY: valid primary handle; the thumbnail handle is released below.
     #[allow(unsafe_code)]
     let thumb = unsafe { ffi::gz_thumbnail(file.primary) };
@@ -367,6 +370,7 @@ pub fn decode_thumbnail(data: &[u8]) -> Result<Option<Thumbnail>, Error> {
         width,
         height,
         rgba,
+        color,
     }))
 }
 

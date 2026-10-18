@@ -1280,6 +1280,7 @@ dependencies = [
  "genzo-model",
  "jpeg-encoder",
  "jxl-oxide",
+ "memchr",
  "png 0.17.16",
  "rawler",
  "rayon",
