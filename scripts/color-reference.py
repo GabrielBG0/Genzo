@@ -169,9 +169,9 @@ def main():
             lines.append(json.dumps(record))
             white = record["sdk"]["specs"][0]
             print(f"{key} {variant or ''}: {white['temperature']:.0f} K, tint {white['tint']:+.1f}")
-    (OUT / "dng-sdk-color.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    (OUT / "dng-sdk-color.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8", newline="\n")
     temps = subprocess.run([exe, "--temperature"], capture_output=True, text=True, check=True).stdout
-    (OUT / "dng-sdk-temperature.jsonl").write_text(temps.replace("\r\n", "\n"), encoding="utf-8")
+    (OUT / "dng-sdk-temperature.jsonl").write_text(temps, encoding="utf-8", newline="\n")
 
 
 main()
