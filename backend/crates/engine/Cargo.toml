@@ -12,8 +12,10 @@ publish.workspace = true
 workspace = true
 
 [features]
-default = ["heic"]
+default = ["heic", "raw"]
 heic = ["genzo-imgio/heic"]
+# Linear DNG (ProRAW) and, through rawler, camera RAW and CFA DNG.
+raw = ["genzo-imgio/raw"]
 
 [dependencies]
 genzo-model.workspace = true

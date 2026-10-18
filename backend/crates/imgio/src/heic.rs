@@ -47,8 +47,11 @@ pub(crate) fn decode(data: &[u8], options: DecodeOptions) -> Result<DecodedImage
         height: img.height,
         source_bits: img.source_bits,
         has_alpha: img.has_alpha,
-        color,
-        pixels: Pixels::Rgba16(img.rgba),
+        pixels: Pixels::Rgba16 {
+            data: img.rgba,
+            color,
+        },
+        orientation: 1,
         exif: img.exif,
     })
 }
@@ -98,11 +101,14 @@ mod tests {
         let img = decode(&sample("rainbow-451x461.heic"), DecodeOptions::default()).unwrap();
         assert_eq!(img.format, FileFormat::Heif);
         assert_eq!((img.width, img.height), (451, 461));
-        let Pixels::Rgba16(px) = &img.pixels;
-        assert_eq!(px.len(), 451 * 461 * 4);
+        assert_eq!(img.orientation, 1);
+        let Pixels::Rgba16 { data, color } = &img.pixels else {
+            panic!("expected RGBA, got {:?}", img.pixels);
+        };
+        assert_eq!(data.len(), 451 * 461 * 4);
         // This file carries an ICC profile (GIMP's built-in sRGB).
-        let ColorEncoding::Icc(icc) = &img.color else {
-            panic!("expected an ICC profile, got {:?}", img.color);
+        let ColorEncoding::Icc(icc) = color else {
+            panic!("expected an ICC profile, got {color:?}");
         };
         assert_eq!(&icc[36..40], b"acsp", "ICC signature");
     }

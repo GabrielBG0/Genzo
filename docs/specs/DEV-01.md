@@ -71,14 +71,26 @@ The order is fixed, as the spec sets it. The table shows which stages M1 builds 
 
 Which decoder reads which format:
 
-- **Linear DNG** (every ProRAW generation, Samsung DNG): `dng::decode_linear`. The LinearizationTable is applied exactly, and samples past its end take its last entry.
+- **Linear DNG** (every ProRAW generation, Samsung DNG): `dng::decode_linear`. The LinearizationTable is applied exactly, and samples past its end take its last entry. Tiles or strips (Samsung writes one strip), in JPEG XL, lossless JPEG or uncompressed.
+  - Lossless JPEG goes through rawler's decompressor, which ignores restart intervals and returns wrong samples after the first restart, with no error. The Galaxy S23 Ultra writes a restart every 16 rows. So a stream with restarts is split at its RST markers and each interval decoded on its own, in parallel (`imgio/src/ljpeg.rs`). A restart layout other than whole rows of 1 × 1 sampled components is *unsupported*, never decoded.
 - **CFA DNG and camera RAW:** rawler. Our own TIFF tag reader adds the DNG tags rawler leaves empty: the opcode lists, ForwardMatrix and the gain table map.
 - **Nikon High Efficiency:** the JPEG XS decoder (decided), behind the `jpeg-xs` cargo feature that release builds leave off (patent pool, see `docs/licenses.md`). Without the feature, and until the decoder lands, these files are *unsupported* (see States).
 - **HEIC:** libheif. **JPEG:** zune-jpeg (the spec's choice). **TIFF, PNG:** pure-Rust decoders chosen in the implementation PR, after a license check.
 
 Large linear DNGs decode their tiles in parallel and stream them into stage 1. No full-size `u16` copy is held beside the input, so a 48 MP ProRAW peaks below the 445 MiB measured in M0.
 
-**Opcodes.** M1 applies what the corpus contains. The first DEV-01 implementation PR lists every opcode in the corpus by file, list and optional flag, and adds the result here.
+**Opcodes.** M1 applies what the corpus contains. The inventory of the corpus (`cargo run -p genzo-imgio --features dng --example dng_inventory -- ../corpus`, 2026-10-18), on the files as the cameras wrote them:
+
+| File | List | Opcode | Optional |
+|---|---|---|---|
+| Galaxy S23 Ultra (linear DNG) | 2 | GainMap × 4 | yes |
+| Leica Q2 (CFA DNG) | 1 | FixBadPixelsConstant | **no** |
+| Leica Q2 | 3 | WarpRectilinear | **no** |
+| iPhone 16 Pro Bayer DNG (Halide) | 3 | WarpRectilinear2, FixVignetteRadial | **no** |
+| iPhone 12 Pro and 16 Pro ProRAW, Pentax K10D | | none | |
+
+Adobe DNG Converter's output of the camera RAW files carries no opcodes. Under the rules below, the Leica Q2 and the Halide DNG are unsupported until M1 implements their opcodes or the rule for non-optional lens opcodes changes (open question for the owner).
+
 - GainMap (OpcodeList2, used by Samsung and Pixel phones) is applied in M1 whatever the inventory shows.
 - An opcode M1 does not implement is skipped when it is marked optional.
 - When an unimplemented opcode is not marked optional, the photo is *unsupported*.
@@ -115,6 +127,7 @@ While a slider is dragged, white balance runs as a ratio after the cached demosa
   - Without them, ColorMatrix1 and 2 are interpolated by inverse correlated color temperature between their calibration illuminants. The result is inverted, then adapted from the white point to D65 with the Bradford transform.
 - **XYZ to the working space:** XYZ (D65) to linear ACES AP1 primaries with a D65 white (decided 2026-10-14). The pyramid is stored as RGBA16F.
 - **Non-RAW files** enter here: decoded values are linearized with their transfer function and converted from their primaries or ICC profile (moxcms) into the working space.
+- **AnalogBalance and CameraCalibration** enter the matrix as the DNG specification describes (chapter 6): XYZ to camera is AnalogBalance × CameraCalibration × ColorMatrix, and with ForwardMatrix tags, camera to XYZ is ForwardMatrix × D × (AnalogBalance × CameraCalibration)⁻¹, where D scales the reference neutral to 1. Both are real in the corpus: the iPhone 16 Pro ProRAW has AnalogBalance (2.35, 1, 1.86) with AsShotNeutral (1, 1, 1), and the Galaxy S23 Ultra has CameraCalibration1 and 2 that are not identity. Absent tags mean identity.
 - **BaselineExposure** is applied here as a gain of 2^BaselineExposure (+2.50 EV on the iPhone 13 Pro Max file, so it decides the default look).
 - **Highlight desaturation.** Pixels whose largest camera channel lies within the top 5 percent below the clip level are blended toward their own luminance, reaching neutral at the clip level. The edge of a clipped area then carries no color fringe.
 

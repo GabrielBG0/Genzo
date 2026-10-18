@@ -595,6 +595,7 @@ dependencies = [
 name = "genzo-imgio"
 version = "0.1.0"
 dependencies = [
+ "criterion",
  "genzo-golden",
  "genzo-heif",
  "genzo-model",

@@ -4,7 +4,7 @@
 use std::path::Path;
 use std::time::Instant;
 
-use genzo_imgio::{ColorEncoding, DecodeOptions};
+use genzo_imgio::{ColorEncoding, DecodeOptions, Pixels};
 
 use crate::EngineError;
 
@@ -17,10 +17,16 @@ pub struct FileReport {
     pub height: u32,
     pub source_bits: u8,
     pub has_alpha: bool,
+    /// What the pixels are: encoded RGB and its color encoding, or linear
+    /// camera samples.
     pub color: String,
+    /// EXIF or DNG orientation, 1 to 8, not yet applied to the pixels.
+    pub orientation: u8,
     pub exif_bytes: Option<usize>,
     /// Size of the embedded preview, if the file has one.
     pub preview: Option<(u32, u32)>,
+    /// Why the embedded preview could not be read, if it could not.
+    pub preview_error: Option<String>,
     pub preview_ms: f64,
     pub decode_ms: f64,
 }
@@ -29,7 +35,16 @@ fn read(path: &Path) -> Result<Vec<u8>, EngineError> {
     std::fs::read(path).map_err(|e| EngineError::Io(format!("{}: {e}", path.display())))
 }
 
-fn describe(color: &ColorEncoding) -> String {
+fn describe(pixels: &Pixels) -> String {
+    match pixels {
+        Pixels::Rgba16 { color, .. } => describe_encoding(color),
+        Pixels::Linear {
+            samples_per_pixel, ..
+        } => format!("linear camera samples, {samples_per_pixel} per pixel"),
+    }
+}
+
+fn describe_encoding(color: &ColorEncoding) -> String {
     match color {
         ColorEncoding::Srgb => "sRGB".into(),
         ColorEncoding::DisplayP3 => "Display P3".into(),
@@ -54,7 +69,7 @@ fn describe(color: &ColorEncoding) -> String {
 pub fn inspect(path: &Path) -> Result<FileReport, EngineError> {
     let data = read(path)?;
     let started = Instant::now();
-    let preview = genzo_imgio::decode_preview(&data).map_err(EngineError::decode)?;
+    let preview = genzo_imgio::decode_preview(&data);
     let preview_ms = ms_since(started);
     let started = Instant::now();
     let img = genzo_imgio::decode(&data, DecodeOptions::default()).map_err(EngineError::decode)?;
@@ -65,9 +80,14 @@ pub fn inspect(path: &Path) -> Result<FileReport, EngineError> {
         height: img.height,
         source_bits: img.source_bits,
         has_alpha: img.has_alpha,
-        color: describe(&img.color),
+        color: describe(&img.pixels),
+        orientation: img.orientation,
         exif_bytes: img.exif.as_ref().map(Vec::len),
-        preview: preview.map(|p| (p.width, p.height)),
+        preview: preview
+            .as_ref()
+            .ok()
+            .and_then(|p| p.as_ref().map(|p| (p.width, p.height))),
+        preview_error: preview.err().map(|e| e.to_string()),
         preview_ms,
         decode_ms,
     })

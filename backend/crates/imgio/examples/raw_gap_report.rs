@@ -97,7 +97,7 @@ fn linear_dng(path: &Path) -> String {
     match result {
         Err(e) => format!("\n    linear DNG reader: {e}"),
         Ok(img) => format!(
-            "\n    linear DNG reader: ok {ms} ms | {}x{} cpp {} bps {} compression {} | table {} entries, {} clamped | white {:?} | black {:?} | matrices {}{} | neutral {:?} | baseline exposure {:?} | gain table map {} | opcode lists {:?}",
+            "\n    linear DNG reader: ok {ms} ms | {}x{} cpp {} bps {} compression {} | table {} entries, {} clamped | white {:?} | black {:?} | matrices {}{} | as shot {:?} | baseline exposure {} | gain table map {} | opcodes {}+{}+{}",
             img.width,
             img.height,
             img.samples_per_pixel,
@@ -105,18 +105,20 @@ fn linear_dng(path: &Path) -> String {
             img.compression,
             img.linearization_entries,
             img.clamped,
-            img.white_level,
-            img.black_level,
-            u8::from(img.color_matrix_1.is_some()),
-            if img.color_matrix_2.is_some() {
+            img.meta.levels.white,
+            img.meta.levels.black,
+            u8::from(img.meta.color.color_matrix_1.is_some()),
+            if img.meta.color.color_matrix_2.is_some() {
                 "+2"
             } else {
                 ""
             },
-            img.as_shot_neutral,
-            img.baseline_exposure,
-            img.has_gain_table_map,
-            img.opcode_lists,
+            img.meta.color.as_shot,
+            img.meta.color.baseline_exposure,
+            img.meta.gain_table_map.is_some(),
+            img.meta.opcodes.list1.len(),
+            img.meta.opcodes.list2.len(),
+            img.meta.opcodes.list3.len(),
         ),
     }
 }
