@@ -10,7 +10,7 @@ The pipeline turns a decoded file and an edit into pixels, the same way for the 
 
 Its rules bind every later stage.
 
-Sources: the spec's *Image pipeline and performance* and *RAW and format support* sections (revision 78), the M1 section of `docs/development-plan.md`, and `docs/m0-results.md`. Where this spec and the technical spec disagree, the technical spec wins and this file is corrected.
+Sources: the spec's *Image pipeline and performance* and *RAW and format support* sections (revision 79), the M1 section of `docs/development-plan.md`, and `docs/m0-results.md`. Where this spec and the technical spec disagree, the technical spec wins and this file is corrected.
 
 **Out of scope for M1**, with their milestone:
 - stage 5, lens and perspective (M3)
@@ -74,7 +74,7 @@ Which decoder reads which format:
 - **Linear DNG** (every ProRAW generation, Samsung DNG): `dng::decode_linear`. The LinearizationTable is applied exactly, and samples past its end take its last entry.
 - **CFA DNG and camera RAW:** rawler. Our own TIFF tag reader adds the DNG tags rawler leaves empty: the opcode lists, ForwardMatrix and the gain table map.
 - **Nikon High Efficiency:** the JPEG XS decoder (decided). Until it lands, these files are *unsupported* (see States).
-- **HEIC:** libheif. **JPEG, TIFF, PNG:** the pure-Rust decoders chosen in the implementation PR, after a license check.
+- **HEIC:** libheif. **JPEG:** zune-jpeg (the spec's choice). **TIFF, PNG:** pure-Rust decoders chosen in the implementation PR, after a license check.
 
 Large linear DNGs decode their tiles in parallel and stream them into stage 1. No full-size `u16` copy is held beside the input, so a 48 MP ProRAW peaks below the 445 MiB measured in M0.
 
@@ -140,7 +140,8 @@ This stage works on linear AP1 at viewport resolution. User adjustments change l
    - **Computed once per edit**, on the whole cropped image at a fixed working size (long edge 1536 px), independent of zoom. It is upsampled with the same guided filter at the output resolution. Fit, 1:1 and export therefore use the same base, and a 1:1 tile needs no context beyond it.
    - **Detail** is `D = t − B`, and is kept.
    - **Highlights** move `B` by `h × w_h(B)`, and **Shadows** by `s × w_s(B)`. The weights are smooth ramps: `w_h` rises from 0 at middle gray to 1 at +2.5 EV, and `w_s` mirrors it toward −4 EV. `h` and `s` scale the slider (−100 to +100) to at most ±2 EV.
-   - Exposure is a constant shift in `t`, so changing it shifts `B` by the same amount and needs no new base. Only a white balance or profile change recomputes it.
+   - Exposure is a constant shift in `t`, so changing it shifts `B` by the same amount and needs no new base. White balance, the crop, the straighten angle, the quarter turns and the flip recompute it. The profile does not, since both profiles share everything before stage 6.
+   - During a crop gesture, the base from the gesture's start is used, and it is recomputed on *end*.
 3. **Whites and Blacks:** global. They move the upper and lower end of the tone range, the points that map to display white and black after the base curve, by at most ±1.5 EV.
 4. **Contrast:** global. An S-curve in `t` around middle gray, which leaves middle gray unchanged.
 5. **The profile's base tone curve.**
@@ -153,15 +154,20 @@ This stage works on linear AP1 at viewport resolution. User adjustments change l
 Works in OkLCh, converted from linear AP1 through XYZ (D65).
 
 - **Saturation** (−100 to +100) scales chroma uniformly: ×0 at −100, ×2 at +100.
-- **Vibrance** (−100 to +100) scales chroma more where it is low. The weight is `1 − C / C_ref`, clamped to 0 or more, where `C_ref` is the chroma of the most saturated sRGB primary. Skin hues (OkLCh hue 20° to 70°) get half the weight, so faces do not turn orange. At −100 it desaturates evenly, like Saturation.
+- **Vibrance** (−100 to +100) scales chroma more where it is low: `C × (1 + v × weight)`, with `v` from −1 to +1. The weight is `1 − C / C_ref`, clamped to 0 or more, where `C_ref` is the chroma of the most saturated sRGB primary. So at +100 a nearly gray color doubles its chroma, and a color at `C_ref` is left alone. Skin hues (OkLCh hue 20° to 70°) get half the weight, so faces do not turn orange. At −100 it desaturates evenly, like Saturation.
 - **B&W treatment.** Output is AP1 luminance in all three channels. Vibrance and saturation have no effect, and DEV-02 hides them. The per-color B&W mix is M3.
 
 ### Stage 9 (M1 part): output transform
 
 1. **Gamut compression** (decided 2026-10-18). Convert linear AP1 to the target's linear RGB (sRGB, or Display P3). Then compress per channel toward the achromatic axis, using the ACES reference gamut compression method: distance from achromatic, a threshold, a limit and a power curve.
-   - Colors well inside the target gamut are untouched.
+   - Colors inside the threshold are untouched.
    - Colors out of gamut keep their hue and land inside the gamut instead of clipping into flat patches.
+   - The cost: colors between the threshold and the gamut edge move inward a little, which is what makes the edge soft.
    - The parameters for each target are set in the implementation PR, against the acceptance criteria below.
+
+   **When it runs:**
+   - **RAW photos:** always.
+   - **Non-RAW photos:** only when the source gamut is not inside the target. Adobe RGB or ProPhoto RGB into sRGB qualifies, and so does Display P3 into sRGB. An sRGB JPEG into an sRGB frame does not, so its saturated colors stay exact. Colors an edit pushes past the edge are clipped per channel there.
 2. **Clamp** to 0 to 1, then encode with the sRGB transfer function (also used by Display P3).
 3. **Quantize** to 8 bits with deterministic dither: triangular, ±1 code, seeded by pixel position, so goldens are stable.
 4. **Tag the frame** `rgba8Srgb`, `rgba8DisplayP3`, or the matching JPEG preview format. The webview converts to the monitor (spec v1 color policy).
@@ -172,7 +178,7 @@ Export (OUT-01 basic) uses this transform with sRGB as the target, and embeds an
 
 Stages 1 to 4 run per tile, so full-resolution intermediates exist only for one tile at a time.
 
-- **Tiles** are 1024 × 1024 output pixels plus a 24 px apron on each side. 24 is a multiple of both CFA periods, 2 and 6, and wider than RCD's and Markesteijn's support. The apron is computed and thrown away, so no tile edge shows.
+- **Tiles** are 1024 × 1024 output pixels for Bayer, linear and non-RAW input, and 512 × 512 for X-Trans. Each has a 24 px apron on each side: 24 is a multiple of both CFA periods, 2 and 6, and wider than RCD's and Markesteijn's support. The apron is computed and thrown away, so no tile edge shows. X-Trans tiles are smaller because 3-pass Markesteijn keeps several directional RGB buffers, about 200 bytes per pixel against RCD's 49.
 - **The input** stays in CPU memory. Each tile's slice is uploaded through a staging buffer.
 - **The pyramid** is image-wide and starts at **level 1** (half size), in RGBA16F. Each tile's stage 4 output is reduced into level 1 with a 2 × 2 box filter, and levels 2 and up follow. **Level 0 (full resolution) is never kept for the whole image.**
 - **At 1:1 and during export**, level-0 tiles of 256 px are made on demand by running stages 1 to 4 on the region they need, apron included.
@@ -184,31 +190,42 @@ Stages 1 to 4 run per tile, so full-resolution intermediates exist only for one 
 | Item | Size |
 |---|---|
 | Pyramid, levels 1 and up, RGBA16F (98 MB for level 1, plus a third) | 131 MB |
-| Stage 1 to 4 scratch for one tile, intermediates included (about 49 B/px × 1072²) | 56 MB |
+| Stage 1 to 4 scratch for one tile, intermediates included: Bayer 49 B/px × 1072² = 56 MB; X-Trans about 200 B/px × 560² = 63 MB | 63 MB |
 | Upload staging for one tile (linear DNG, 3 × u16) | 7 MB |
 | Level-0 tile cache at 1:1 (fixed cap; about 480 tiles of 256², five 2560 × 1440 views with their rings) | 256 MB |
 | Viewport stage caches (fixed cap; stage 4 sampled, stage 6, stage 7 at 2560 × 1920 RGBA16F, plus the base layer) | 128 MB |
 | Output frame and two persistent readback buffers, RGBA8 | 60 MB |
 | Histogram and clipping masks | 10 MB |
-| **Total** | **648 MB**, under the 1 GB budget with 350 MB to spare |
+| **Total** | **655 MB**, under the 1 GB budget with 345 MB to spare |
 
-A software adapter uses the same sizes. Prefetched neighbor photos are held as decoded input in a CPU-memory LRU with a byte cap, never on the GPU (LIB-09 and the engine session own that cache).
+A software adapter uses the same sizes.
+
+**Prefetched neighbors** are held in CPU memory, never on the GPU:
+- **What is kept:** their pyramid (levels 1 and up), rendered on the GPU at low priority and read back.
+- **Size:** 131 MB for a 48 MP photo, 33 MB for 12 MP.
+- **The cap:** an LRU of 768 MB. That holds four 48 MP neighbors, two on each side.
+- **On a switch,** the pyramid is uploaded and the photo renders at Fit without decoding.
+- **The decoded input** is kept for the current photo only. It is what 1:1 and a settled white balance need, and for a neighbor it is decoded in the background after the switch.
+- **Who owns it:** LIB-09 and the engine session.
 
 ### Re-runs, quality levels and generations
 
 - **Cache per stage.** Each stage's output is cached, and a change re-runs from the earliest stage whose inputs changed.
   - Exposure, Whites, Blacks, Contrast and the tone of Highlights or Shadows re-run stage 6 and later.
   - Vibrance, Saturation and B&W re-run stage 7 and later.
-  - Crop, rotation and the view re-run from the sampling of the pyramid.
-  - White balance and the profile re-run the base layer too, and on the settled render, stages 2 to 4 for the visible area.
+  - The view (zoom, pan, viewport size) re-runs from the sampling of the pyramid.
+  - Crop and rotation re-run from the sampling of the pyramid, and the base layer.
+  - The profile re-runs the base curve in stage 6, and later.
+  - White balance re-runs the base layer too, and on the settled render, stages 2 to 4 for the visible area.
   - The image re-runs everything.
 - **Interactive** (during a gesture): the cheapest path to a correct-looking frame.
   - White balance is applied as a ratio after the cached demosaic.
   - At Fit, the frame goes as a half-size JPEG preview, the Windows ladder step that M0 measured.
+  - At 1:1, the visible tiles go as JPEG at full scale (quality 80) instead of lossless. M0 measured full lossless frames at 111 to 125 ms p95 on Linux; JPEG tiles cut the bytes about twentyfold. The autobench's 1:1 drag case reports it, and the budget table does not gate it.
   - On the software adapter, the interactive frame is a 1280 px proxy.
 - **Settled:** full quality, swapped in about 150 ms after the gesture ends.
   - White balance re-demosaics, visible area first: at Fit the pyramid is rebuilt tile by tile, starting with the tiles the view shows. At 1:1, the visible level-0 tiles go first.
-  - The frame is the full lossless frame.
+  - The frame is lossless: the full frame at Fit, the visible tiles at 1:1.
 - **Generations.** Every request carries a generation number, and requests coalesce latest-wins. A stale frame is dropped, and work in flight for an older generation is cancelled between tiles.
 - **Readback** copies only what is sent: at 1:1, the visible 256 px tiles. It goes into staging buffers that stay mapped across frames.
 
@@ -261,6 +278,8 @@ The edit struct is defined in `model` and versioned with serde, starting at `sch
 
 Values are stored as f32, and the UI rounds what it shows (DEV-02). A vertical flip is a horizontal flip plus two quarter turns.
 
+While `white_balance.mode` is `AsShot`, the engine fills `temp` and `tint` with the as-shot values so the sliders can show them. They are recomputed on load, never trusted from the stored edit, and left out of the "edited" comparison: `AsShot` is unedited whatever they hold.
+
 ### White balance: what Temp and Tint mean
 
 **RAW.** Temp and Tint name the scene's white point.
@@ -271,7 +290,7 @@ Values are stored as f32, and the UI rounds what it shows (DEV-02). A vertical f
 - **A file with no as-shot data** (the Kodak DCS760C) uses D65, and the status bar says the as-shot white balance is unavailable.
 
 **Non-RAW.** The pixels are already balanced, so Temp and Tint are relative shifts from the encoded white:
-- **Temp:** the source white is the daylight white whose reciprocal temperature is `153.8 − temp` mired (6500 K at 0). So −100 is about 3940 K, cooler, and +100 is about 18,600 K, warmer.
+- **Temp:** the source white is the white whose reciprocal temperature is `153.8 − temp` mired (6500 K at 0). It lies on the CIE daylight locus from 4000 K up, and on the Planckian locus below. So −100 is about 3940 K, cooler, and +100 is about 18,600 K, warmer.
 - **Tint:** moves that white by `Duv = −tint / 3000`.
 - The image is adapted from that white to D65 with CAT16.
 
@@ -280,7 +299,7 @@ Values are stored as f32, and the UI rounds what it shows (DEV-02). A vertical f
 The crop is defined on the image after the file's orientation, the quarter turns and the flip: the *oriented image*, normalized to 0 to 1 on each axis.
 - `cx`, `cy`: the center of the crop rectangle.
 - `w`, `h`: its width and height, as fractions of the oriented image's width and height.
-- `angle`: the straighten angle in degrees, −45 to +45, positive clockwise, rotating the crop rectangle about its center.
+- `angle`: the straighten angle in degrees, −45 to +45, positive clockwise, rotating the crop rectangle about its center. The rotation happens in pixel space: the rectangle is converted to pixels (`w × width` by `h × height`) first, so straightening never changes its aspect ratio.
 - **The rotated rectangle must lie inside the oriented image.** The engine clamps a delta that would break this, by shrinking `w` and `h` about the center.
 - **The minimum crop** is 32 source pixels on each side.
 - **A quarter turn or flip** maps the existing crop into the new orientation, so the same region stays selected.
@@ -294,7 +313,8 @@ DEV-12 and the M2 catalog use these coordinates; a change here is a schema versi
 | GPU | The mip pyramid, levels 1 and up, of the current photo | Until another photo is selected or white balance settles |
 | GPU | Level-0 tiles at 1:1, an LRU with a 256 MB cap | Until the view, the photo or an earlier stage changes |
 | GPU | The viewport stage caches, 128 MB cap | Until the view or an earlier stage changes |
-| CPU | The decoded input of the current photo and its prefetched neighbors, an LRU with a byte cap set in the engine session | The session |
+| CPU | The decoded input of the current photo | Until another photo is selected |
+| CPU | The pyramids of the prefetched neighbors, an LRU with a 768 MB cap | The session |
 | CPU and disk | Embedded previews | The session (the disk tier is the `cache` crate's) |
 
 Nothing is written next to the original files, and nothing is written to them.
@@ -314,7 +334,7 @@ Nothing is written next to the original files, and nothing is written to them.
 - **Clipping:**
   - Saturated pixels in every channel come out neutral white.
   - A pixel clipped in one channel only is clipped at the first-saturating level (stage 2) and desaturated (stage 4).
-- **Monochrome sensors** go through the linear path with one sample. White balance does not apply, and the controls are disabled.
+- **Monochrome sensors** go through the linear path with one sample. White balance does not apply, and the white balance controls are disabled.
 - **Non-RAW:**
   - **Alpha** is ignored; the image renders opaque.
   - **ICC profiles** (Adobe RGB, ProPhoto RGB and others) go through moxcms.
@@ -349,6 +369,7 @@ Each criterion names the check that proves it. These become the tests. "Corpus" 
 8. **Non-RAW is an identity when unedited.**
    - An sRGB JPEG, an sRGB PNG, and a 16-bit sRGB TIFF render within 1 code of their decoded values.
    - A Display P3 HEIC renders to a P3 frame within 1 code.
+   - The test images include the target's red, green and blue primaries at full saturation, and colors between the compression threshold and the gamut edge, so a compression that should not run would fail.
    - An Adobe RGB JPEG matches moxcms's conversion to within ΔE2000 0.5.
 
    *Check:* pipeline tests.

@@ -2,7 +2,7 @@
 
 Built from these sources:
 
-- **Spec:** *Genzo: Technical Spec (draft 2)*, revision 78 (revision 57, plus the M0 results recorded on 2026-10-15 and 2026-10-17, plus the M1 decisions of 2026-10-17). The artifact is still listed as "Photo Editor: Technical Spec (draft 1)".
+- **Spec:** *Genzo: Technical Spec (draft 2)*, revision 79 (revision 57, plus the M0 results recorded on 2026-10-15 and 2026-10-17, plus the M1 decisions of 2026-10-17 and 2026-10-18). The artifact is still listed as "Photo Editor: Technical Spec (draft 1)".
 - **UI handoff:** [`docs/UI/fixer-ui-handoff.html`](UI/fixer-ui-handoff.html). It holds the approved Carbon Glass direction, every mockup screen, the design system and the component list. "Fixer" was the working name before Genzo.
 - **Feature list:** [`docs/UI/FEATURES.md`](UI/FEATURES.md). It gives every UI feature an ID, a priority (P0, P1, P2) and its screens.
 
@@ -127,6 +127,10 @@ Parked decisions that have been settled, with the date and what follows from eac
 | X-Trans demosaic | A Markesteijn-class demosaic in M1 | 2026-10-17 | Fujifilm is in the first priority tier. Checked against a literal CPU port of darktable's code, as RCD was in M0 |
 | ProRAW gain table map | Read and kept, not applied by default | 2026-10-17 | Lightroom renders ProRAW without it (a ΔE00 of 19 with it applied, measured by LightCraft). Applying it can come later as an opt-in |
 | Camera profiles in M1 | Genzo's own, since Adobe's are proprietary: Genzo Standard (the camera matrix plus Genzo's base tone curve) and Genzo Linear (the matrix only). B&W starts from Genzo Standard | 2026-10-17 | DCP files and the profile tables embedded in DNG are not read in M1. The base tone curve is defined in the DEV-02 spec |
+| Highlights and Shadows | Local tone mapping: an edge-aware base layer of the luminance, computed once per edit on the cropped image at a fixed working size. Whites, Blacks and Contrast stay global | 2026-10-18 | Fit, 1:1 and export use the same base, so they match. A crop or white balance change recomputes it. Defined in `docs/specs/DEV-01.md` |
+| Clipped highlights in M1 | Clip every channel where the first one saturates after white balance, and desaturate the edge. No reconstruction of clipped color yet | 2026-10-18 | Clipped areas come out neutral, not magenta. A reconstruction (darktable's inpaint-opposed class) can come later with its own reference test |
+| Out-of-gamut colors | Soft compression toward the gamut edge that keeps hue (the ACES reference gamut compression method), not a per-channel clip | 2026-10-18 | Always for RAW. For non-RAW only when the source gamut exceeds the target, so an unedited sRGB JPEG stays exact |
+| Where feature specs live | One file per spec, `docs/specs/<ID>.md`, linked from its FEATURES.md entry | 2026-10-18 | CLAUDE.md's rule says so. FEATURES.md stays an index |
 
 ## Parked decisions, with a deadline
 
