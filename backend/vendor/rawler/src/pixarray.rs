@@ -49,6 +49,23 @@ pub struct Pix2D<T: SubPixel> {
 pub type PixU16 = Pix2D<u16>;
 pub type PixF32 = Pix2D<f32>;
 
+/// Changed by the Genzo project on 2026-10-18 (LGPL-2.1 section 2a): every
+/// image buffer is checked against a size limit before it is allocated. A
+/// damaged or crafted header can claim any size; an allocation that large
+/// aborts the process, which no caller can catch, while this panic is caught
+/// (rawler's decode wraps decoders in catch_unwind, and so does Genzo). Upstream
+/// has the same check commented out in the alloc_image macros.
+/// See backend/vendor/README.md.
+const MAX_IMAGE_PIXELS: usize = 400_000_000;
+
+#[inline]
+fn checked_pixels(width: usize, height: usize) -> usize {
+  match width.checked_mul(height) {
+    Some(n) if n <= MAX_IMAGE_PIXELS => n,
+    _ => panic!("rawler: refusing to allocate a {width}x{height} image"),
+  }
+}
+
 impl<T> Pix2D<T>
 where
   T: SubPixel,
@@ -64,7 +81,7 @@ where
   }
 
   pub fn new(width: usize, height: usize) -> Self {
-    let data = vec![T::default(); width * height];
+    let data = vec![T::default(); checked_pixels(width, height)];
     Self {
       data,
       width,
@@ -74,7 +91,7 @@ where
   }
 
   pub fn new_uninit(width: usize, height: usize) -> Self {
-    let data = Vec::with_capacity(width * height);
+    let data = Vec::with_capacity(checked_pixels(width, height));
     Self {
       data,
       width,
@@ -372,12 +389,12 @@ where
   }
 
   pub fn new(width: usize, height: usize) -> Self {
-    let data = vec![<[T; N]>::default(); width * height];
+    let data = vec![<[T; N]>::default(); checked_pixels(width, height)];
     Self { data, width, height }
   }
 
   pub fn new_with_default(width: usize, height: usize, default: T) -> Self {
-    let data = vec![[default; N]; width * height];
+    let data = vec![[default; N]; checked_pixels(width, height)];
     Self { data, width, height }
   }
 

@@ -60,3 +60,9 @@ all = { level = "warn", priority = -1 }
 # vendor/README.md. shell/ and fuzz/ carry the same entry.
 [patch.crates-io]
 rawler = { path = "vendor/rawler" }
+
+# rawler parses untrusted files with unchecked arithmetic. With overflow
+# checks, an overflow is a panic that the decoder catches, as under fuzzing,
+# instead of a wrapped size or index (backend/vendor/README.md).
+[profile.release.package.rawler]
+overflow-checks = true

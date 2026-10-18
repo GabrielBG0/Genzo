@@ -2,9 +2,9 @@
 
 ## rawler 0.8.0 (LGPL-2.1-only), patched
 
-`rawler/` is [rawler](https://crates.io/crates/rawler) 0.8.0 from crates.io, from the dnglab project, with one change. It replaces the registry crate through `[patch.crates-io]` in `backend/Cargo.toml`, `backend/fuzz/Cargo.toml` and `shell/Cargo.toml`. Only rawler's own test images (`data/testdata`, 18 MB) were left out.
+`rawler/` is [rawler](https://crates.io/crates/rawler) 0.8.0 from crates.io, from the dnglab project, with two changes. It replaces the registry crate through `[patch.crates-io]` in `backend/Cargo.toml`, `backend/fuzz/Cargo.toml` and `shell/Cargo.toml`. Only rawler's own test images (`data/testdata`, 18 MB) were left out.
 
-### The change (2026-10-18)
+### First change (2026-10-18): exact curve lookups
 
 `src/bits.rs`, `LookupTable::dither`: it now returns the exact table value.
 
@@ -20,6 +20,12 @@ Against LibRaw 0.22.1 on the corpus, before the patch:
 
 After it, all three match LibRaw on every sample (`crates/imgio/tests/cfa_corpus.rs`). The function keeps its name and signature, so every caller is covered by the one change.
 
+### Second change (2026-10-18): a size limit on image buffers
+
+`src/pixarray.rs`: `Pix2D::new`, `Pix2D::new_uninit`, `Color2D::new` and `Color2D::new_with_default` panic before allocating more than 400 million pixels, or when width × height overflows. A damaged or crafted header can claim any size, and an allocation that large aborts the process. No caller can catch that, while this panic is caught (by rawler's own `catch_unwind` and by Genzo's). Upstream has the same check commented out in its `alloc_image` macros.
+
+In both workspaces that build release binaries, `[profile.release.package.rawler] overflow-checks = true` turns rawler's integer overflows into caught panics, as under fuzzing, instead of wrapped sizes or indices.
+
 ### Known rawler 0.8 problems worked around outside the vendored code
 
 - **Lossless JPEG ignores restart intervals (DRI).** Samples past the first restart are wrong, with no error. `crates/imgio/src/ljpeg.rs` splits such streams for the linear DNG reader. `dng::check_cfa_for_rawler` reports CFA DNGs with restarts as unsupported.
@@ -27,4 +33,4 @@ After it, all three match LibRaw on every sample (`crates/imgio/tests/cfa_corpus
 
 ### Upgrading rawler
 
-Diff the new release against `rawler/`, carry the `dither` change over (or drop it if upstream gains an exact lookup), update the version in `backend/Cargo.toml`, and rerun `cfa_corpus` and the golden tests. LGPL-2.1 section 2 requires the change notice in the modified file to stay.
+Diff the new release against `rawler/`, carry both changes over (drop one if upstream gains an exact lookup or a size check), update the version in `backend/Cargo.toml`, and rerun `cfa_corpus` and the golden tests. LGPL-2.1 section 2 requires the change notice in the modified file to stay.

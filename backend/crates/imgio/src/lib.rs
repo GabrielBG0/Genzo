@@ -317,8 +317,16 @@ mod tests {
         // A TIFF without DNGVersion: plain TIFF or camera RAW, not read yet.
         let plain_tiff = b"II*\0\x08\0\0\0\0\0\0\0\0\0";
         let err = decode(plain_tiff, DecodeOptions::default()).unwrap_err();
-        if cfg!(feature = "dng") {
-            assert!(matches!(err, DecodeError::Unsupported(FileFormat::Tiff, _)));
+        if cfg!(feature = "raw") {
+            assert!(
+                matches!(&err, DecodeError::Unsupported(FileFormat::Tiff, m) if m == "plain TIFF images are not supported yet"),
+                "{err:?}"
+            );
+        } else if cfg!(feature = "dng") {
+            assert!(matches!(
+                err,
+                DecodeError::NotBuiltIn(FileFormat::Tiff, "raw")
+            ));
         } else {
             assert!(matches!(
                 err,

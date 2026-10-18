@@ -44,6 +44,16 @@ fn corrupt(format: FileFormat, message: impl Into<String>) -> DecodeError {
 /// for rawler's own "unsupported" wording.
 fn rawler_error(format: FileFormat, e: RawlerError) -> DecodeError {
     match e {
+        // No camera format matched: for a TIFF, a plain TIFF image, which
+        // Genzo does not decode yet.
+        RawlerError::Unsupported { what, .. }
+            if format == FileFormat::Tiff && what.contains("No decoder found") =>
+        {
+            unsupported(format, "plain TIFF images are not supported yet")
+        }
+        RawlerError::Unsupported {
+            what, make, model, ..
+        } if make.trim().is_empty() && model.trim().is_empty() => unsupported(format, what),
         RawlerError::Unsupported {
             what, make, model, ..
         } => unsupported(format, format!("{make} {model}: {what}")),
@@ -224,13 +234,17 @@ pub(crate) fn decode_dng(data: &[u8]) -> Result<DecodedImage, DecodeError> {
     })
 }
 
-fn rect(r: &rawler::imgop::Rect) -> Rect {
-    Rect {
+/// rawler's rectangle as ours, if it is non-empty and lies inside the
+/// image. rawler builds it from file data without checks.
+fn rect(r: &rawler::imgop::Rect, width: usize, height: usize) -> Option<Rect> {
+    let bottom = r.p.y.checked_add(r.d.h).filter(|&b| b <= height)?;
+    let right = r.p.x.checked_add(r.d.w).filter(|&b| b <= width)?;
+    (r.d.w > 0 && r.d.h > 0).then_some(Rect {
         top: r.p.y as u32,
         left: r.p.x as u32,
-        bottom: (r.p.y + r.d.h) as u32,
-        right: (r.p.x + r.d.w) as u32,
-    }
+        bottom: bottom as u32,
+        right: right as u32,
+    })
 }
 
 /// The stage 0 metadata of a camera RAW, from rawler's fields.
@@ -262,14 +276,29 @@ fn metadata(img: &RawImage, format: FileFormat) -> Result<RawMetadata, DecodeErr
         _ => return Err(corrupt(format, "no white level")),
     };
 
-    let active = img.active_area.as_ref().map(rect);
+    let bad = |what: &str, r: &rawler::imgop::Rect| {
+        corrupt(
+            format,
+            format!("{what} {r:?} in a {}x{} image", img.width, img.height),
+        )
+    };
+    let active = match &img.active_area {
+        Some(r) => Some(rect(r, img.width, img.height).ok_or_else(|| bad("active area", r))?),
+        None => None,
+    };
     let origin = active.map_or((0, 0), |a| (a.left, a.top));
-    let default_crop = img.crop_area.as_ref().map(|c| DefaultCrop {
-        x: c.p.x as f64 - f64::from(origin.0),
-        y: c.p.y as f64 - f64::from(origin.1),
-        width: c.d.w as f64,
-        height: c.d.h as f64,
-    });
+    let default_crop = match &img.crop_area {
+        Some(c) => {
+            let c = rect(c, img.width, img.height).ok_or_else(|| bad("crop", c))?;
+            Some(DefaultCrop {
+                x: f64::from(c.left) - f64::from(origin.0),
+                y: f64::from(c.top) - f64::from(origin.1),
+                width: f64::from(c.right - c.left),
+                height: f64::from(c.bottom - c.top),
+            })
+        }
+        None => None,
+    };
 
     // The two matrices for the lowest and highest color temperature, as
     // ColorMatrix1 and 2 (rawler keys them by EXIF illuminant).
@@ -346,5 +375,37 @@ fn cct(illuminant: u16) -> f64 {
         2 => 4000.0,
         4 => 5500.0,
         _ => 5000.0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn orientation_round_trips_every_exif_value() {
+        for v in 1..=8u16 {
+            assert_eq!(u16::from(orientation(Orientation::from_u16(v))), v);
+        }
+        assert_eq!(orientation(Orientation::from_u16(0)), 1);
+        assert_eq!(orientation(Orientation::from_u16(9)), 1);
+    }
+
+    #[test]
+    fn rectangles_outside_the_image_are_refused() {
+        use rawler::imgop::{Dim2, Point, Rect as R};
+        let r = |x, y, w, h| R::new(Point::new(x, y), Dim2::new(w, h));
+        assert_eq!(
+            rect(&r(2, 1, 8, 4), 10, 5),
+            Some(Rect {
+                top: 1,
+                left: 2,
+                bottom: 5,
+                right: 10
+            })
+        );
+        assert_eq!(rect(&r(3, 0, 8, 4), 10, 5), None);
+        assert_eq!(rect(&r(0, 0, 0, 4), 10, 5), None);
+        assert_eq!(rect(&r(usize::MAX, 0, 2, 1), 10, 5), None);
     }
 }
