@@ -2,7 +2,7 @@
 
 Built from these sources:
 
-- **Spec:** *Genzo: Technical Spec (draft 2)*, revision 64 (revision 57 plus the M0 results recorded on 2026-10-15). The artifact is still listed as "Photo Editor: Technical Spec (draft 1)".
+- **Spec:** *Genzo: Technical Spec (draft 2)*, revision 78 (revision 57, plus the M0 results recorded on 2026-10-15 and 2026-10-17, plus the M1 decisions of 2026-10-17). The artifact is still listed as "Photo Editor: Technical Spec (draft 1)".
 - **UI handoff:** [`docs/UI/fixer-ui-handoff.html`](UI/fixer-ui-handoff.html). It holds the approved Carbon Glass direction, every mockup screen, the design system and the component list. "Fixer" was the working name before Genzo.
 - **Feature list:** [`docs/UI/FEATURES.md`](UI/FEATURES.md). It gives every UI feature an ID, a priority (P0, P1, P2) and its screens.
 
@@ -121,6 +121,12 @@ Parked decisions that have been settled, with the date and what follows from eac
 | Viewport fallback ladder on Windows | Step 1 plus step 2: while a slider is dragged at Fit zoom, a half-size JPEG preview; the full lossless frame on release | 2026-10-15 | Measured 18 ms p95 against the 50 ms gate (was 230 ms), on the spike's synthetic scene; real photos are estimated at 19 to 26 ms from measured parts and not yet measured in the app. Contract 0.3.0. macOS and Linux still to measure, and 1:1 zoom drags still send full frames. See `docs/m0-results.md` |
 | WebKitGTK on two distros (0.E step 3) | Ubuntu only for M0: 22.04 and 24.04, which covered two WebKitGTK versions (2.50.4 and 2.52.6). No run on a second distro family | 2026-10-17 | The owner uses Ubuntu, and testing another family now is not worth the time. Other distros rest on the minimum versions above and on reports from people who try them: the bench kit starts on any distro with glibc 2.35 or newer and prints the install command for Fedora, Arch and openSUSE. A distro-specific problem found later is fixed then |
 | Golden images in M0 | Not stored for the M0 spike. Its GPU tests compare against the synthetic scene's ground truth (PSNR, ΔE2000) and the CPU port of darktable's `rcd.c` (ΔE2000), on every adapter including lavapipe | 2026-10-17 | Accepted for M0 only, because the spike pipeline is rewritten in M1. **From M1 on, testing gets stricter:** every pipeline stage gets stored golden images as the plan says (rendered on lavapipe, ΔE2000 and PSNR tolerances, inputs from the CC0 raw.pixls.us files since the owner's photos cannot be published), and keeps its ground-truth tests alongside them. A stage is not done without both. Changing a golden image needs a stated reason in the PR |
+| Real-GPU checks | A self-hosted GitHub runner on the owner's RTX 3060 desktop runs the real-GPU golden images and the performance benchmarks nightly and on every push to `main`, against a 10 percent baseline. lavapipe keeps its coarse gate on every PR | 2026-10-17 | A regression on real hardware is flagged after it merges, not blocked: PRs are gated by lavapipe only. The M1 exit gate is measured on this runner. The repo is public, so fork pull requests must never reach it: the repository's Actions setting requires approval before workflows from outside contributors run. `benchmarks/` gets a `baseline-<runner>.json` with the default 10 percent |
+| Edit storage in M1 | In memory for the session: each photo's edit and undo history live in the engine until the app closes. Export is how a result is kept | 2026-10-17 | No sidecar or temporary file format to migrate. The filmstrip's edited dot means edited this session. The M2 catalog stores the same versioned edit struct |
+| Nikon High Efficiency in M1 | Build a JPEG XS decoder in M1, instead of showing only the embedded preview | 2026-10-17 | A patent and license check comes first and is recorded in `docs/licenses.md`. Verified against Adobe DNG Converter's output for the Z 8 file, with a fuzz target. Estimated at 20 to 40 hours, run as its own track |
+| X-Trans demosaic | A Markesteijn-class demosaic in M1 | 2026-10-17 | Fujifilm is in the first priority tier. Checked against a literal CPU port of darktable's code, as RCD was in M0 |
+| ProRAW gain table map | Read and kept, not applied by default | 2026-10-17 | Lightroom renders ProRAW without it (a ΔE00 of 19 with it applied, measured by LightCraft). Applying it can come later as an opt-in |
+| Camera profiles in M1 | Genzo's own, since Adobe's are proprietary: Genzo Standard (the camera matrix plus Genzo's base tone curve) and Genzo Linear (the matrix only). B&W starts from Genzo Standard | 2026-10-17 | DCP files and the profile tables embedded in DNG are not read in M1. The base tone curve is defined in the DEV-02 spec |
 
 ## Parked decisions, with a deadline
 
@@ -248,7 +254,7 @@ These are open questions, not conflicts. Neither source answers them.
 - [x] ProRAW decodes on every device in the corpus: the iPhone 13 Pro Max and 16 Pro through the linear DNG reader (checked against libjpeg-turbo and libjxl), and the iPhone 12 Pro through the reader too (checked against libjpeg). Wiring the reader into `imgio::decode` is M1 step 2. See `docs/m0-results.md`.
 - [x] Software adapter runs the spike pipeline (lavapipe job on every push; WARP locally)
 - [x] License review written, fonts included (signed off for M0 in `docs/licenses.md`)
-- [x] Performance targets confirmed or revised in the spec (revision 64: GPU time confirmed, input to pixels measured on Windows only, 48 MP GPU memory and 48 MP open time flagged for M1)
+- [x] Performance targets confirmed or revised in the spec (revision 64: GPU time confirmed, input to pixels measured on Windows only, with macOS and partial Linux results added in revision 73, 48 MP GPU memory and 48 MP open time flagged for M1)
 - [x] Tokens, fonts, shared components and app shell running against the fake engine (checked 2026-10-15: the component gallery at `#/gallery` and the app shell match the handoff's layout, tokens and edited-state rules; the right panel is still the latency-spike panel and the filmstrip shows its empty state until M1)
 - [x] The M1 parked decisions are settled (undo scope, module state; see Decided)
 
@@ -258,60 +264,101 @@ These are open questions, not conflicts. Neither source answers them.
 
 **Goal:** open a folder of files directly, without a catalog, and edit with the core Basic panel, crop, histogram and JPEG export, all rendering fast.
 
-**First task:** write the specs, using the FEATURES template, for APP-01, APP-02, APP-03 (fixed defaults), APP-06 (slider part), APP-07, APP-08, APP-10, DEV-02, DEV-03, DEV-12, LIB-09, WF-02 (simple toggle) and OUT-01 (basic).
+**Starts when** the M0 latency gate closes on Linux (the 48 MP white balance case), or a Linux ladder step is chosen if that rerun fails. Writing the specs (the first task) can start before that.
 
-**Exit gate:** meets the slider and photo-open budgets on the reference GPU (RTX 3060 class).
+**First task:** write the specs, using the FEATURES template, for:
+- **DEV-01**, the M1 part of the RAW pipeline: the decode paths, stages 1 to 4, the core of stages 6 and 7, crop and the output transform. It comes first, because every backend step builds on it.
+- APP-01, APP-02, APP-03 (fixed defaults), APP-06 (slider part), APP-07, APP-08, APP-10, DEV-02, DEV-03, DEV-12, DEV-13 (edited dots), LIB-09, WF-02 (simple toggle) and OUT-01 (basic).
 
-| Target | Value |
-|---|---|
-| Photo open, first pixels (embedded preview) | under 100 ms |
-| Full fit-view render | under 1 s for 12 MP, under 2 s for 48 MP |
-| Slider GPU time at 2560 px | under 16 ms |
-| Slider input to pixels | under 50 ms p95 |
-| Switch to a prefetched neighbor | under 150 ms |
-| 1:1 pan, newly exposed area sharp | under 100 ms |
-| GPU memory, one 48 MP edit | under 1 GB (full-resolution intermediates only per tile) |
-| Cold start to usable window | under 1.5 s |
+A screen is not built before its spec exists.
+
+**Exit gate:** meets the slider and photo-open budgets on the reference GPU (RTX 3060 class), measured on the self-hosted runner. The bench kit also runs the latency cases on macOS (base M1) and Linux (RTX 3050 laptop); those runs are reported, not gated.
+
+| Target | Value | Measured by |
+|---|---|---|
+| Photo open, first pixels (embedded preview) | under 100 ms | `cli bench open` |
+| Full fit-view render | under 1 s for 12 MP, under 2 s for 48 MP | `cli bench open` |
+| Slider GPU time at 2560 px | under 16 ms | `cli bench gpu` |
+| Slider input to pixels | under 50 ms p95 | the in-app autobench (bench kit) |
+| Switch to a prefetched neighbor | under 150 ms | `cli bench open` |
+| 1:1 pan, newly exposed area sharp | under 100 ms | the autobench's 1:1 pan case |
+| GPU memory, one 48 MP edit | under 1 GB (full-resolution intermediates only per tile) | a memory-accounting test, and the GPU process counter in the bench kit |
+| Cold start to usable window | under 1.5 s | a startup probe in the app |
+
+### What M0 hands to M1
+
+These come from `docs/m0-results.md` and decide how the steps below are built:
+
+1. **GPU memory.** The spike holds about 49 bytes per pixel, 2.4 GB at 48 MP. Stages 1 and 2 must run in tiles, with only the mip pyramid kept for the whole image. Loading frees the old image before allocating the new one, and the render thread's error scopes turn an out-of-memory into an error (both from PR #22). Keep both.
+2. **The settled render is slow on weak GPUs**: 124 ms at 48 MP on a base M1, 42 ms on an RTX 3050. Render the visible area first.
+3. **1:1 sends full frames today**: 10.5 MB, 111 to 125 ms p95 on Linux against the 100 ms budget. Send only the visible tiles.
+4. **Readback** of a 2560 px frame costs about 9 ms. Read back only the visible tiles, into staging buffers kept mapped across frames.
+5. **The viewport ladder stays:** the half-size JPEG preview while dragging at Fit (Windows needs it, macOS and Linux keep it). On Linux, WebKitGTK's default DMABUF mode is the one to ship.
+6. **Color in the webview:** `unpackColorSpace` stays sRGB for every frame, and only `drawingBufferColorSpace` follows the frame. JPEG tiles decode with `colorSpaceConversion: 'none'`. Support is detected on the prototype, not by assigning and reading back.
+7. **RAW:** every ProRAW goes through the linear DNG reader. Older ProRAW (iPhone 12 Pro) is not white balanced, so AsShotNeutral is applied. BaselineExposure is applied. Levels are arrays per channel or per CFA position. Only the first three white balance coefficients are valid.
+8. **Shaders:** no runtime vector indexing in WGSL (FXC rejects it; use `pick3` and `onehot`). WARP crashes with several devices in one process, so GPU tests take turns.
+9. **Code to replace, not extend:** `pipeline/src/gpu/spike.rs` and its WGSL, `frontend/src/lib/spike/`, and the latency-spike right panel in `AppShell.svelte`. The autobench drag protocol, the color probe and the bench kit are reused to measure the exit gate.
 
 ### Backend
 1. `model`: the versioned edit struct, with serde, a schema version and unknown fields preserved. It covers:
-   - Profile, Color or B&W treatment, and white balance (temperature, tint).
+   - Profile (Genzo Standard or Genzo Linear, see Decided), Color or B&W treatment, and white balance (temperature, tint).
    - Exposure, contrast, highlights, shadows, whites, blacks.
    - Vibrance, saturation.
    - Crop, angle, 90° rotation and flip.
-2. `imgio`: the normalized decode output. Covers ProRAW, Bayer DNG, the LibRaw fallback for priority cameras, HEIC (libheif), JPEG, TIFF and PNG. Reads EXIF.
-3. `color`: camera-to-working-space matrices (the working space fully contains Display P3), the display transform and ICC. Includes CPU reference math.
-4. `pipeline`:
-   - Stages 1–4, the core of stages 6 and 7, crop and rotate, and the output transform.
-   - Re-runs start at the changed stage.
-   - Interactive and settled quality levels.
-   - White balance applied after the cached demosaic while dragging.
+
+   Edits and their history live in memory for the session (decided). The struct is already the format the M2 catalog stores.
+2. `imgio`: one normalized decode output (pixel buffer, Bayer, X-Trans or linear, levels, matrices, orientation, embedded preview, opcode list). The pipeline never sees a file format.
+   - **ProRAW and other linear DNG:** wire `dng::decode_linear` into `imgio::decode`. Apply AsShotNeutral and BaselineExposure. Read and keep the gain table map, but do not apply it (decided).
+   - **Camera RAW and CFA DNG** through rawler, Bayer and X-Trans. Levels as arrays.
+   - **DNG opcode lists:** parse them for every DNG. Apply the opcodes the corpus files carry (Samsung's OpcodeList2 first). An unknown opcode marked optional is skipped; one not marked optional is reported, and the photo shows its embedded preview.
+   - **Nikon High Efficiency:** a JPEG XS decoder (decided). The patent and license check comes first and is recorded in `docs/licenses.md`. Verified against Adobe DNG Converter's output for the Z 8 file. Estimated at 20 to 40 hours, so it runs as its own track beside the pipeline work.
+   - **48 MP JPEG XL ProRAW** decodes its tiles in parallel and streams them into the mip pyramid, with no full-size copy held. Measure the parallel decode on the reference desktop before building on it: the 2 s fit-view budget is not proven (1.8 s one tile after another on the desktop, 2.6 to 5.3 s in parallel on the owner's laptop).
+   - HEIC (libheif), JPEG, TIFF and PNG. EXIF, including orientation.
+   - **No LibRaw fallback** (decided).
+   - A fuzz target for every decoder: `dng_linear` exists; add the rawler path, JPEG XS, TIFF and PNG.
+3. `color`: camera-to-working-space matrices (AP1 with a D65 white), the Genzo Standard base tone curve, the display transform to sRGB and Display P3, and ICC through moxcms for export. Includes CPU reference math.
+4. `pipeline`, stages 1 to 4 in tiles, replacing the spike:
+   - Linearize, levels, white balance and opcodes; RCD demosaic for Bayer and Markesteijn-class demosaic for X-Trans (decided); skipped for linear DNG; then the camera matrix.
+   - Full-resolution intermediates exist only per tile. Only the mip pyramid (RGBA16F) is kept for the whole image. Try 16-bit for the R32F and RG32F intermediates.
+   - A memory-accounting test asserts under 1 GB of GPU memory at 48 MP.
+   - The Markesteijn port gets a literal CPU port of darktable's code as its reference, as RCD did in M0.
+5. `pipeline`, the rest of the M1 stages:
+   - The core of stages 6 and 7 (exposure, tone, vibrance, saturation), the B&W treatment, crop and rotate, and the output transform.
+   - Re-runs start at the changed stage. Interactive and settled quality levels.
+   - White balance applied after the cached demosaic while dragging; the settled render re-demosaics.
    - Generation numbers, latest-wins coalescing and cancellation.
-   - 256 px tiles at 1:1, visible tiles first, then a ring around them.
-5. `pipeline`: the histogram, and clipping masks for J.
-6. `cache`: an in-memory LRU and a disk tier. `jobs`: a priority scheduler, rayon for CPU work and tokio for IO.
-7. `engine`: an "open folder" session.
-   - Show the embedded preview within one frame.
-   - Prefetch two neighbors on each side.
-   - Own the edit document and its undo and redo, in the scope decided before M1.
-8. `export`: basic JPEG with size and quality, through the same GPU pipeline, tiled.
-9. `cli`: `open`, `render`, `export`, and golden-image tests.
+6. `pipeline`, what reaches the viewport:
+   - At Fit: the half-size JPEG preview while dragging, the full frame on release.
+   - At 1:1: 256 px tiles, visible tiles first, then a ring around them.
+   - Read back only the visible tiles, into persistent staging buffers.
+   - The settled render does the visible area first. Measure the settled frame's transfer (11 MB raw, about 40 ms on Linux) and compress it if the pause after release shows.
+7. `pipeline`: the histogram, and clipping masks for J.
+8. `cache`: an in-memory LRU of decoded mip levels in CPU memory, used for the prefetched neighbors (never on the GPU, so the 1 GB budget holds), and a disk tier for embedded previews. `jobs`: a priority scheduler, rayon for CPU work and tokio for IO.
+9. `engine`: an "open folder" session.
+   - Show the embedded preview within one frame. A file Genzo cannot decode shows its embedded preview and says why.
+   - Prefetch two neighbors on each side into the CPU cache.
+   - Own the edit document and its undo and redo, per photo (decided), in memory for the session.
+10. `export`: basic JPEG with size and quality, through the same GPU pipeline, tiled, with an embedded sRGB profile.
+11. `cli`: `open`, `render`, `export`, `bench open` (first pixels, fit render, neighbor switch) and the golden-image tests.
 
 ### Contract
-- Commands: `OpenFolder`, `SelectPhoto`, `ApplyEditDelta`, `ResetParam`, `Undo`, `Redo`, `ExportJpeg`.
+- Commands: `OpenFolder`, `SelectPhoto`, `SetView`, `ApplyEditDelta`, `ResetParam`, `Undo`, `Redo`, `ExportJpeg`.
+  - `SetView` carries the viewport size, the zoom (Fit or 1:1) and the visible rectangle, so the engine renders only what is seen.
+  - `ApplyEditDelta` carries the gesture phase (start, update, end). The engine picks the drag preview from it, replacing the spike's `proxy` flag, and records one history step per finished gesture.
 - Queries: `ListFolderPhotos`, `GetEdit`, `GetHistogram`.
-- Events: `RenderFinished`, `ExportProgress`, `AdapterInfo` (for the software-fallback notice).
-- Frames: the tile protocol from M0. Bump the version.
+- Events: `PreviewShown`, `RenderFinished`, `ExportProgress`, `AdapterInfo` (for the software-fallback notice).
+- Frames: the tile protocol from M0.
+- The spike commands and events go. Bump to 0.5.0.
 
 ### Frontend (screens D1, D9; components Top bar, Left panel · Develop, Histogram + tool strip, Slider row, Panel header, Filmstrip, Status bar, Menu)
 1. **APP-01 Module switcher**: pill tabs. Develop is active (D). Library is disabled until M2. The Export tab opens the basic export view. Map and Print tabs appear only when those modules ship (Later).
 2. **APP-02 App menu** behind the logo, also opened with Alt. Start with the File, Edit, Photo, Develop, View and Help items that exist in M1. It grows every milestone.
 3. **APP-03 Quick actions** with fixed Develop defaults: Undo, Redo, Before/After, Reset all and Export. Customization comes later.
 4. **D1 Basic panel (DEV-02, core):**
-   - Profile, the Color/B&W toggle (V), white balance presets, and the picker (W).
+   - Profile (Genzo Standard, Genzo Linear), the Color/B&W toggle (V), white balance presets, and the picker (W).
    - Temp and Tint on color-gradient tracks.
    - The tone and presence sliders.
-   - Changed sliders shown bright, unchanged ones dim.
+   - Changed sliders shown bright, unchanged ones dim, and the blue edited dot on the panel header (DEV-13).
    - Double-click to reset.
    - Optimistic values while dragging.
    - *Texture, clarity and dehaze come in M3. Auto tone (Ctrl U) and auto white balance (Ctrl Shift U) come in M4.*
@@ -322,18 +369,48 @@ These are open questions, not conflicts. Neither source answers them.
 7. A simple before and after toggle (\\). The full WF-02 comes in M3.
 8. **Viewport:**
    - Fit and 1:1 zoom, with Space for a temporary zoom.
-   - Zoom and pan as a GPU transform over the tiles already held.
+   - Zoom and pan as a GPU transform over the tiles already held; pan reports the visible rectangle through `SetView`.
+   - The color rules from M0 (see "What M0 hands to M1", item 6).
    - Photo toolbar and badges on the flat Overlay surface.
-9. **LIB-09 Filmstrip** of the opened folder: a white ring on the current photo and a blue dot on edited ones.
+9. **LIB-09 Filmstrip** of the opened folder: a white ring on the current photo and a blue dot on photos edited this session.
 10. **APP-06 Slider context menu** (part of Menu-4): reset, copy value, paste value.
-11. **APP-07 Status bar**: mode pill, color space, bit depth, preview status and the software-adapter notice.
+11. **APP-07 Status bar**: mode pill, color space, bit depth, preview status, the software-adapter notice, and why a photo shows only its embedded preview.
 12. **APP-08 Panel visibility**: Tab, Shift Tab, F6, F7, F8, Alt-click for solo mode.
 13. **APP-10 Undo and redo** (Ctrl Z, Ctrl Shift Z) for edits.
 14. **OUT-01 (basic)**: an export dialog with JPEG, size and quality. It is a subset of W7.
+15. The latency-spike right panel and `lib/spike/` are removed; the autobench and color probe move to a bench-only entry point.
 
 ### Quality
-- Golden images per stage, on lavapipe and on real GPUs nightly. Fuzz targets for every decoder.
-- The M1 budget table enforced in CI.
+Stricter than M0 (see Decided, "Golden images in M0"). A stage or decoder is not done without all of its checks:
+- **Golden images per stage**, built before the first new stage:
+  - Inputs are CC0 files from raw.pixls.us, fetched by sha256 like `scripts/fetch-raw-corpus.py` and cached in CI. The owner's photos are never used, since they cannot be published.
+  - The stored goldens are small crops or downscales, rendered on lavapipe and committed, with ΔE2000 and PSNR tolerances.
+  - Each stage keeps its ground-truth tests beside them (the synthetic scene, the darktable references for RCD and Markesteijn).
+  - Changing a golden image needs a stated reason in the PR.
+- **Real GPUs:** the self-hosted RTX 3060 runner (decided) runs the goldens and benchmarks nightly and on pushes to `main`, against a 10 percent baseline. It flags a regression after merge; PRs are gated by lavapipe only. It is not a required check, so a powered-off desktop never blocks a merge. Fork pull requests never reach it: the repository's Actions setting requires approval for workflows from outside contributors.
+- **lavapipe** keeps its coarse gate on every PR (25 percent against the slowest run seen, `benchmarks/README.md`).
+- A criterion benchmark per stage, and a fuzz target per decoder.
+- The bench kit measures the latency cases on all three OSes at checkpoints and at exit. Its PRIME offload variant is dropped, or skipped with a message when it cannot start.
+- Every screen against the fake engine first (Vitest, Playwright), compared with the handoff's full-size screen.
+
+### Order of work
+One PR per numbered item, unless it says otherwise. The frontend track (item 9) runs beside the backend from the moment its specs exist.
+
+1. The feature specs, DEV-01 first.
+2. Groundwork, in parallel:
+   - the self-hosted runner;
+   - the golden-image harness;
+   - the JPEG XS patent and license check;
+   - the measurement of parallel 48 MP decode on the reference desktop.
+3. Normalized decode: linear DNG, then rawler (Bayer and X-Trans data), then the non-raw formats, then opcode lists. Each path comes with its fuzz target and corpus tests.
+4. The JPEG XS decoder, as its own track from here on.
+5. Tiled stages 1 to 4, with RCD, Markesteijn and the memory test.
+6. What reaches the viewport: the Fit preview, 1:1 visible tiles, readback of the visible tiles only.
+7. Stages 6 and 7, B&W, crop and rotate, the output transform, and the histogram.
+8. The engine session, cache and prefetch, undo, and contract 0.5.0.
+9. The frontend screens against the fake engine, then wired to the real engine once item 8 lands.
+10. Basic JPEG export.
+11. Remove the spike code, then measure the exit gate.
 
 ---
 
