@@ -131,6 +131,7 @@ Parked decisions that have been settled, with the date and what follows from eac
 | Clipped highlights in M1 | Clip every channel where the first one saturates after white balance, and desaturate the edge. No reconstruction of clipped color yet | 2026-10-18 | Clipped areas come out neutral, not magenta. A reconstruction (darktable's inpaint-opposed class) can come later with its own reference test |
 | Out-of-gamut colors | Soft compression toward the gamut edge that keeps hue (the ACES reference gamut compression method), not a per-channel clip | 2026-10-18 | Always for RAW. For non-RAW only when the source gamut exceeds the target, so an unedited sRGB JPEG stays exact |
 | Where feature specs live | One file per spec, `docs/specs/<ID>.md`, linked from its FEATURES.md entry | 2026-10-18 | CLAUDE.md's rule says so. FEATURES.md stays an index |
+| M1 without the Linux latency gate | M1 development starts on 2026-10-18 with the gate passed on Windows and macOS. On Linux it has passed 3 of 4 cases (31 to 43 ms p95); the 48 MP white balance rerun is still out | 2026-10-18 | The owner's call: Linux is not a high-priority platform for now. The M0 checklist's latency box stays open until the rerun is written up. If the rerun fails, the Linux ladder step becomes an M1 item, measured with the bench kit |
 
 ## Parked decisions, with a deadline
 
@@ -268,7 +269,7 @@ These are open questions, not conflicts. Neither source answers them.
 
 **Goal:** open a folder of files directly, without a catalog, and edit with the core Basic panel, crop, histogram and JPEG export, all rendering fast.
 
-**Starts when** the M0 latency gate closes on Linux (the 48 MP white balance case), or a Linux ladder step is chosen if that rerun fails. Writing the specs (the first task) can start before that.
+**Started** on 2026-10-18 without the Linux gate (see Decided, "M1 without the Linux latency gate"). When the Linux rerun arrives, it is written up in `docs/m0-results.md`; a failure there becomes an M1 item for Linux, not a stop.
 
 **First task:** write the specs, using the FEATURES template, for:
 - **DEV-01**, the M1 part of the RAW pipeline: the decode paths, stages 1 to 4, the core of stages 6 and 7, crop and the output transform. It comes first, because every backend step builds on it.
