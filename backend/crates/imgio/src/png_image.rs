@@ -34,6 +34,7 @@ pub(crate) fn decode(data: &[u8]) -> Result<DecodedImage, DecodeError> {
     let limits = Limits {
         bytes: (raster::MAX_PIXELS * 8) as usize,
     };
+    check_palette(data)?;
     let mut decoder = Decoder::new_with_limits(Cursor::new(data), limits);
     decoder.set_transformations(Transformations::EXPAND);
     let mut reader = decoder.read_info().map_err(png_error)?;
@@ -117,19 +118,37 @@ pub(crate) fn decode(data: &[u8]) -> Result<DecodedImage, DecodeError> {
     })
 }
 
-/// The body of the eXIf chunk, if the file has one. The chunk layout was
-/// already validated by the decoder; this walk only checks bounds.
-fn exif_chunk(data: &[u8]) -> Option<&[u8]> {
+/// The chunks of a PNG, as (type, body), in file order, up to IEND or the
+/// first chunk that does not fit. Only bounds are checked here.
+fn chunks(data: &[u8]) -> impl Iterator<Item = (&[u8], &[u8])> {
     let mut at = 8; // after the signature
-    while at + 8 <= data.len() {
-        let len = u32::from_be_bytes(data[at..at + 4].try_into().ok()?) as usize;
-        let kind = &data[at + 4..at + 8];
+    std::iter::from_fn(move || {
+        let len = u32::from_be_bytes(data.get(at..at + 4)?.try_into().ok()?) as usize;
+        let kind = data.get(at + 4..at + 8)?;
         let body = data.get(at + 8..(at + 8).checked_add(len)?)?;
-        match kind {
-            b"eXIf" => return Some(body),
-            b"IEND" => return None,
-            _ => at = at + 12 + len,
+        at = at + 12 + len;
+        (kind != b"IEND").then_some((kind, body))
+    })
+}
+
+/// The body of the eXIf chunk, if the file has one.
+fn exif_chunk(data: &[u8]) -> Option<&[u8]> {
+    chunks(data)
+        .find(|(kind, _)| *kind == b"eXIf")
+        .map(|(_, body)| body)
+}
+
+/// Checks what png 0.17.16 trusts: a PLTE chunk of whole entries, 1 to 256
+/// of them (PNG 3, 11.2.3). Its palette expansion panics on a PLTE of 7
+/// bytes (a fuzz find); such a file is damaged.
+fn check_palette(data: &[u8]) -> Result<(), DecodeError> {
+    for (kind, body) in chunks(data) {
+        if kind == b"PLTE" && (body.is_empty() || body.len() % 3 != 0 || body.len() > 768) {
+            return Err(DecodeError::Corrupt {
+                format: FORMAT,
+                message: format!("a PLTE chunk of {} bytes", body.len()),
+            });
         }
     }
-    None
+    Ok(())
 }
