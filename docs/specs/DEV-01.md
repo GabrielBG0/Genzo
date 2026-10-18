@@ -298,7 +298,7 @@ While `white_balance.mode` is `AsShot`, the engine fills `temp` and `tint` with 
 **RAW.** Temp and Tint name the scene's white point.
 - Temp is a correlated color temperature on Robertson's isotemperature lines.
 - Tint is the distance from the Planckian locus, `Duv = −tint / 3000`, the scale of Adobe's DNG SDK. So Temp and Tint values read like Lightroom's.
-- **As shot:** the white point is solved from AsShotNeutral, or from the camera's white balance coefficients, with the iterative method in the DNG specification. The matrix depends on the white point, so the two are solved together. Then it is expressed as Temp and Tint.
+- **As shot:** the white point is solved from AsShotNeutral, or from the camera's white balance coefficients, with the iterative method in the DNG specification. The matrix depends on the white point, so the two are solved together, with the same XYZ-to-camera matrix stage 4 uses (AnalogBalance × CameraCalibration × ColorMatrix). The iPhone 16 Pro needs that: its AsShotNeutral is (1, 1, 1), and its real gains sit in AnalogBalance. Then it is expressed as Temp and Tint.
 - **The multipliers** are the inverse of the camera neutral at that white point.
 - **A file with no as-shot data** (the Kodak DCS760C) uses D65, and the status bar says the as-shot white balance is unavailable.
 

@@ -313,7 +313,7 @@ These come from `docs/m0-results.md` and decide how the steps below are built:
 
    Edits and their history live in memory for the session (decided). The struct is already the format the M2 catalog stores.
 2. `imgio`: one normalized decode output (pixel buffer, Bayer, X-Trans or linear, levels, matrices, orientation, embedded preview, opcode list). The pipeline never sees a file format.
-   - **ProRAW and other linear DNG:** wire `dng::decode_linear` into `imgio::decode`. Apply AsShotNeutral and BaselineExposure. Read and keep the gain table map, but do not apply it (decided).
+   - **ProRAW and other linear DNG:** wire `dng::decode_linear` into `imgio::decode`. Carry AsShotNeutral, AnalogBalance and BaselineExposure; stages 2 and 4 apply them, the decoder never does (DEV-01). Read and keep the gain table map, but do not apply it (decided).
    - **Camera RAW and CFA DNG** through rawler, Bayer and X-Trans. Levels as arrays.
    - **DNG opcode lists:** parse them for every DNG. Apply the opcodes the corpus files carry (Samsung's OpcodeList2 first). An unknown opcode marked optional is skipped; one not marked optional is reported, and the photo shows its embedded preview.
    - **Nikon High Efficiency:** a JPEG XS decoder (decided), in its own crate behind a cargo feature that release builds leave off, because of the JPEG XS patent pool (`docs/licenses.md`). Verified against Adobe DNG Converter's output for the Z 8 file. Estimated at 20 to 40 hours, so it runs as its own track beside the pipeline work.
