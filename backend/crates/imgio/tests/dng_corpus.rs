@@ -9,7 +9,7 @@ use std::path::PathBuf;
 
 use genzo_imgio::dng::{self, COMPRESSION_JPEG_XL, DngError};
 use genzo_imgio::raw::{AsShot, OpcodeKind};
-use genzo_imgio::{DecodeError, DecodeOptions, FileFormat, Pixels};
+use genzo_imgio::{DecodeOptions, Pixels};
 
 /// Every DNG in corpus/<folder>/, if the corpus has any.
 fn corpus_files(folder: &str) -> Vec<(PathBuf, Vec<u8>)> {
@@ -249,24 +249,6 @@ fn decode_matches_the_linear_reader() {
         assert_eq!(samples_per_pixel, want.samples_per_pixel);
         assert!(data == want.pixels, "samples differ");
         assert_eq!(*raw, want.meta);
-    }
-}
-
-/// CFA DNGs are recognized as DNG and reported unsupported until the rawler
-/// path lands, never as damaged.
-#[test]
-fn cfa_dngs_are_unsupported_for_now() {
-    for (path, data) in ["raw/Leica/Q2", "raw/Pentax/K10D", "bayer-dng/iphone"]
-        .into_iter()
-        .flat_map(corpus_files)
-    {
-        println!("{}", path.display());
-        match genzo_imgio::decode(&data, DecodeOptions::default()) {
-            Err(DecodeError::Unsupported(FileFormat::Tiff, m)) => assert!(m.contains("CFA"), "{m}"),
-            other => panic!("expected unsupported, got {other:?}"),
-        }
-        // The metadata reads all the same.
-        dng::read_metadata(&data).unwrap();
     }
 }
 

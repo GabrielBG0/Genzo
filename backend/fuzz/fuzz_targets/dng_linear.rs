@@ -11,7 +11,12 @@ fuzz_target!(
         // other panic, and any that escaped the handler, is still a crash.
         let abort = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
-            let in_rawler = info.location().is_some_and(|l| l.file().contains("/rawler-"));
+            // rawler from crates.io (`rawler-0.8.0/`) or Genzo's patched
+            // copy (`vendor/rawler/`).
+            let in_rawler = info.location().is_some_and(|l| {
+                let file = l.file().replace(std::path::MAIN_SEPARATOR, "/");
+                file.contains("/rawler-") || file.contains("vendor/rawler/")
+            });
             if !in_rawler {
                 abort(info);
             }
