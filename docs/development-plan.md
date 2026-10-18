@@ -392,6 +392,7 @@ Stricter than M0 (see Decided, "Golden images in M0"). A stage or decoder is not
   - The stored goldens are small crops or downscales, rendered on lavapipe and committed, with ΔE2000 and PSNR tolerances.
   - Each stage keeps its ground-truth tests beside them (the synthetic scene, the darktable references for RCD and Markesteijn).
   - Changing a golden image needs a stated reason in the PR.
+  - The harness is `backend/crates/golden` (dev-only). A failing or missing golden writes the render, a ΔE heatmap and metadata to `backend/target/golden-actual/`; CI uploads them, and `scripts/accept-goldens.py` accepts them (lavapipe or CPU only). `corpus/golden-inputs.txt` lists the corpus files CI fetches for them.
 - **Real GPUs:** `scripts/gpu-check.sh` (decided), run by hand on the owner's RTX 3060 desktop before merging a PR that touches the pipeline, the engine or the benchmarks. It checks the adapter, the GPU tests and the benchmarks against a 10 percent baseline, and its summary goes in the PR. CI gates PRs with lavapipe only.
 - **lavapipe** keeps its coarse gate on every PR (25 percent against the slowest run seen, `benchmarks/README.md`).
 - A criterion benchmark per stage, and a fuzz target per decoder.

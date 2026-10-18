@@ -28,7 +28,7 @@ LAYERS = [
     # genzo-heif wraps the bundled libheif; it is the only crate with unsafe code.
     {"genzo-model", "genzo-heif"},
     {"genzo-imgio", "genzo-color", "genzo-cache", "genzo-jobs", "genzo-catalog"},
-    {"genzo-pipeline", "genzo-ai"},
+    {"genzo-pipeline", "genzo-ai", "genzo-golden"},
     {"genzo-export"},
     {"genzo-engine"},
     {"genzo-cli"},
@@ -65,6 +65,10 @@ def main() -> int:
                 continue
             if LAYER_OF.get(dep["name"], 99) >= LAYER_OF[name]:
                 errors.append(f"{name} depends on {dep['name']}, which is not in a lower layer")
+        # Test support only: no crate may ship it.
+        for dep in pkg["dependencies"]:
+            if dep["name"] == "genzo-golden" and dep["kind"] != "dev":
+                errors.append(f"{name} depends on genzo-golden outside [dev-dependencies]")
         uses_heif = any(d["name"] == "genzo-heif" for d in pkg["dependencies"])
         if uses_heif and name != "genzo-imgio":
             errors.append(f"{name} uses genzo-heif directly; only genzo-imgio may")

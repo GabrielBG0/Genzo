@@ -4,6 +4,10 @@ Raw files for the ProRAW and RAW decode spike. Everything in this folder except 
 
 Run `python scripts/fetch-raw-corpus.py` to download the raw.pixls.us files and verify them against `manifest.json`.
 
+Every raw.pixls.us file here must be **CC0**: the script looks up each file's license by sha256 in the site's own repository data, records it in the manifest, and refuses anything else. That matters because golden images derived from these files are committed. Most raw.pixls.us files are CC0, but not all (146 of about 2,000 were CC BY-NC-SA on 2026-10-18).
+
+`golden-inputs.txt` lists the files the golden-image tests read. CI fetches only those (`--list corpus/golden-inputs.txt`) and caches them. Locally the tests skip when a file is missing, and print the command that fetches it.
+
 ## Layout
 
 ```

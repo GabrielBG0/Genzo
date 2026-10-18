@@ -87,9 +87,23 @@ jobs:
         run: |
           cargo check --locked -p genzo-engine --no-default-features
           cargo test --locked -p genzo-imgio --no-default-features
-      # The raw feature (rawler) is off by default but carries the DNG
-      # reader's lossless JPEG path; test and lint it too.
+      # The corpus files the golden-image tests read (corpus/golden-inputs.txt,
+      # all CC0), cached by their list and the manifest. Only this job needs
+      # them; elsewhere those tests skip.
       - if: runner.os == 'Linux'
+        uses: actions/cache@v4
+        with:
+          path: corpus/raw
+          key: golden-corpus-${{ hashFiles('corpus/golden-inputs.txt', 'corpus/manifest.json') }}
+      - if: runner.os == 'Linux'
+        working-directory: .
+        run: python3 scripts/fetch-raw-corpus.py --list corpus/golden-inputs.txt
+      # The raw feature (rawler) is off by default but carries the DNG
+      # reader's lossless JPEG path; test and lint it too. Its golden images
+      # need the corpus, so a missing file fails here instead of skipping.
+      - if: runner.os == 'Linux'
+        env:
+          GENZO_REQUIRE_CORPUS: "1"
         run: |
           cargo clippy --locked -p genzo-imgio --all-targets --features raw
           cargo test --locked -p genzo-imgio --features raw
@@ -97,6 +111,14 @@ jobs:
       # Metal on macOS) and are skipped without one; the gpu job below requires
       # the reference device.
       # The performance gate runs in the gpu job below, on the reference device.
+      # A failed golden-image test leaves its render, ΔE heatmap and metadata
+      # here; scripts/accept-goldens.py --run RUN_ID takes them from the artifact.
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: golden-actual-backend-${{ matrix.os }}
+          path: backend/target/golden-actual
+          if-no-files-found: ignore
 
   gpu:
     name: GPU tests (lavapipe)
@@ -122,6 +144,18 @@ jobs:
         with:
           workspaces: backend
       - run: cargo test --locked -p genzo-pipeline -p genzo-engine -- --nocapture
+      # lavapipe writes the GPU goldens: on a failure, keep its renders and the
+      # driver version they came from.
+      - if: failure()
+        run: |
+          mkdir -p target/golden-actual
+          vulkaninfo --summary > target/golden-actual/vulkaninfo.txt 2>&1 || true
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: golden-actual-gpu
+          path: backend/target/golden-actual
+          if-no-files-found: ignore
       # Performance gate: p95 of each stage against benchmarks/baseline-lavapipe.json,
       # fail on a regression above 10 percent. Three runs, lowest p95 wins, to filter
       # out noise from the shared runner. Without a baseline the step only warns.

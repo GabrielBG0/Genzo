@@ -395,3 +395,28 @@ fn rcd_matches_the_darktable_reference() {
     );
     assert!(half_de / n < 0.02, "{}", half_de / n);
 }
+
+/// Smoke test of the golden-image harness on the GPU path (DEV-01 criterion 5).
+/// The spike is replaced in M1, and this case goes with it; the M1 stages get
+/// their own goldens. Written on lavapipe, compared on every other adapter.
+#[test]
+fn golden_spike_render() {
+    let Some((_lock, gpu)) = gpu() else { return };
+    const W: u32 = 384;
+    const H: u32 = 256;
+    let mut p = SpikePipeline::new(&gpu);
+    p.set_image(&gpu, &scene_mosaic(W, H));
+    let f = p.render(&gpu, SpikeParams::default(), (W, H)).unwrap();
+    let case = genzo_golden::Case::new(
+        env!("CARGO_MANIFEST_DIR"),
+        "spike/synthetic-scene",
+        genzo_golden::Space::DisplaySrgb,
+        genzo_golden::Producer::Gpu {
+            adapter: gpu.info.name.clone(),
+        },
+    );
+    genzo_golden::check(
+        &case,
+        &genzo_golden::Image::from_rgba8(f.width, f.height, &f.rgba),
+    );
+}

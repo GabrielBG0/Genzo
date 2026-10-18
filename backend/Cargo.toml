@@ -34,6 +34,8 @@ genzo-jobs = { path = "crates/jobs" }
 genzo-ai = { path = "crates/ai" }
 genzo-export = { path = "crates/export" }
 genzo-engine = { path = "crates/engine" }
+# Test-only: golden-image comparison. Used as a dev-dependency, never a normal one.
+genzo-golden = { path = "crates/golden" }
 
 # External crates. Each one is listed in docs/licenses.md and allowed by deny.toml.
 serde = { version = "1", features = ["derive"] }
@@ -44,6 +46,8 @@ wgpu = { version = "=30.0.1", default-features = false, features = ["wgsl", "dx1
 pollster = "=1.0.1"
 bytemuck = { version = "1", features = ["derive"] }
 criterion = { version = "=0.8.2", default-features = false }
+png = "0.17"
+half = "2"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

@@ -1,0 +1,17 @@
+[package]
+name = "genzo-golden"
+description = "Golden-image tests: stored renders compared by PSNR and ΔE2000. Test-only."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+genzo-color.workspace = true
+half.workspace = true
+png.workspace = true

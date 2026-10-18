@@ -5,6 +5,7 @@
 /corpus/*
 !/corpus/README.md
 !/corpus/manifest.json
+!/corpus/golden-inputs.txt
 
 # Benchmark kits built by scripts/bench-kit/make-kit.sh
 /dist/
