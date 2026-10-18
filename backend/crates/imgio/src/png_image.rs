@@ -40,6 +40,11 @@ pub(crate) fn decode(data: &[u8]) -> Result<DecodedImage, DecodeError> {
     let info = reader.info();
     let (width, height) = (info.width, info.height);
     let pixels = raster::check_size(FORMAT, u64::from(width), u64::from(height))?;
+    // Deflate expands at most about 1032 to 1; the filtered rows hold one
+    // filter byte each.
+    let bits_per_pixel = info.bits_per_pixel() as u64;
+    let raw = u64::from(height) * (1 + (u64::from(width) * bits_per_pixel).div_ceil(8));
+    raster::check_plausible(FORMAT, data.len(), raw, 2048)?;
     let source_bits = info.bit_depth as u8;
     let color = if let Some(c) = info.coding_independent_code_points {
         match (c.color_primaries, c.transfer_function) {

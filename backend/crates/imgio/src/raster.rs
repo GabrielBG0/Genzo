@@ -24,6 +24,26 @@ pub(crate) fn check_size(
     Ok(pixels as usize)
 }
 
+/// Checks that a file of `file_len` bytes can hold the image it claims,
+/// before anything is allocated: a decoded size of `decoded_bytes` needs at
+/// least `decoded_bytes / max_ratio` bytes of file. Each format's
+/// `max_ratio` is about twice its compression's ceiling, so real files sit
+/// far inside it, while a 2 kB header claiming 387 MP (a fuzz find) does not.
+pub(crate) fn check_plausible(
+    format: FileFormat,
+    file_len: usize,
+    decoded_bytes: u64,
+    max_ratio: u64,
+) -> Result<(), DecodeError> {
+    if (file_len as u64).saturating_mul(max_ratio) < decoded_bytes {
+        return Err(DecodeError::Corrupt {
+            format,
+            message: format!("{file_len} bytes cannot hold {decoded_bytes} bytes of image"),
+        });
+    }
+    Ok(())
+}
+
 /// A zeroed RGBA16 buffer for `pixels`, or an error when memory is short.
 pub(crate) fn rgba16(format: FileFormat, pixels: usize) -> Result<Vec<u16>, DecodeError> {
     let mut out = Vec::new();

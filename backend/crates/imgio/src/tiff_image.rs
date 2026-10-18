@@ -72,6 +72,10 @@ pub(crate) fn decode(data: &[u8]) -> Result<DecodedImage, DecodeError> {
         .with_limits(limits);
     let (width, height) = d.dimensions().map_err(tiff_error)?;
     let pixels = raster::check_size(FORMAT, u64::from(width), u64::from(height))?;
+    // LZW, the most expansive of the supported compressions, reaches about
+    // 2700 to 1; 8192 leaves a margin. One byte per pixel is the least an
+    // 8-bit gray image decodes to.
+    raster::check_plausible(FORMAT, data.len(), pixels as u64, 8192)?;
     let color_type = d.colortype().map_err(tiff_error)?;
     let (channels, bits) = match color_type {
         ColorType::Gray(b) => (1, b),

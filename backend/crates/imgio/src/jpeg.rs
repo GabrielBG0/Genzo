@@ -57,6 +57,9 @@ pub(crate) fn decode(data: &[u8]) -> Result<DecodedImage, DecodeError> {
         }
     }
     let pixels = raster::check_size(format, u64::from(info.width), u64::from(info.height))?;
+    // Every 8 x 8 luma block costs at least one bit, so a valid file holds at
+    // most 512 pixels per byte; 1024 leaves a margin.
+    raster::check_plausible(format, data.len(), pixels as u64, 1024)?;
     let size = decoder
         .output_buffer_size()
         .ok_or_else(|| DecodeError::Corrupt {
