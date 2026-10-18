@@ -63,7 +63,9 @@ def main():
         print(f"REFUSED  {line}", file=sys.stderr)
     if accepted:
         print("State the reason for each new or changed golden in the PR.")
-    return 1 if refused else 0
+    # A CI run uploads every adapter's renders, so refusing the non-lavapipe
+    # ones is normal; only accepting nothing is a failure.
+    return 0 if accepted else 1
 
 
 if __name__ == "__main__":
