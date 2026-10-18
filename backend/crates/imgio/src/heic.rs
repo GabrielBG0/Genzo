@@ -4,8 +4,7 @@ use crate::{DecodeError, DecodeOptions, DecodedImage, FileFormat, Preview};
 
 #[cfg(feature = "heic")]
 pub(crate) fn decode(data: &[u8], options: DecodeOptions) -> Result<DecodedImage, DecodeError> {
-    use crate::{ColorEncoding, Pixels};
-    use genzo_heif::ColorProfile;
+    use crate::Pixels;
 
     let img = genzo_heif::decode(
         data,
@@ -14,7 +13,28 @@ pub(crate) fn decode(data: &[u8], options: DecodeOptions) -> Result<DecodedImage
         },
     )
     .map_err(corrupt)?;
-    let color = match img.color {
+    let color = encoding(img.color);
+    Ok(DecodedImage {
+        format: FileFormat::Heif,
+        width: img.width,
+        height: img.height,
+        source_bits: img.source_bits,
+        has_alpha: img.has_alpha,
+        pixels: Pixels::Rgba16 {
+            data: img.rgba,
+            color,
+        },
+        orientation: 1,
+        exif: img.exif,
+    })
+}
+
+/// libheif's color profile as a color encoding.
+#[cfg(feature = "heic")]
+fn encoding(profile: genzo_heif::ColorProfile) -> crate::ColorEncoding {
+    use crate::ColorEncoding;
+    use genzo_heif::ColorProfile;
+    match profile {
         // HEIF: no profile means sRGB.
         ColorProfile::None => ColorEncoding::Srgb,
         ColorProfile::Icc(icc) => ColorEncoding::Icc(icc),
@@ -40,20 +60,7 @@ pub(crate) fn decode(data: &[u8], options: DecodeOptions) -> Result<DecodedImage
             matrix,
             full_range,
         },
-    };
-    Ok(DecodedImage {
-        format: FileFormat::Heif,
-        width: img.width,
-        height: img.height,
-        source_bits: img.source_bits,
-        has_alpha: img.has_alpha,
-        pixels: Pixels::Rgba16 {
-            data: img.rgba,
-            color,
-        },
-        orientation: 1,
-        exif: img.exif,
-    })
+    }
 }
 
 #[cfg(feature = "heic")]
@@ -64,6 +71,10 @@ pub(crate) fn decode_preview(data: &[u8]) -> Result<Option<Preview>, DecodeError
             width: t.width,
             height: t.height,
             rgba: t.rgba,
+            // libheif applies the thumbnail item's own rotation and mirror,
+            // as for the main image.
+            orientation: 1,
+            color: encoding(t.color),
         }))
 }
 

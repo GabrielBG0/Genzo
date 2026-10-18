@@ -52,6 +52,8 @@ criterion = { version = "=0.8.2", default-features = false }
 png = "=0.17.16"
 zune-jpeg = "=0.5.15"
 zune-core = "=0.5.3"
+# Byte search for embedded previews; already in the tree.
+memchr = "=2.8.3"
 tiff = { version = "=0.11.3", default-features = false, features = ["deflate", "lzw", "jpeg"] }
 half = "2"
 
