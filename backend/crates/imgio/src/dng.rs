@@ -167,6 +167,10 @@ pub fn read_metadata(data: &[u8]) -> Result<(RawMetadata, u8), DngError> {
     let tiff = Tiff::new(data).ok_or(DngError::NotTiff)?;
     let (ifd0, raw) = raw_ifd(&tiff)?;
     let spp = tiff.first_int(&raw, tag::SAMPLES_PER_PIXEL).unwrap_or(1);
+    // Checked before `metadata` sizes the level arrays by it.
+    if !(1..=4).contains(&spp) {
+        return Err(DngError::Unsupported(format!("{spp} samples per pixel")));
+    }
     let bits = tiff
         .first_int(&raw, tag::BITS_PER_SAMPLE)
         .and_then(|b| u16::try_from(b).ok())
@@ -1445,6 +1449,15 @@ mod tests {
         assert!(matches!(error(&s), DngError::Unsupported(_)));
 
         assert!(matches!(decode_linear(b"GIF89a"), Err(DngError::NotTiff)));
+    }
+
+    #[test]
+    fn read_metadata_rejects_a_huge_sample_count() {
+        let mut s = spec(jxl_tiles(16), COMPRESSION_JPEG_XL);
+        s.spp = 60_000;
+        assert!(
+            matches!(read_metadata(&build(&s)), Err(DngError::Unsupported(m)) if m.contains("60000"))
+        );
     }
 
     #[test]

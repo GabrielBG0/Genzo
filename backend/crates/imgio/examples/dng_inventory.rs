@@ -8,14 +8,13 @@ use std::path::{Path, PathBuf};
 
 use genzo_imgio::dng;
 
-fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
+/// Every DNG under `dir`. A directory or entry that cannot be read is an
+/// error, so the inventory never looks complete when it is not.
+fn walk(dir: &Path, out: &mut Vec<PathBuf>) -> std::io::Result<()> {
+    for entry in std::fs::read_dir(dir)? {
+        let path = entry?.path();
         if path.is_dir() {
-            walk(&path, out);
+            walk(&path, out)?;
         } else if path
             .extension()
             .is_some_and(|e| e.eq_ignore_ascii_case("dng"))
@@ -23,6 +22,7 @@ fn walk(dir: &Path, out: &mut Vec<PathBuf>) {
             out.push(path);
         }
     }
+    Ok(())
 }
 
 /// Whether a square matrix of `n` rows is the identity.
@@ -117,7 +117,10 @@ fn report(data: &[u8]) -> String {
 fn main() {
     let root = std::env::args().nth(1).unwrap_or_else(|| "corpus".into());
     let mut files = Vec::new();
-    walk(Path::new(&root), &mut files);
+    if let Err(e) = walk(Path::new(&root), &mut files) {
+        eprintln!("{root}: {e}");
+        std::process::exit(1);
+    }
     files.sort();
     for file in files {
         let name = file.strip_prefix(&root).unwrap_or(&file).display();
