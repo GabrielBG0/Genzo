@@ -6,6 +6,11 @@ and more than 0.5 ms slower (`scripts/check-bench.py`). The rule in `CLAUDE.md` 
 percent; a baseline file may set its own threshold in `_meta` when its runner cannot
 support that (below).
 
+The benchmark steps run only when a change can move the numbers: the backend
+workspace, these baselines, `scripts/check-bench.py` or the CI workflow
+(`scripts/ci-changes.py` holds the list). A docs, frontend or shell change skips
+them, and its run uploads no `bench-lavapipe` artifact.
+
 Baselines only mean something on the machine class that made them, so there is one file
 per CI runner. Today that is `baseline-lavapipe.json`, from the `gpu` job (ubuntu-22.04,
 lavapipe software Vulkan). Numbers from a developer GPU or from WARP must not go in it.
