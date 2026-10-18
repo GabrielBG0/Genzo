@@ -25,7 +25,10 @@ Genzo is GPL-3.0-only. A dependency is acceptable when its license is compatible
 | jpeg-encoder 0.7.1 | backend (`imgio`) | (MIT OR Apache-2.0) AND IJG | Drag-preview frames (0.E). Read from the registry metadata. The IJG license is on the FSF's list of GPL-compatible licenses. It requires that documentation shipped with binaries states that the software is based in part on the work of the Independent JPEG Group: add that line to the About box and the README when the first release is built. `deny.toml` allows `IJG` for this crate only |
 | rayon 1.12 | backend (`engine`) | MIT OR Apache-2.0 | CPU parallelism, as the architecture rules prescribe. Already in the tree through jxl-oxide and rawler |
 | criterion 0.8.2 | backend (`pipeline`), benchmarks only | Apache-2.0 OR MIT | Not distributed |
-| png 0.17.16, half 2.7.1 | backend (`golden`), tests only | MIT OR Apache-2.0 | Golden-image storage. Read from the registry metadata. Their tree adds fdeflate, crc32fast (MIT OR Apache-2.0) and miniz_oxide (MIT OR Zlib OR Apache-2.0). Not distributed |
+| png 0.17.16 | backend (`imgio`; also `golden` for golden-image storage) | MIT OR Apache-2.0 | PNG decode (M1, 2026-10-18), so now distributed. Read from the registry metadata; the version rawler's tree already used. Its tree adds fdeflate, crc32fast (MIT OR Apache-2.0) and miniz_oxide (MIT OR Zlib OR Apache-2.0) |
+| half 2.7.1 | backend (`golden`, and `imgio` through tiff) | MIT OR Apache-2.0 | |
+| zune-jpeg 0.5.15, zune-core 0.5.3 | backend (`imgio`) | MIT OR Apache-2.0 OR Zlib | JPEG decode (M1, 2026-10-18), the spec's choice. Already in rawler's tree, at the same version |
+| tiff 0.11.3 | backend (`imgio`) | MIT | TIFF decode (M1, 2026-10-18), image-rs. Built with the deflate, lzw and jpeg features (not fax). Its tree adds weezl 0.1.12 and flate2 1.1.10 (MIT OR Apache-2.0), quick-error 2.0.1 (MIT/Apache-2.0), simd-adler32 0.3.10 (MIT), adler2 (0BSD OR MIT OR Apache-2.0), half and zune-jpeg |
 | @tauri-apps/api | frontend | Apache-2.0 OR MIT | |
 | Public Sans (`@fontsource/public-sans`) | frontend, bundled | OFL-1.1 | Checked in `node_modules/@fontsource/public-sans/LICENSE`. OFL allows bundling with any software; the font may not be sold on its own |
 | JetBrains Mono (`@fontsource/jetbrains-mono`) | frontend, bundled | OFL-1.1 | Same as Public Sans |
@@ -50,7 +53,6 @@ These licenses come from each project's upstream license file or its registry me
 |---|---|---|---|---|
 | LibRaw | RAW fallback through FFI (0.C prototype, M1) | LGPL-2.1 or CDDL-1.0, at our choice | Upstream `README.md` | Use under LGPL-2.1. The README warns that licensing may change in future versions, so re-read it at the pinned version. A C++ build on all three OSes, like `genzo-heif`, so it would be the second crate allowed unsafe code. The only Rust bindings (libraw-rs 0.0.4, MIT OR Apache-2.0) are immature; write our own shim as `genzo-heif` does |
 | lcms2 (Little CMS) | ICC transforms | MIT | Registry | Not chosen; moxcms is used instead. Kept as the fallback if moxcms falls short |
-| zune-jpeg | JPEG decode (M1) | MIT OR Apache-2.0 OR Zlib | Registry | Already in rawler's tree |
 | rusqlite and SQLite | Catalog (M2) | MIT; SQLite is public domain | Registry | |
 | lensfun library | Lens profiles (M3) | LGPL-3.0 | Upstream `README.md` | Or read the database only and implement the models in Rust |
 | lensfun database | Lens profiles (M3) | CC BY-SA 3.0 | Upstream `README.md` | Data, not code. Shipping it needs attribution and share-alike for the data files; it does not affect the code license |
