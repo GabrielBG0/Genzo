@@ -257,6 +257,20 @@ tif("tiff-camera-make.tif", rgb8, photometric="rgb",
     extratags=[(271, "s", 0, "NIKON CORPORATION", False), (272, "s", 0, "NIKON D850", False)])
 write_expect("tiff-camera-make.tif", to16(rgb8, 8))
 
+# Plain TIFFs that carry much more than one image: 200 kB of Photoshop
+# layer data (tag 37724), three pages, 100 kB of XMP. They decode as IFD0.
+blob = bytes((i * 31 + 7) % 256 for i in range(200_000))
+tif("tiff-photoshop-layers.tif", rgb8, photometric="rgb", compression="lzw",
+    extratags=[(37724, "B", len(blob), blob, False)])
+write_expect("tiff-photoshop-layers.tif", to16(rgb8, 8))
+with tifffile.TiffWriter(HERE / "tiff-three-pages.tif") as w:
+    for k in range(3):
+        w.write(np.roll(rgb8, k * 5, axis=1), photometric="rgb", metadata=None)
+write_expect("tiff-three-pages.tif", to16(rgb8, 8))
+xmp_big = b"<x:xmpmeta xmlns:x='adobe:ns:meta/'>" + b" " * 100_000 + b"</x:xmpmeta>"
+tif("tiff-big-xmp.tif", rgb8, photometric="rgb", extratags=[(700, "B", len(xmp_big), xmp_big, False)])
+write_expect("tiff-big-xmp.tif", to16(rgb8, 8))
+
 # JPEG-in-TIFF (YCbCr, compression 7): libtiff's reading is the reference.
 tif("tiff-jpeg-ycbcr.tif", rgb8, photometric="ycbcr", compression="jpeg", compressionargs={"level": 90})
 write_expect("tiff-jpeg-ycbcr.tif", to16(tifffile.imread(HERE / "tiff-jpeg-ycbcr.tif"), 8))

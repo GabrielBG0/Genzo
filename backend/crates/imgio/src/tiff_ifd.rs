@@ -121,6 +121,26 @@ impl<'a> Tiff<'a> {
             .ok_or_else(|| corrupt(format!("tag {} lies outside the file", e.tag)))
     }
 
+    /// The offset of the IFD after the one at `at` (0 at the end of the
+    /// chain), or None when it lies outside the file.
+    pub(crate) fn next_ifd(&self, at: usize) -> Option<u32> {
+        let n = usize::from(self.u16(at)?);
+        self.u32(at.checked_add(2 + 12 * n)?)
+    }
+
+    /// The size in bytes an entry's values claim, whatever its count; zero
+    /// for an unknown type.
+    pub(crate) fn value_len(e: Entry) -> u64 {
+        let size: u64 = match e.ty {
+            1 | 2 | 6 | 7 => 1,
+            3 | 8 => 2,
+            4 | 9 | 11 | 13 => 4,
+            5 | 10 | 12 => 8,
+            _ => 0,
+        };
+        size * u64::from(e.count)
+    }
+
     /// Where an entry's values start, and their total size in bytes.
     pub(crate) fn location(&self, e: Entry) -> Result<(usize, usize), TiffError> {
         let size = match e.ty {

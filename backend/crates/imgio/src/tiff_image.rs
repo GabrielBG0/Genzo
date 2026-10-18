@@ -21,30 +21,58 @@ const PHOTOMETRIC: u16 = 262;
 const STRIP_BYTE_COUNTS: u16 = 279;
 const TILE_BYTE_COUNTS: u16 = 325;
 
+/// Bulk metadata a plain TIFF may carry beside its image: Photoshop's
+/// layers (ImageSourceData) and image resources, XMP, an ICC profile.
+const BULK_TAGS: [u16; 4] = [37724, 34377, 700, 34675];
+
+/// Most IFDs followed in the chain.
+const MAX_CHAIN: usize = 64;
+
 /// Whether IFD0 holds a full image the way a plain TIFF does, so a TIFF
-/// that no camera decoder took may be read as one. TIFF-based camera RAW
-/// files fail this: their IFD0 is a reduced-resolution thumbnail (NEF, ARW,
-/// 3FR, DCR mark it so), or its image data is a small part of a file that
-/// holds far more than tags (Phase One IIQ). A truncated camera RAW never comes back as
-/// its thumbnail.
+/// that no camera decoder took may be read as one.
+///
+/// IFD0 must not be reduced-resolution and must have a TIFF 6 photometric,
+/// and the file must be accounted for: the image data of every IFD in the
+/// chain (pages), the bulk metadata tags (layers, XMP, ICC), and up to
+/// 64 KiB for everything else. TIFF-based camera RAW fails this: NEF, ARW,
+/// 3FR and DCR mark IFD0 reduced, and Phase One IIQ keeps megabytes of raw
+/// data that no IFD's strips point to. So a truncated camera RAW never comes
+/// back as its thumbnail, while a layered, multi-page or XMP-heavy TIFF
+/// still opens.
 pub(crate) fn looks_like_plain_tiff(data: &[u8]) -> bool {
     (|| {
         let t = Tiff::new(data)?;
-        let ifd0 = t.ifd(t.u32(4)? as usize).ok()?;
+        let first = t.u32(4)? as usize;
+        let ifd0 = t.ifd(first).ok()?;
         let reduced = t.first_int(&ifd0, NEW_SUBFILE_TYPE).unwrap_or(0) & 1 != 0;
         // The TIFF 6 interpretations (gray, RGB, palette, CMYK, YCbCr,
         // CIELab and its ICC and ITU variants, up to 10), so unsupported ones
         // reach the TIFF decoder and are named. CFA (32803) and LinearRaw
         // (34892) are raw data, never a plain image.
         let photometric = t.first_int(&ifd0, PHOTOMETRIC)?;
-        let counts = find(&ifd0, STRIP_BYTE_COUNTS).or_else(|| find(&ifd0, TILE_BYTE_COUNTS))?;
-        let image_bytes: u64 = t.ints(counts).ok()?.iter().map(|&n| u64::from(n)).sum();
-        // The image is most of the file, or the rest is small: tags, an ICC
-        // profile. A thumbnail in front of raw data fails both.
-        let rest = (data.len() as u64).saturating_sub(image_bytes);
-        let image_is_the_file =
-            image_bytes.saturating_mul(2) >= data.len() as u64 || rest < 64 << 10;
-        Some(!reduced && photometric <= 10 && image_is_the_file)
+        let mut known = 0u64;
+        let mut at = first;
+        let mut seen = Vec::new();
+        while at != 0 && seen.len() < MAX_CHAIN && !seen.contains(&at) {
+            seen.push(at);
+            let Ok(ifd) = t.ifd(at) else { break };
+            if let Some(counts) =
+                find(&ifd, STRIP_BYTE_COUNTS).or_else(|| find(&ifd, TILE_BYTE_COUNTS))
+            {
+                known += t
+                    .ints(counts)
+                    .ok()?
+                    .iter()
+                    .map(|&n| u64::from(n))
+                    .sum::<u64>();
+            }
+            for tag in BULK_TAGS {
+                known += find(&ifd, tag).map_or(0, Tiff::value_len);
+            }
+            at = t.next_ifd(at).unwrap_or(0) as usize;
+        }
+        let rest = (data.len() as u64).saturating_sub(known);
+        Some(!reduced && photometric <= 10 && rest < 64 << 10)
     })()
     .unwrap_or(false)
 }
