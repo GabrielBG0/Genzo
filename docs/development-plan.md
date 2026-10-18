@@ -2,7 +2,7 @@
 
 Built from these sources:
 
-- **Spec:** *Genzo: Technical Spec (draft 2)*, revision 73 (revision 57, plus the M0 results recorded on 2026-10-15 and 2026-10-17, plus the M1 decisions of 2026-10-17). The artifact is still listed as "Photo Editor: Technical Spec (draft 1)".
+- **Spec:** *Genzo: Technical Spec (draft 2)*, revision 78 (revision 57, plus the M0 results recorded on 2026-10-15 and 2026-10-17, plus the M1 decisions of 2026-10-17). The artifact is still listed as "Photo Editor: Technical Spec (draft 1)".
 - **UI handoff:** [`docs/UI/fixer-ui-handoff.html`](UI/fixer-ui-handoff.html). It holds the approved Carbon Glass direction, every mockup screen, the design system and the component list. "Fixer" was the working name before Genzo.
 - **Feature list:** [`docs/UI/FEATURES.md`](UI/FEATURES.md). It gives every UI feature an ID, a priority (P0, P1, P2) and its screens.
 
@@ -121,7 +121,7 @@ Parked decisions that have been settled, with the date and what follows from eac
 | Viewport fallback ladder on Windows | Step 1 plus step 2: while a slider is dragged at Fit zoom, a half-size JPEG preview; the full lossless frame on release | 2026-10-15 | Measured 18 ms p95 against the 50 ms gate (was 230 ms), on the spike's synthetic scene; real photos are estimated at 19 to 26 ms from measured parts and not yet measured in the app. Contract 0.3.0. macOS and Linux still to measure, and 1:1 zoom drags still send full frames. See `docs/m0-results.md` |
 | WebKitGTK on two distros (0.E step 3) | Ubuntu only for M0: 22.04 and 24.04, which covered two WebKitGTK versions (2.50.4 and 2.52.6). No run on a second distro family | 2026-10-17 | The owner uses Ubuntu, and testing another family now is not worth the time. Other distros rest on the minimum versions above and on reports from people who try them: the bench kit starts on any distro with glibc 2.35 or newer and prints the install command for Fedora, Arch and openSUSE. A distro-specific problem found later is fixed then |
 | Golden images in M0 | Not stored for the M0 spike. Its GPU tests compare against the synthetic scene's ground truth (PSNR, ΔE2000) and the CPU port of darktable's `rcd.c` (ΔE2000), on every adapter including lavapipe | 2026-10-17 | Accepted for M0 only, because the spike pipeline is rewritten in M1. **From M1 on, testing gets stricter:** every pipeline stage gets stored golden images as the plan says (rendered on lavapipe, ΔE2000 and PSNR tolerances, inputs from the CC0 raw.pixls.us files since the owner's photos cannot be published), and keeps its ground-truth tests alongside them. A stage is not done without both. Changing a golden image needs a stated reason in the PR |
-| Real-GPU checks | A self-hosted GitHub runner on the owner's RTX 3060 desktop runs the real-GPU golden images nightly and holds the 10 percent performance baseline. lavapipe keeps its coarse gate on every PR | 2026-10-17 | The M1 exit gate is measured there. The repo is public, so the runner takes only scheduled runs and pushes to `main`, never pull requests from forks. `benchmarks/` gets a `baseline-<runner>.json` with the default 10 percent |
+| Real-GPU checks | A self-hosted GitHub runner on the owner's RTX 3060 desktop runs the real-GPU golden images and the performance benchmarks nightly and on every push to `main`, against a 10 percent baseline. lavapipe keeps its coarse gate on every PR | 2026-10-17 | A regression on real hardware is flagged after it merges, not blocked: PRs are gated by lavapipe only. The M1 exit gate is measured on this runner. The repo is public, so fork pull requests must never reach it: the repository's Actions setting requires approval before workflows from outside contributors run. `benchmarks/` gets a `baseline-<runner>.json` with the default 10 percent |
 | Edit storage in M1 | In memory for the session: each photo's edit and undo history live in the engine until the app closes. Export is how a result is kept | 2026-10-17 | No sidecar or temporary file format to migrate. The filmstrip's edited dot means edited this session. The M2 catalog stores the same versioned edit struct |
 | Nikon High Efficiency in M1 | Build a JPEG XS decoder in M1, instead of showing only the embedded preview | 2026-10-17 | A patent and license check comes first and is recorded in `docs/licenses.md`. Verified against Adobe DNG Converter's output for the Z 8 file, with a fuzz target. Estimated at 20 to 40 hours, run as its own track |
 | X-Trans demosaic | A Markesteijn-class demosaic in M1 | 2026-10-17 | Fujifilm is in the first priority tier. Checked against a literal CPU port of darktable's code, as RCD was in M0 |
@@ -254,7 +254,7 @@ These are open questions, not conflicts. Neither source answers them.
 - [x] ProRAW decodes on every device in the corpus: the iPhone 13 Pro Max and 16 Pro through the linear DNG reader (checked against libjpeg-turbo and libjxl), and the iPhone 12 Pro through the reader too (checked against libjpeg). Wiring the reader into `imgio::decode` is M1 step 2. See `docs/m0-results.md`.
 - [x] Software adapter runs the spike pipeline (lavapipe job on every push; WARP locally)
 - [x] License review written, fonts included (signed off for M0 in `docs/licenses.md`)
-- [x] Performance targets confirmed or revised in the spec (revision 64: GPU time confirmed, input to pixels measured on Windows only, 48 MP GPU memory and 48 MP open time flagged for M1)
+- [x] Performance targets confirmed or revised in the spec (revision 64: GPU time confirmed, input to pixels measured on Windows only, with macOS and partial Linux results added in revision 73, 48 MP GPU memory and 48 MP open time flagged for M1)
 - [x] Tokens, fonts, shared components and app shell running against the fake engine (checked 2026-10-15: the component gallery at `#/gallery` and the app shell match the handoff's layout, tokens and edited-state rules; the right panel is still the latency-spike panel and the filmstrip shows its empty state until M1)
 - [x] The M1 parked decisions are settled (undo scope, module state; see Decided)
 
@@ -264,7 +264,7 @@ These are open questions, not conflicts. Neither source answers them.
 
 **Goal:** open a folder of files directly, without a catalog, and edit with the core Basic panel, crop, histogram and JPEG export, all rendering fast.
 
-**Starts when** the M0 latency gate closes on Linux (the 48 MP white balance case). Writing the specs (the first task) can start before that.
+**Starts when** the M0 latency gate closes on Linux (the 48 MP white balance case), or a Linux ladder step is chosen if that rerun fails. Writing the specs (the first task) can start before that.
 
 **First task:** write the specs, using the FEATURES template, for:
 - **DEV-01**, the M1 part of the RAW pipeline: the decode paths, stages 1 to 4, the core of stages 6 and 7, crop and the output transform. It comes first, because every backend step builds on it.
@@ -387,7 +387,7 @@ Stricter than M0 (see Decided, "Golden images in M0"). A stage or decoder is not
   - The stored goldens are small crops or downscales, rendered on lavapipe and committed, with ΔE2000 and PSNR tolerances.
   - Each stage keeps its ground-truth tests beside them (the synthetic scene, the darktable references for RCD and Markesteijn).
   - Changing a golden image needs a stated reason in the PR.
-- **Real GPUs:** the self-hosted RTX 3060 runner (decided) runs the goldens nightly and holds the 10 percent performance baseline. The repo is public, so the runner only takes scheduled runs and pushes to `main`, never pull requests from forks.
+- **Real GPUs:** the self-hosted RTX 3060 runner (decided) runs the goldens and benchmarks nightly and on pushes to `main`, against a 10 percent baseline. It flags a regression after merge; PRs are gated by lavapipe only. It is not a required check, so a powered-off desktop never blocks a merge. Fork pull requests never reach it: the repository's Actions setting requires approval for workflows from outside contributors.
 - **lavapipe** keeps its coarse gate on every PR (25 percent against the slowest run seen, `benchmarks/README.md`).
 - A criterion benchmark per stage, and a fuzz target per decoder.
 - The bench kit measures the latency cases on all three OSes at checkpoints and at exit. Its PRIME offload variant is dropped, or skipped with a message when it cannot start.
