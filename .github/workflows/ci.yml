@@ -18,12 +18,14 @@ env:
 
 jobs:
   # Lists the changed files. A change that touches only documentation skips the
-  # jobs below (scripts/ci-changes.py says what counts as documentation).
+  # jobs below, and one that cannot change the benchmarks skips the benchmark
+  # steps (scripts/ci-changes.py says which files count).
   changes:
     name: Changed files
     runs-on: ubuntu-latest
     outputs:
       code: ${{ steps.filter.outputs.code }}
+      bench: ${{ steps.filter.outputs.bench }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -114,19 +116,21 @@ jobs:
       # fail on a regression above 10 percent. Three runs, lowest p95 wins, to filter
       # out noise from the shared runner. Without a baseline the step only warns.
       - name: Benchmark (3 runs)
+        if: needs.changes.outputs.bench == 'true'
         run: |
           for i in 1 2 3; do
             cargo run --locked --release -q -p genzo-cli -- bench gpu 4032 3024 30 --json "$RUNNER_TEMP/bench-$i.json"
           done
       - name: Compare with the baseline
+        if: needs.changes.outputs.bench == 'true'
         working-directory: .
         run: python3 scripts/check-bench.py benchmarks/baseline-lavapipe.json "$RUNNER_TEMP"/bench-?.json
       - name: Merge runs into a candidate baseline
-        if: always()
+        if: always() && needs.changes.outputs.bench == 'true'
         working-directory: .
         run: python3 scripts/check-bench.py --update "$RUNNER_TEMP/baseline-candidate.json" "$RUNNER_TEMP"/bench-?.json
       - uses: actions/upload-artifact@v4
-        if: always()
+        if: always() && needs.changes.outputs.bench == 'true'
         with:
           name: bench-lavapipe
           path: ${{ runner.temp }}/baseline-candidate.json
