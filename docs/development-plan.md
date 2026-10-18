@@ -2,7 +2,7 @@
 
 Built from these sources:
 
-- **Spec:** *Genzo: Technical Spec (draft 2)*, revision 78 (revision 57, plus the M0 results recorded on 2026-10-15 and 2026-10-17, plus the M1 decisions of 2026-10-17). The artifact is still listed as "Photo Editor: Technical Spec (draft 1)".
+- **Spec:** *Genzo: Technical Spec (draft 2)*, revision 79 (revision 57, plus the M0 results recorded on 2026-10-15 and 2026-10-17, plus the M1 decisions of 2026-10-17 and 2026-10-18). The artifact is still listed as "Photo Editor: Technical Spec (draft 1)".
 - **UI handoff:** [`docs/UI/fixer-ui-handoff.html`](UI/fixer-ui-handoff.html). It holds the approved Carbon Glass direction, every mockup screen, the design system and the component list. "Fixer" was the working name before Genzo.
 - **Feature list:** [`docs/UI/FEATURES.md`](UI/FEATURES.md). It gives every UI feature an ID, a priority (P0, P1, P2) and its screens.
 
@@ -127,6 +127,11 @@ Parked decisions that have been settled, with the date and what follows from eac
 | X-Trans demosaic | A Markesteijn-class demosaic in M1 | 2026-10-17 | Fujifilm is in the first priority tier. Checked against a literal CPU port of darktable's code, as RCD was in M0 |
 | ProRAW gain table map | Read and kept, not applied by default | 2026-10-17 | Lightroom renders ProRAW without it (a ΔE00 of 19 with it applied, measured by LightCraft). Applying it can come later as an opt-in |
 | Camera profiles in M1 | Genzo's own, since Adobe's are proprietary: Genzo Standard (the camera matrix plus Genzo's base tone curve) and Genzo Linear (the matrix only). B&W starts from Genzo Standard | 2026-10-17 | DCP files and the profile tables embedded in DNG are not read in M1. The base tone curve is defined in the DEV-02 spec |
+| Highlights and Shadows | Local tone mapping: an edge-aware base layer of the luminance, computed once per edit on the cropped image at a fixed working size. Whites, Blacks and Contrast stay global | 2026-10-18 | Fit, 1:1 and export use the same base, so they match. A crop or white balance change recomputes it. Defined in `docs/specs/DEV-01.md` |
+| Clipped highlights in M1 | Clip every channel where the first one saturates after white balance, and desaturate the edge. No reconstruction of clipped color yet | 2026-10-18 | Clipped areas come out neutral, not magenta. A reconstruction (darktable's inpaint-opposed class) can come later with its own reference test |
+| Out-of-gamut colors | Soft compression toward the gamut edge that keeps hue (the ACES reference gamut compression method), not a per-channel clip | 2026-10-18 | Always for RAW. For non-RAW only when the source gamut exceeds the target, so an unedited sRGB JPEG stays exact |
+| Where feature specs live | One file per spec, `docs/specs/<ID>.md`, linked from its FEATURES.md entry | 2026-10-18 | CLAUDE.md's rule says so. FEATURES.md stays an index |
+| M1 without the Linux latency gate | M1 development starts on 2026-10-18 with the gate passed on Windows and macOS. On Linux it has passed 3 of 4 cases (31 to 43 ms p95); the 48 MP white balance rerun is still out | 2026-10-18 | The owner's call: Linux is not a high-priority platform for now. The M0 checklist's latency box stays open until the rerun is written up. If the rerun fails, the Linux ladder step becomes an M1 item, measured with the bench kit |
 
 ## Parked decisions, with a deadline
 
@@ -264,7 +269,7 @@ These are open questions, not conflicts. Neither source answers them.
 
 **Goal:** open a folder of files directly, without a catalog, and edit with the core Basic panel, crop, histogram and JPEG export, all rendering fast.
 
-**Starts when** the M0 latency gate closes on Linux (the 48 MP white balance case), or a Linux ladder step is chosen if that rerun fails. Writing the specs (the first task) can start before that.
+**Started** on 2026-10-18 without the Linux gate (see Decided, "M1 without the Linux latency gate"). When the Linux rerun arrives, it is written up in `docs/m0-results.md`; a failure there becomes an M1 item for Linux, not a stop.
 
 **First task:** write the specs, using the FEATURES template, for:
 - **DEV-01**, the M1 part of the RAW pipeline: the decode paths, stages 1 to 4, the core of stages 6 and 7, crop and the output transform. It comes first, because every backend step builds on it.
@@ -635,7 +640,7 @@ Generative remove, expand and fill stay **out**, by decision.
 
 ## Cross-cutting rules (every phase)
 
-- Each feature's spec is written from the FEATURES.md template before its milestone starts. Its acceptance criteria become the feature's tests.
+- Each feature's spec is written from the FEATURES.md template, as `docs/specs/<ID>.md`, before its milestone starts. Its acceptance criteria become the feature's tests.
 - Every contract change is reviewed through the generated TypeScript diff and comes with a version bump.
 - Every new decoder gets a fuzz target. Every new stage gets golden images and a criterion benchmark.
 - Every new screen works against the fake engine first, with Vitest and Playwright tests, and is compared with the handoff's full-size screen.

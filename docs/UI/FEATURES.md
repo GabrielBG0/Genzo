@@ -4,7 +4,7 @@ Every feature contemplated in the UI mockups, grouped by area. Priorities: P0 co
 
 Screen codes refer to the mockups in `fixer-ui-handoff.html` (D = Develop, L = Library, W = Workflow and output, M = Menus). "not mocked" means there is no dedicated screen yet.
 
-Spec template for each feature: **Behavior** (what it does, step by step), **Inputs and shortcuts**, **States** (empty, loading, error, disabled), **Data** (what is stored in the catalog), **Edge cases**, **Acceptance criteria**.
+Spec template for each feature: **Behavior** (what it does, step by step), **Inputs and shortcuts**, **States** (empty, loading, error, disabled), **Data** (what is stored in the catalog), **Edge cases**, **Acceptance criteria**. Each spec is its own file, `docs/specs/<ID>.md`, linked from the feature's entry below.
 
 ## APP · App shell and navigation
 
@@ -235,9 +235,9 @@ Spec template for each feature: **Behavior** (what it does, step by step), **Inp
 
 ### DEV-01 · RAW processing pipeline
 - Priority: P0 · Screens: not mocked
-- Scope: Non-destructive pipeline in this order: RAW, profile, white balance, tone, color, detail, optics, geometry, effects, local adjustments, crop, output.
-- Open questions: RAW decoding library and supported cameras. GPU processing approach.
-- Spec: _to be written_
+- Scope: Non-destructive pipeline in the technical spec's fixed stage order: decode, white balance and highlights, demosaic, camera matrix, lens and geometry, exposure and tone, color, detail, then effects, crop and the output transform. Local adjustments blend inside the tone, color and detail stages.
+- Decided: rawler plus Genzo's own DNG reader, no LibRaw in M1, and the camera priority order; GPU first on wgpu, with a software adapter fallback (see the Decided table in `docs/development-plan.md`).
+- Spec: [DEV-01](../specs/DEV-01.md) (the M1 part: decode, stages 1 to 4, the core of stages 6 and 7, crop and rotate, the output transform)
 
 ### DEV-02 · Basic panel
 - Priority: P0 · Screens: D1
