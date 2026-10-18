@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Weekly full run on main: new RustSec advisories appear without a change here,
+  # and the deny job otherwise runs only when a manifest or lockfile changes.
+  # A scheduled run has no previous commit, so ci-changes.py runs every job.
+  schedule:
+    - cron: "0 6 * * 1"
 
 env:
   CARGO_TERM_COLOR: always
