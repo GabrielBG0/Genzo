@@ -91,6 +91,11 @@ pub struct CameraColor {
     /// per sample. Absent means identity.
     pub camera_calibration_1: Option<Vec<f64>>,
     pub camera_calibration_2: Option<Vec<f64>>,
+    /// DNG CameraCalibrationSignature and ProfileCalibrationSignature, empty
+    /// when absent. The camera calibration applies only when they are equal,
+    /// two absent ones included (as in the DNG SDK).
+    pub camera_calibration_signature: String,
+    pub profile_calibration_signature: String,
     /// DNG AnalogBalance, one gain per sample. Absent means 1.
     pub analog_balance: Option<Vec<f64>>,
     pub as_shot: Option<AsShot>,

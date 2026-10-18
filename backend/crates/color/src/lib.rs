@@ -5,6 +5,8 @@
 //! metrics the golden-image tests use (CIELAB and ΔE2000).
 //! ICC handling (moxcms, cleared in docs/licenses.md) arrives in M1.
 
+pub mod camera;
+
 /// A 3×3 matrix in row-major order.
 pub type Mat3 = [[f64; 3]; 3];
 
@@ -33,10 +35,24 @@ pub const REC2020_TO_XYZ: Mat3 = [
 /// The working space to CIE XYZ (D65): linear light on the ACES AP1
 /// primaries with a D65 white, so no chromatic adaptation is needed. It fully
 /// contains Display P3 and Rec. 2020.
+/// Full f64 precision, so the D65 white maps to (1, 1, 1) exactly enough
+/// for the camera color tests.
 pub const WORKING_TO_XYZ: Mat3 = [
-    [0.647_507_2, 0.134_379_1, 0.168_569_6],
-    [0.266_086_4, 0.675_967_8, 0.057_945_8],
-    [-0.005_448_9, 0.004_072_1, 1.090_434_5],
+    [
+        0.647_507_198_707_060_6,
+        0.134_379_140_087_524_44,
+        0.168_569_588_257_086_57,
+    ],
+    [
+        0.266_086_408_444_837,
+        0.675_967_795_591_789_5,
+        0.057_945_795_963_373_51,
+    ],
+    [
+        -0.005_448_868_432_317_436,
+        0.004_072_095_154_167_411,
+        1.090_434_524_038_028_7,
+    ],
 ];
 
 /// The RGB to XYZ matrix of a space given its primaries and white point as
@@ -255,7 +271,7 @@ mod tests {
             (
                 WORKING_TO_XYZ,
                 [[0.713, 0.293], [0.165, 0.830], [0.128, 0.044]],
-                1e-6,
+                1e-15,
             ),
         ];
         // sRGB's published matrix uses a slightly different D65, hence its tolerance.
