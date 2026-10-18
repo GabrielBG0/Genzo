@@ -1,0 +1,14 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# CodeRabbit, for both the GitHub app and the local CLI run before each PR.
+reviews:
+  path_filters:
+    # Third-party code vendored unchanged except for small patches listed in
+    # backend/vendor/README.md; review those patches on their own.
+    - "!backend/vendor/**"
+    # Generated (CLAUDE.md: never hand-edited).
+    - "!contract/**"
+    # Binary test data: golden images, decoder fixtures, fuzz seeds.
+    - "!**/*.f16.png"
+    - "!backend/crates/imgio/tests/fixtures/**"
+    - "!backend/fuzz/seeds/**"
+    - "!**/Cargo.lock"
