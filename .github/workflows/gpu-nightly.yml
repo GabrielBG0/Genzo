@@ -1,0 +1,89 @@
+name: GPU nightly (RTX 3060)
+
+# The GPU tests and the benchmarks on real hardware: the owner's RTX 3060
+# desktop, a self-hosted runner (development plan, Decided: "Real-GPU checks").
+#
+# - It never runs for pull requests. The repo is public and the runner is a
+#   personal machine; fork PR workflows also need approval for every outside
+#   contributor (repo setting). It runs nightly, on pushes to main that change
+#   what it checks, and by hand.
+# - It flags a regression after merge; it is not a required check, so a
+#   powered-off desktop never blocks a merge. PRs are gated by lavapipe (ci.yml).
+# - The runner is a Windows service (NETWORK SERVICE), so Rust and Python come
+#   from the setup actions, not from the owner's profile.
+# - It fails if the engine picks any adapter but the RTX 3060, so a silent
+#   fallback to WARP cannot pass as a real-GPU run.
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  push:
+    branches: [main]
+    paths:
+      - "backend/Cargo.toml"
+      - "backend/Cargo.lock"
+      - "backend/crates/**"
+      - "benchmarks/**"
+      - "scripts/check-bench.py"
+      - ".github/workflows/gpu-nightly.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: gpu-nightly
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+  GENZO_REQUIRE_GPU: "1"
+  # Outside the checkout, so builds stay incremental between runs (checkout
+  # cleans ignored files in the workspace).
+  CARGO_TARGET_DIR: C:\actions-runner\_work\_cargo-target
+
+jobs:
+  gpu:
+    name: GPU tests and benchmarks (RTX 3060)
+    runs-on: [self-hosted, gpu, rtx3060]
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: powershell
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Check the adapter
+        run: |
+          $out = cargo run --locked --release -q -p genzo-cli -- bench gpu 1280 960 3 | Out-String
+          Write-Output $out
+          if ($out -notmatch 'adapter: .*RTX 3060') { throw "Not running on the RTX 3060; see the adapter line above." }
+      - run: cargo test --locked -p genzo-pipeline -p genzo-engine -- --nocapture
+      # Same cases as the lavapipe gate, against this runner's own baseline
+      # (benchmarks/baseline-rtx3060.json, 10 percent). Until that baseline
+      # exists, the comparison only warns; the candidate is uploaded to build it.
+      - name: Benchmark (3 runs)
+        run: |
+          foreach ($i in 1..3) {
+            cargo run --locked --release -q -p genzo-cli -- bench gpu 4032 3024 30 --json "$env:RUNNER_TEMP\bench-$i.json"
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+      - name: Compare with the baseline
+        working-directory: .
+        run: python scripts/check-bench.py benchmarks/baseline-rtx3060.json (Get-ChildItem "$env:RUNNER_TEMP\bench-*.json").FullName
+      - name: Merge runs into a candidate baseline
+        if: always()
+        working-directory: .
+        run: python scripts/check-bench.py --update "$env:RUNNER_TEMP\baseline-candidate.json" (Get-ChildItem "$env:RUNNER_TEMP\bench-*.json").FullName
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bench-rtx3060
+          path: ${{ runner.temp }}/baseline-candidate.json

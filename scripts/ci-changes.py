@@ -44,10 +44,11 @@ RULES = [
     ("scripts/check-bench.py", {"gpu", "bench"}),
     ("scripts/check-architecture.py", {"architecture"}),
     ("deny.toml", {"deny"}),
-    # Used only by the hand-run Bench kit workflow and by local runs; no job
-    # here reads them.
+    # Used only by other workflows (the hand-run Bench kit, the GPU nightly)
+    # and by local runs; no job here reads them.
     ("scripts/bench-kit/*", set()),
     (".github/workflows/bench-kit.yml", set()),
+    (".github/workflows/gpu-nightly.yml", set()),
     ("scripts/fetch-raw-corpus.py", set()),
     ("scripts/make-dng-references.ps1", set()),
     ("corpus/*", set()),
