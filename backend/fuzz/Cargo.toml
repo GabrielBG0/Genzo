@@ -59,3 +59,7 @@ path = "fuzz_targets/decode.rs"
 test = false
 doc = false
 bench = false
+
+# rawler 0.8.0 with Genzo's patch, as in backend/Cargo.toml (vendor/README.md).
+[patch.crates-io]
+rawler = { path = "../vendor/rawler" }

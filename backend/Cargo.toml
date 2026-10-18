@@ -1,7 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
-exclude = ["fuzz"]
+exclude = ["fuzz", "vendor"]
 
 [workspace.package]
 version = "0.1.0"
@@ -55,3 +55,8 @@ missing_debug_implementations = "warn"
 
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
+
+# rawler 0.8.0 with Genzo's patch (exact curve lookups, no dither); see
+# vendor/README.md. shell/ and fuzz/ carry the same entry.
+[patch.crates-io]
+rawler = { path = "vendor/rawler" }

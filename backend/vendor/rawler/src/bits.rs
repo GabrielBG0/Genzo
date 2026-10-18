@@ -243,14 +243,16 @@ impl LookupTable {
   //    val
   //  }
 
+  /// Changed by the Genzo project on 2026-10-18 (LGPL-2.1 section 2a):
+  /// returns the exact table value, not dithered. Upstream adds a
+  /// pseudo-random offset within the step to each lookup, which moves every
+  /// curve-coded sample (NEF, DCR, CR2 tables, compressed ARW) by up to a few
+  /// codes from what the file defines and from LibRaw and Adobe's reading.
+  /// The name and signature stay so every caller is covered.
+  /// See backend/vendor/README.md.
   #[inline(always)]
-  pub fn dither(&self, value: u16, rand: &mut u32) -> u16 {
-    let (_, sbase, sdelta) = self.table[value as usize];
-    let base = sbase as u32;
-    let delta = sdelta as u32;
-    let pixel = base + ((delta * (*rand & 2047) + 1024) >> 12);
-    *rand = 15700 * (*rand & 65535) + (*rand >> 16);
-    pixel as u16
+  pub fn dither(&self, value: u16, _rand: &mut u32) -> u16 {
+    self.table[value as usize].0
   }
 }
 
