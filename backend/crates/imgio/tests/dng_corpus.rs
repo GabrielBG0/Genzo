@@ -248,7 +248,10 @@ fn decode_matches_the_linear_reader() {
         };
         assert_eq!(samples_per_pixel, want.samples_per_pixel);
         assert!(data == want.pixels, "samples differ");
-        assert_eq!(*raw, want.meta);
+        // decode also plans the opcodes; the reader leaves that empty.
+        let mut want_meta = want.meta;
+        want_meta.opcode_plan = genzo_imgio::opcodes::plan(&want_meta.opcodes).unwrap();
+        assert_eq!(*raw, want_meta);
     }
 }
 
@@ -303,6 +306,31 @@ fn galaxy_s23_ultra_strips() {
                 acc.wrapping_add(u64::from(v).wrapping_mul((i % 65521) as u64 + 1))
             });
             assert_eq!(checksum, 438_548_270_903_595);
+        }
+    }
+}
+
+/// The Galaxy S23 Ultra's four GainMaps are no-ops (1 x 1, gain 1.0) whose
+/// area runs past the image (left over from another sensor mode): they parse
+/// and the file decodes.
+#[test]
+fn samsung_gain_maps_are_planned_no_ops() {
+    for (_, data) in corpus_files("raw/Samsung/Galaxy S23 Ultra") {
+        let img = genzo_imgio::decode(&data, DecodeOptions::default()).unwrap();
+        let Pixels::Linear { raw, .. } = &img.pixels else {
+            panic!("expected linear samples");
+        };
+        let maps = &raw.opcode_plan.list2;
+        assert_eq!(maps.len(), 4);
+        for op in maps {
+            let genzo_imgio::opcodes::StageOpcode::GainMap(g) = op else {
+                panic!("{op:?}")
+            };
+            assert_eq!(
+                (g.points_v, g.points_h, g.gains.as_slice()),
+                (1, 1, &[1.0f32][..])
+            );
+            assert!(g.area.right > img.width, "the area runs past the image");
         }
     }
 }

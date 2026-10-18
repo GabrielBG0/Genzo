@@ -23,6 +23,8 @@ bytemuck.workspace = true
 [dev-dependencies]
 criterion.workspace = true
 genzo-golden.workspace = true
+# The corpus tests decode camera RAW (rawler) for the opcode references.
+genzo-imgio = { workspace = true, features = ["raw"] }
 
 [[bench]]
 name = "spike"

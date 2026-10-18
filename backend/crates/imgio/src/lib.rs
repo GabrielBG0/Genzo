@@ -16,6 +16,7 @@ mod heic;
 pub mod jpeg;
 #[cfg(feature = "raw")]
 mod ljpeg;
+pub mod opcodes;
 mod png_image;
 mod raster;
 pub mod raw;
@@ -291,11 +292,20 @@ fn decode_dng(data: &[u8]) -> Result<DecodedImage, DecodeError> {
         pixels: Pixels::Linear {
             samples_per_pixel: img.samples_per_pixel,
             data: img.pixels,
-            raw: Box::new(img.meta),
+            raw: Box::new(with_opcode_plan(img.meta)?),
         },
         orientation: img.orientation,
         exif: None,
     })
+}
+
+/// Fills a DNG's opcode plan; an opcode the pipeline cannot honor makes the
+/// file unsupported (DEV-01, decided 2026-10-18).
+#[cfg(feature = "dng")]
+pub(crate) fn with_opcode_plan(mut meta: RawMetadata) -> Result<RawMetadata, DecodeError> {
+    meta.opcode_plan = opcodes::plan(&meta.opcodes)
+        .map_err(|why| DecodeError::Unsupported(FileFormat::Tiff, why))?;
+    Ok(meta)
 }
 
 #[cfg(not(feature = "dng"))]

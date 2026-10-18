@@ -6,5 +6,6 @@
 //! the CPU test pattern still feeds the 0.E webview spike.
 
 pub mod gpu;
+pub mod reference;
 pub mod test_pattern;
 pub mod tiles;

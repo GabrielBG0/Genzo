@@ -227,7 +227,7 @@ pub(crate) fn decode_dng(data: &[u8]) -> Result<DecodedImage, DecodeError> {
         pixels: Pixels::Cfa {
             pattern,
             data: samples,
-            raw: Box::new(meta),
+            raw: Box::new(crate::with_opcode_plan(meta)?),
         },
         orientation,
         exif: None,
@@ -351,6 +351,7 @@ fn metadata(img: &RawImage, format: FileFormat) -> Result<RawMetadata, DecodeErr
             ..CameraColor::default()
         },
         opcodes: OpcodeLists::default(),
+        opcode_plan: Default::default(),
         gain_table_map: None,
     })
 }
