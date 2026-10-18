@@ -315,6 +315,10 @@ fn galaxy_s23_ultra_strips() {
 /// and the file decodes.
 #[test]
 fn samsung_gain_maps_are_planned_no_ops() {
+    if !cfg!(feature = "raw") {
+        println!("skipped: its lossless JPEG strips need the `raw` feature");
+        return;
+    }
     for (_, data) in corpus_files("raw/Samsung/Galaxy S23 Ultra") {
         let img = genzo_imgio::decode(&data, DecodeOptions::default()).unwrap();
         let Pixels::Linear { raw, .. } = &img.pixels else {
