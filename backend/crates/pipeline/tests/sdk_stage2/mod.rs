@@ -60,8 +60,10 @@ pub fn references() -> Vec<Reference> {
                 at += 16;
                 let len = (w * h * planes) as usize;
                 let samples = b[at..at + 2 * len]
-                    .chunks_exact(2)
-                    .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|c| u16::from_le_bytes(*c))
                     .collect();
                 at += 2 * len;
                 crops.push(Crop {
@@ -73,8 +75,10 @@ pub fn references() -> Vec<Reference> {
                 });
             }
             let blocks = b[at..]
-                .chunks_exact(4)
-                .map(|c| f32::from_le_bytes(c.try_into().unwrap()))
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|c| f32::from_le_bytes(*c))
                 .collect::<Vec<_>>();
             assert_eq!(
                 blocks.len() as u32,

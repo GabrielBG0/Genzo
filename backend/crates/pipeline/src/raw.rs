@@ -117,7 +117,8 @@ impl Linearization {
                 }
             }
             let range = f64::from(white) - max_black;
-            if !(range > 0.0) {
+            // Also refuses NaN.
+            if range.is_nan() || range <= 0.0 {
                 return Err(RawError::Levels(format!(
                     "white {white} not above black {max_black}"
                 )));
@@ -215,6 +216,14 @@ impl RawSource {
                 StageOpcode::GainMap(_) => None,
             })
             .collect();
+        let fix_bad_pixels: Vec<FixBadPixelsConstant> = fix_bad_pixels;
+        // Each would read the previous one's result; the GPU applies one.
+        if fix_bad_pixels.len() > 1 {
+            return Err(RawError::Unsupported(format!(
+                "{} FixBadPixelsConstant opcodes",
+                fix_bad_pixels.len()
+            )));
+        }
         let gain_maps = list2
             .into_iter()
             .filter_map(|op| match op {

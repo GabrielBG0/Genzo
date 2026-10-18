@@ -126,19 +126,36 @@ Adobe DNG Converter's output of the camera RAW files carries no opcodes. So M1 i
   - **GainMap:** a pixel's relative position is that of its center, ((row + 0.5) / height, (col + 0.5) / width). The map index is (position − origin) / spacing, interpolated bilinearly and held at the first and last points. The value, normalized to white = 1, is multiplied by the gain and clipped at 1. Map plane = min(plane, MapPlanes − 1).
   - **FixBadPixelsConstant:** on the stored 16-bit values, a sample equal to the constant becomes the rounded mean of its same-color neighbors that are not bad, read from the original. A green site (row + col + phase + phase / 2 even) uses its four diagonal neighbors; a red or blue site the four two pixels away on its row and column. With four neighbors the mean is (sum + 2) / 4. With none, the sample is kept. Where the SDK pads the image at its edges, Genzo leaves the outside neighbors out.
   - **Checked:** synthetic tests of each rule, and the Pixel 4a's maps against Adobe DNG Converter's rendering of the same file (`pipeline/tests/gain_map.rs`). Per 64 px block, the ratio to Adobe is flat: a spread of 1.01 in green and 1.06 in red and blue, against 2.3 to 2.7 without the maps and 1.2 with the red and blue maps swapped.
-- Opcodes are parsed and planned at decode (`imgio::opcodes::plan`): GainMap and FixBadPixelsConstant are applied; one whose parameters do not parse is skipped when optional, else the photo is unsupported.
+- Opcodes are parsed and planned at decode (`imgio::opcodes::plan`): FixBadPixelsConstant in OpcodeList1 and GainMap in OpcodeList2 are applied; one whose parameters do not parse is skipped when optional, else the photo is unsupported.
+- **In another list they count as not implemented** (decided 2026-10-18). A GainMap in OpcodeList3, for one, would run after stage 2 has white balanced the values, so its clip at 1 would be in the wrong units. No corpus file has either elsewhere. More than one FixBadPixelsConstant is unsupported too, since each would read the previous one's output.
 - An opcode M1 does not implement is skipped when it is marked optional.
 - When an unimplemented opcode is not marked optional, the photo is *unsupported*, except for the lens opcodes.
 - The lens opcodes (WarpRectilinear, WarpRectilinear2, FixVignetteRadial) are skipped in M1 whether or not they are marked optional (decided 2026-10-18). When a non-optional one is skipped, the status bar says "Lens corrections from the file are not applied yet". Stage 5 takes them up in M3.
 
 ### Stage 1: linearize
 
-Runs on the GPU, per tile of the sensor image (see Tiling).
-- OpcodeList1 runs first, on the stored values.
-- Each value becomes `(v − black[position]) / (white[channel] − black[position])` as `f32`. Negative values are kept: they are noise, and clamping them would lift the shadows.
-- Then OpcodeList2 runs.
+Runs on the GPU, per tile of the sensor image (see Tiling), as the Adobe DNG SDK 1.4 builds its stage 2 image (`dng_linearization_info.cpp`):
+- **OpcodeList1** runs first, on the stored values (in M1: FixBadPixelsConstant, at most one).
+- **The levels.** Each value becomes `v · s − b[row, col]` as `f32`, where:
+  - `s = 1 / (white[channel] − max black)`. The max black is the largest black level of the pattern after adding the largest DeltaH and DeltaV of each pattern phase (`MaxBlackLevel`), not the black at the position.
+  - `b[row, col] = (pattern[row mod rows][col mod cols] + DeltaH[col] + DeltaV[row]) · s`.
+  - The pattern, DeltaH and DeltaV start at the ActiveArea's top left. The decoder hands them over that way: rawler's black pattern starts at the sensor's first sample, so imgio shifts it.
+- **Negative values are kept** for linear input: they are noise, and clamping them would lift the shadows. The SDK clips them to 0. The Bayer demosaic's input is clamped at 0 (after stage 2), since RCD's estimators divide by sums of neighbors.
+- **Then OpcodeList2** runs (in M1: GainMap).
 
 The LinearizationTable is already applied by the decoder for linear DNG, and by rawler where it applies one.
+
+**Checked** against the SDK itself: `scripts/dng-sdk-probe/stage2_probe.cpp` writes the SDK's stage 2 image, and `scripts/stage1-reference.py` stores five 48 px crops and the 128 px block means of six corpus DNGs (`pipeline/tests/fixtures/sdk-stage2`):
+
+| File | What it covers |
+|---|---|
+| Pixel 4a | per-site blacks, real GainMaps |
+| Leica Q2 | FixBadPixelsConstant; an ActiveArea that ends 32 px inside the sensor |
+| Pentax K10D, Halide iPhone 16 Pro | plain Bayer |
+| Galaxy S23 Ultra, iPhone 12 Pro | linear, three planes |
+
+- **The bound.** The CPU reference (`reference::stages`) and the GPU stage both match to the SDK's 16-bit rounding: half a code, or half a code times (1 + the largest gain) where a GainMap scales the SDK's rounded value. On the Pixel that is 2.1 codes.
+- **Negative controls must fail:** no GainMaps, the black rows swapped, the active area two columns off.
 
 ### Stage 2: white balance and highlight clipping
 
@@ -226,7 +243,14 @@ Export (OUT-01 basic) uses this transform with sRGB as the target, and embeds an
 
 Stages 1 to 4 run per tile, so full-resolution intermediates exist only for one tile at a time.
 
-- **Tiles** are 1024 × 1024 output pixels for Bayer, linear and non-RAW input, and 512 × 512 for X-Trans. Each has a 24 px apron on each side: 24 is a multiple of both CFA periods, 2 and 6, and wider than RCD's and Markesteijn's support. The apron is computed and thrown away, so no tile edge shows. X-Trans tiles are smaller because 3-pass Markesteijn keeps several directional RGB buffers, about 200 bytes per pixel against RCD's 49.
+- **Tiles** are 1024 × 1024 output pixels for Bayer, linear and non-RAW input, and 512 × 512 for X-Trans. Each has a 24 px apron on each side: 24 is a multiple of both CFA periods, 2 and 6, and wider than RCD's and Markesteijn's support. The apron is computed and thrown away, so no tile edge shows. X-Trans tiles are smaller because 3-pass Markesteijn keeps several directional RGB buffers, about 200 bytes per pixel against RCD's 52.
+- **How a tile computes what the whole image would** (`gpu::raw_stages`, `tiles::jobs`):
+  - Its textures cover the padded rect: the output rect plus the apron, clamped to the active area. Reads clamp to that rect.
+  - Everything that depends on where a pixel is uses image coordinates: the CFA color (from the stored image's phase), RCD's 9 px border, the black pattern and the GainMap positions.
+  - The uploaded raw rect reaches 2 px further, clamped to the stored image, so FixBadPixelsConstant sees the same neighbors as on the whole image, masked border included.
+  - RCD's support is 10 px (the final pass reads ±3 around values that reach 7) and the bad-pixel fix's is 2, both inside the apron.
+  - **The test** (`pipeline/tests/raw_stages.rs`) holds a tiled render to the whole image as one tile, bit for bit. It uses a synthetic sensor with an odd active-area offset, per-site blacks with DeltaH and DeltaV, bad pixels at the active edge and on tile boundaries, and pitched GainMaps across tiles. A 6 px apron must fail it.
+  - **RCD against `rcd.c`:** the GPU matches darktable's CPU code to f32 rounding (median 2e-7), except where RCD picks between two direction estimates by a comparison: a last-bit difference (fused multiply-adds on hardware GPUs) can flip the choice. On the RTX 3060 that is 9 of 146,000 values above 1 %; WARP, which does not fuse, flips none.
 - **The input** stays in CPU memory. Each tile's slice is uploaded through a staging buffer.
 - **The pyramid** is image-wide and starts at **level 1** (half size), in RGBA16F. Each tile's stage 4 output is reduced into level 1 with a 2 × 2 box filter, and levels 2 and up follow. **Level 0 (full resolution) is never kept for the whole image.**
 - **At 1:1 and during export**, level-0 tiles of 256 px are made on demand by running stages 1 to 4 on the region they need, apron included.
@@ -238,7 +262,7 @@ Stages 1 to 4 run per tile, so full-resolution intermediates exist only for one 
 | Item | Size |
 |---|---|
 | Pyramid, levels 1 and up, RGBA16F (98 MB for level 1, plus a third) | 131 MB |
-| Stage 1 to 4 scratch for one tile, intermediates included: Bayer 49 B/px × 1072² = 56 MB; X-Trans about 200 B/px × 560² = 63 MB | 63 MB |
+| Stage 1 to 4 scratch for one tile, intermediates included: Bayer 52 B/px × 1072² = 60 MB (the mosaic, seven RCD buffers, RGBA32F output); X-Trans about 200 B/px × 560² = 63 MB | 63 MB |
 | Upload staging for one tile (linear DNG, 3 × u16) | 7 MB |
 | Level-0 tile cache at 1:1 (fixed cap; about 480 tiles of 256², five 2560 × 1440 views with their rings) | 256 MB |
 | Viewport stage caches (fixed cap; stage 4 sampled, stage 6, stage 7 at 2560 × 1920 RGBA16F, plus the base layer) | 128 MB |

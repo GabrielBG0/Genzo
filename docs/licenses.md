@@ -66,7 +66,7 @@ Source code ported from other projects into Genzo's own files. Each file keeps t
 
 | Origin | Files | License | Notes |
 |---|---|---|---|
-| darktable `data/kernels/demosaic_rcd.cl` and `src/iop/demosaicing/rcd.c` (Copyright 2010-2026 darktable developers); the RCD algorithm by Luis Sanz Rodríguez | `backend/crates/pipeline/src/gpu/shaders/rcd_*.wgsl`, `backend/crates/pipeline/tests/rcd_reference/` (test-only) | GPL-3.0-or-later (darktable); RCD itself GPL-3.0 | Compatible: Genzo is GPL-3.0. Ported to WGSL with full-resolution buffers |
+| darktable `data/kernels/demosaic_rcd.cl` and `src/iop/demosaicing/rcd.c` (Copyright 2010-2026 darktable developers); the RCD algorithm by Luis Sanz Rodríguez | `backend/crates/pipeline/src/gpu/shaders/rcd_*.wgsl` and `tile_rcd_*.wgsl`, `backend/crates/pipeline/tests/rcd_reference/` (test-only) | GPL-3.0-or-later (darktable); RCD itself GPL-3.0 | Compatible: Genzo is GPL-3.0. Ported to WGSL with full-resolution buffers |
 
 ## HEVC patent position (decided)
 

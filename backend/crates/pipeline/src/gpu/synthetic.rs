@@ -82,3 +82,33 @@ pub fn scene_mosaic(width: u32, height: u32) -> BayerImage {
         genzo_color::mul(&to_working, s).map(|c| c as f32)
     })
 }
+
+/// [`scene_mosaic`] as a RAW source for stages 1 to 3: the whole sensor
+/// active, one black level, no opcodes.
+pub fn scene_raw(width: u32, height: u32) -> crate::raw::RawSource {
+    use genzo_imgio::raw::{Levels, Rect};
+    let img = scene_mosaic(width, height);
+    let levels = Levels {
+        black: vec![f64::from(BLACK)],
+        black_repeat: (1, 1),
+        black_delta_h: Vec::new(),
+        black_delta_v: Vec::new(),
+        white: vec![u32::from(WHITE)],
+    };
+    crate::raw::RawSource {
+        stored: (width, height),
+        samples: 1,
+        data: img.data,
+        bayer: Some(img.cfa),
+        active: Rect {
+            top: 0,
+            left: 0,
+            bottom: height,
+            right: width,
+        },
+        linearization: crate::raw::Linearization::new(&levels, 1, (width, height))
+            .expect("valid levels"),
+        fix_bad_pixels: Vec::new(),
+        gain_maps: Vec::new(),
+    }
+}
