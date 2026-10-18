@@ -638,6 +638,7 @@ dependencies = [
  "genzo-imgio",
  "genzo-model",
  "pollster",
+ "serde_json",
  "thiserror",
  "wgpu",
 ]

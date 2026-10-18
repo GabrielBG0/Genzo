@@ -189,7 +189,11 @@ fn is_lens(kind: OpcodeKind) -> bool {
 }
 
 /// Decides what to do with each opcode (DEV-01, decided 2026-10-18):
-/// GainMap and FixBadPixelsConstant are applied; the lens opcodes are
+/// FixBadPixelsConstant in OpcodeList1 and GainMap in OpcodeList2 are
+/// applied, where the corpus has them and the pipeline implements them.
+/// Elsewhere they count as not implemented: GainMap in OpcodeList3, for
+/// one, would run on demosaiced values that stage 2 already white balanced,
+/// so its clip at 1 would be in the wrong units. The lens opcodes are
 /// skipped, and when one is not optional the plan says so; any other opcode
 /// is skipped when optional and makes the file unsupported when not. An
 /// opcode whose parameters do not parse is skipped when optional, and
@@ -202,9 +206,11 @@ pub fn plan(lists: &OpcodeLists) -> Result<OpcodePlan, String> {
         (3, &lists.list3, &mut plan.list3),
     ] {
         for op in list {
-            let parsed = match op.kind {
-                OpcodeKind::GainMap => Some(parse_gain_map(&op.params).map(StageOpcode::GainMap)),
-                OpcodeKind::FixBadPixelsConstant => Some(
+            let parsed = match (n, op.kind) {
+                (2, OpcodeKind::GainMap) => {
+                    Some(parse_gain_map(&op.params).map(StageOpcode::GainMap))
+                }
+                (1, OpcodeKind::FixBadPixelsConstant) => Some(
                     parse_fix_bad_pixels_constant(&op.params)
                         .map(StageOpcode::FixBadPixelsConstant),
                 ),
@@ -336,6 +342,21 @@ mod tests {
         let mut l = lists.clone();
         l.list2.push(op(OpcodeKind::Unknown(99), false, vec![]));
         assert!(plan(&l).is_err());
+
+        // Applied only in the list the pipeline runs them from.
+        let mut l = lists.clone();
+        l.list3
+            .push(op(OpcodeKind::GainMap, false, gain_map_bytes(&[1.0; 6])));
+        assert!(plan(&l).unwrap_err().contains("OpcodeList3"));
+        l.list3[1].optional = true;
+        assert_eq!(plan(&l).unwrap().list3.len(), 0);
+        let mut l = lists.clone();
+        l.list2.push(op(
+            OpcodeKind::FixBadPixelsConstant,
+            false,
+            l.list1[0].params.clone(),
+        ));
+        assert!(plan(&l).unwrap_err().contains("OpcodeList2"));
 
         // A GainMap that does not parse: skipped when optional only.
         let mut l = lists.clone();

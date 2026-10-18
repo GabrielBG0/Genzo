@@ -28,6 +28,8 @@ impl CfaPattern {
 pub struct Levels {
     /// Black levels, row by row over a `black_repeat` pattern, each entry
     /// holding one value per sample. Its length is rows × columns × samples.
+    /// The pattern, BlackLevelDeltaH and BlackLevelDeltaV start at the
+    /// active area's top left (as in DNG), not at the sensor's first sample.
     pub black: Vec<f64>,
     /// Rows and columns of the black level pattern (DNG BlackLevelRepeatDim):
     /// 1 × 1 for one level per channel, 2 × 2 for Bayer, 6 × 6 for X-Trans.

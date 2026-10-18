@@ -287,6 +287,16 @@ fn metadata(img: &RawImage, format: FileFormat) -> Result<RawMetadata, DecodeErr
         None => None,
     };
     let origin = active.map_or((0, 0), |a| (a.left, a.top));
+    // rawler's pattern starts at the sensor's first sample; ours, as in DNG,
+    // at the active area's top left.
+    let black: Vec<f64> = (0..rows * cols)
+        .map(|i| {
+            let (r, c) = (i / cols, i % cols);
+            let r = (r + origin.1 as usize) % rows;
+            let c = (c + origin.0 as usize) % cols;
+            black[r * cols + c]
+        })
+        .collect();
     let default_crop = match &img.crop_area {
         Some(c) => {
             let c = rect(c, img.width, img.height).ok_or_else(|| bad("crop", c))?;

@@ -39,6 +39,10 @@ for path in sys.argv[1:]:
                   f"visible {sizes.width}x{sizes.height}")
             print(f"  pattern from (0,0): {' '.join(pat)}")
             print(f"  black per channel {raw.black_level_per_channel}, white {raw.white_level}")
+            # Black per site of the pattern, from the sensor origin.
+            sites = raw.raw_colors[:6, :6]
+            blacks = [" ".join(str(raw.black_level_per_channel[c]) for c in row) for row in sites]
+            print(f"  black from (0,0): {' / '.join(blacks)}")
             print(f"  camera white balance {raw.camera_whitebalance[:3]}")
             n = img.size
             means = [int((int(img[colors == c].astype(np.uint64).sum()) + (colors == c).sum() // 2)

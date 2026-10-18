@@ -2,3 +2,4 @@
 //! is tested against.
 
 pub mod opcodes;
+pub mod stages;
