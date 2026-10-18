@@ -542,6 +542,9 @@ name = "genzo-color"
 version = "0.1.0"
 dependencies = [
  "genzo-model",
+ "serde",
+ "serde_json",
+ "thiserror",
 ]
 
 [[package]]
@@ -638,6 +641,7 @@ dependencies = [
  "genzo-imgio",
  "genzo-model",
  "pollster",
+ "serde_json",
  "thiserror",
  "wgpu",
 ]
