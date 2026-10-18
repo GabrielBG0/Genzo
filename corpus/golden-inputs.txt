@@ -1,4 +1,5 @@
-# Corpus files the golden-image tests read: one corpus/manifest.json key per
-# line. CI fetches exactly these (scripts/fetch-raw-corpus.py --list) and
-# caches them; every one must be CC0.
+# Corpus files the golden-image and corpus tests read in CI: one
+# corpus/manifest.json key per line. CI fetches exactly these
+# (scripts/fetch-raw-corpus.py --list) and caches them; every one must be CC0.
 raw/Apple/iPhone 12 Pro/IMG_1361.DNG
+raw/Samsung/Galaxy S23 Ultra/20230817_120455.dng

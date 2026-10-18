@@ -1,4 +1,5 @@
-//! The linear DNG reader on the real ProRAW files of the 0.C corpus. The
+//! The linear DNG reader, and `imgio::decode` over it, on the real DNG files
+//! of the corpus. The
 //! corpus is gitignored (personal photos), so each check skips when its file
 //! is missing; run them where the corpus is, in release for speed:
 //!   cargo test --release -p genzo-imgio --test dng_corpus -- --nocapture
@@ -7,6 +8,8 @@
 use std::path::PathBuf;
 
 use genzo_imgio::dng::{self, COMPRESSION_JPEG_XL, DngError};
+use genzo_imgio::raw::{AsShot, OpcodeKind};
+use genzo_imgio::{DecodeError, DecodeOptions, FileFormat, Pixels};
 
 /// Every DNG in corpus/<folder>/, if the corpus has any.
 fn corpus_files(folder: &str) -> Vec<(PathBuf, Vec<u8>)> {
@@ -72,17 +75,18 @@ fn check_16_pro(data: &[u8]) {
     );
     assert_eq!(img.compression, COMPRESSION_JPEG_XL);
     assert_eq!(img.linearization_entries, 1024);
-    assert!(img.has_gain_table_map);
-    assert_eq!(img.as_shot_neutral, Some(vec![1.0; 3]));
-    assert!(img.baseline_exposure.is_some());
-    assert!(img.color_matrix_1.is_some() && img.color_matrix_2.is_some());
+    assert!(img.meta.gain_table_map.is_some());
+    assert_eq!(img.meta.color.as_shot, Some(AsShot::Neutral([1.0; 3])));
+    assert!(img.meta.color.baseline_exposure != 0.0);
+    let color = &img.meta.color;
+    assert!(color.color_matrix_1.is_some() && color.color_matrix_2.is_some());
     // A handful of samples past the table is normal; many would mean the
     // samples were read at the wrong scale.
     assert!(img.clamped < 1000, "{} samples clamped", img.clamped);
 
     let spp = usize::from(img.samples_per_pixel);
     let n = img.pixels.len() / spp;
-    let white = f64::from(img.white_level[0]);
+    let white = f64::from(img.meta.levels.white[0]);
     let means: Vec<f64> = (0..spp)
         .map(|c| {
             img.pixels
@@ -96,7 +100,7 @@ fn check_16_pro(data: &[u8]) {
         .collect();
     println!(
         "clamped {}, baseline exposure {:?}, means {means:.0?}",
-        img.clamped, img.baseline_exposure
+        img.clamped, img.meta.color.baseline_exposure
     );
     for &m in &means {
         assert!(m > 0.0 && m < white / 2.0, "mean {m} of white {white}");
@@ -121,7 +125,7 @@ fn iphone_13_pro_max_lossless_jpeg() {
         let result = dng::decode_linear(&data);
         if !cfg!(feature = "raw") {
             match result {
-                Err(DngError::Unsupported(m)) => assert!(m.contains("`raw` feature"), "{m}"),
+                Err(DngError::NotBuiltIn(_, "raw")) => {}
                 other => panic!("expected Unsupported, got {other:?}"),
             }
             continue;
@@ -133,8 +137,8 @@ fn iphone_13_pro_max_lossless_jpeg() {
         );
         assert_eq!(img.compression, dng::COMPRESSION_LOSSLESS_JPEG);
         assert_eq!(img.linearization_entries, 4096);
-        assert!(img.has_gain_table_map);
-        let exposure = img.baseline_exposure.unwrap();
+        assert!(img.meta.gain_table_map.is_some());
+        let exposure = img.meta.color.baseline_exposure;
         assert!(
             (exposure - 2.50).abs() < 0.01,
             "BaselineExposure {exposure}"
@@ -172,7 +176,7 @@ fn iphone_12_pro_lossless_jpeg() {
         let result = dng::decode_linear(&data);
         if !cfg!(feature = "raw") {
             assert!(
-                matches!(result, Err(DngError::Unsupported(_))),
+                matches!(result, Err(DngError::NotBuiltIn(_, "raw"))),
                 "{result:?}"
             );
             continue;
@@ -184,7 +188,9 @@ fn iphone_12_pro_lossless_jpeg() {
         );
         assert_eq!(img.compression, dng::COMPRESSION_LOSSLESS_JPEG);
         assert_eq!(img.linearization_entries, 4096);
-        let neutral = img.as_shot_neutral.clone().unwrap();
+        let Some(AsShot::Neutral(neutral)) = img.meta.color.as_shot else {
+            panic!("no AsShotNeutral: {:?}", img.meta.color.as_shot);
+        };
         assert!(
             neutral[0] < 0.9 && neutral[2] < 0.9,
             "AsShotNeutral {neutral:?}"
@@ -206,6 +212,115 @@ fn iphone_12_pro_lossless_jpeg() {
                 })
                 .collect();
             assert_eq!(means, [4988, 12571, 7970]);
+        }
+    }
+}
+
+/// Wiring, not ground truth: `imgio::decode`, the path the pipeline uses,
+/// hands over exactly what the linear DNG reader read (the same samples,
+/// levels, color data and opcodes). The per-file tests above check the
+/// samples themselves.
+#[test]
+fn decode_matches_the_linear_reader() {
+    let folders = [
+        "proraw/iPhone 16 Pro",
+        "proraw/iPhone 13 Pro Max",
+        "raw/Apple/iPhone 12 Pro",
+        "raw/Samsung/Galaxy S23 Ultra",
+    ];
+    for (path, data) in folders.into_iter().flat_map(corpus_files) {
+        println!("{}", path.display());
+        let Ok(want) = dng::decode_linear(&data) else {
+            assert!(genzo_imgio::decode(&data, DecodeOptions::default()).is_err());
+            continue;
+        };
+        let img = genzo_imgio::decode(&data, DecodeOptions::default()).unwrap();
+        assert_eq!((img.width, img.height), (want.width, want.height));
+        assert_eq!(img.orientation, want.orientation);
+        assert_eq!(u16::from(img.source_bits), want.bits_per_sample);
+        let Pixels::Linear {
+            samples_per_pixel,
+            data,
+            raw,
+        } = img.pixels
+        else {
+            panic!("expected linear samples");
+        };
+        assert_eq!(samples_per_pixel, want.samples_per_pixel);
+        assert!(data == want.pixels, "samples differ");
+        assert_eq!(*raw, want.meta);
+    }
+}
+
+/// CFA DNGs are recognized as DNG and reported unsupported until the rawler
+/// path lands, never as damaged.
+#[test]
+fn cfa_dngs_are_unsupported_for_now() {
+    for (path, data) in ["raw/Leica/Q2", "raw/Pentax/K10D", "bayer-dng/iphone"]
+        .into_iter()
+        .flat_map(corpus_files)
+    {
+        println!("{}", path.display());
+        match genzo_imgio::decode(&data, DecodeOptions::default()) {
+            Err(DecodeError::Unsupported(FileFormat::Tiff, m)) => assert!(m.contains("CFA"), "{m}"),
+            other => panic!("expected unsupported, got {other:?}"),
+        }
+        // The metadata reads all the same.
+        dng::read_metadata(&data).unwrap();
+    }
+}
+
+/// The Galaxy S23 Ultra DNG from raw.pixls.us (CC0): linear RGB in one strip
+/// of lossless JPEG with a restart every 16 rows, and four optional GainMap
+/// opcodes in OpcodeList2. Checked against libjpeg-turbo 3.2.0 (imagecodecs
+/// 2026.10.10 `jpeg8_decode`): every sample identical, recorded as the exact
+/// means and a position-weighted checksum. (lj92, imagecodecs'
+/// `ljpeg_decode`, also ignores the restarts.)
+#[test]
+fn galaxy_s23_ultra_strips() {
+    for (path, data) in corpus_files("raw/Samsung/Galaxy S23 Ultra") {
+        println!("{}", path.display());
+        let result = dng::decode_linear(&data);
+        if !cfg!(feature = "raw") {
+            assert!(
+                matches!(result, Err(DngError::NotBuiltIn(_, "raw"))),
+                "{result:?}"
+            );
+            continue;
+        }
+        let img = result.unwrap();
+        assert_eq!(
+            (img.width, img.height, img.samples_per_pixel),
+            (3648, 2736, 3)
+        );
+        assert_eq!(img.compression, dng::COMPRESSION_LOSSLESS_JPEG);
+        let gain_maps = &img.meta.opcodes.list2;
+        assert_eq!(gain_maps.len(), 4);
+        assert!(
+            gain_maps
+                .iter()
+                .all(|op| op.kind == OpcodeKind::GainMap && op.optional)
+        );
+        // 20230817_120455.dng (sha256 4f9d1b08...e5ef3da4).
+        if data.len() == 31_311_854 {
+            let n = (img.pixels.len() / 3) as u64;
+            let means: Vec<u64> = (0..3)
+                .map(|c| {
+                    let sum: u64 = img
+                        .pixels
+                        .iter()
+                        .skip(c)
+                        .step_by(3)
+                        .map(|&v| u64::from(v))
+                        .sum();
+                    (sum + n / 2) / n
+                })
+                .collect();
+            assert_eq!(means, [331, 716, 294]);
+            let checksum = img.pixels.iter().enumerate().fold(0u64, |acc, (i, &v)| {
+                acc.wrapping_add(u64::from(v).wrapping_mul((i % 65521) as u64 + 1))
+            });
+            assert_eq!(checksum, 438_548_270_903_595);
         }
     }
 }

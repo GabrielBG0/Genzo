@@ -15,6 +15,11 @@ use rayon::prelude::*;
 
 use jxl_oxide::{AllocTracker, JxlImage};
 
+use crate::raw::{
+    AsShot, CameraColor, ColorMatrix, DefaultCrop, Levels, Opcode, OpcodeLists, RawMetadata, Rect,
+    parse_opcode_list,
+};
+
 /// TIFF compression code for JPEG XL tiles (DNG 1.7).
 pub const COMPRESSION_JPEG_XL: u16 = 52546;
 const COMPRESSION_NONE: u16 = 1;
@@ -41,12 +46,15 @@ const JXL_MEMORY_LIMIT: usize = 2 << 30;
 
 mod tag {
     pub const NEW_SUBFILE_TYPE: u16 = 254;
+    pub const ORIENTATION: u16 = 274;
     pub const WIDTH: u16 = 256;
     pub const HEIGHT: u16 = 257;
     pub const BITS_PER_SAMPLE: u16 = 258;
     pub const COMPRESSION: u16 = 259;
     pub const PHOTOMETRIC: u16 = 262;
     pub const STRIP_OFFSETS: u16 = 273;
+    pub const ROWS_PER_STRIP: u16 = 278;
+    pub const STRIP_BYTE_COUNTS: u16 = 279;
     pub const SAMPLES_PER_PIXEL: u16 = 277;
     pub const PLANAR_CONFIGURATION: u16 = 284;
     pub const TILE_WIDTH: u16 = 322;
@@ -54,15 +62,28 @@ mod tag {
     pub const TILE_OFFSETS: u16 = 324;
     pub const TILE_BYTE_COUNTS: u16 = 325;
     pub const SUB_IFDS: u16 = 330;
+    pub const DNG_VERSION: u16 = 50706;
     pub const LINEARIZATION_TABLE: u16 = 50712;
+    pub const BLACK_LEVEL_REPEAT_DIM: u16 = 50713;
     pub const BLACK_LEVEL: u16 = 50714;
+    pub const BLACK_LEVEL_DELTA_H: u16 = 50715;
+    pub const BLACK_LEVEL_DELTA_V: u16 = 50716;
     pub const WHITE_LEVEL: u16 = 50717;
+    pub const DEFAULT_CROP_ORIGIN: u16 = 50719;
+    pub const DEFAULT_CROP_SIZE: u16 = 50720;
     pub const COLOR_MATRIX_1: u16 = 50721;
     pub const COLOR_MATRIX_2: u16 = 50722;
+    pub const CAMERA_CALIBRATION_1: u16 = 50723;
+    pub const CAMERA_CALIBRATION_2: u16 = 50724;
+    pub const ANALOG_BALANCE: u16 = 50727;
     pub const AS_SHOT_NEUTRAL: u16 = 50728;
+    pub const AS_SHOT_WHITE_XY: u16 = 50729;
     pub const BASELINE_EXPOSURE: u16 = 50730;
     pub const CALIBRATION_ILLUMINANT_1: u16 = 50778;
     pub const CALIBRATION_ILLUMINANT_2: u16 = 50779;
+    pub const ACTIVE_AREA: u16 = 50829;
+    pub const FORWARD_MATRIX_1: u16 = 50964;
+    pub const FORWARD_MATRIX_2: u16 = 50965;
     pub const OPCODE_LIST_1: u16 = 51008;
     pub const OPCODE_LIST_2: u16 = 51009;
     pub const OPCODE_LIST_3: u16 = 51022;
@@ -77,6 +98,8 @@ pub enum DngError {
     NoRawImage,
     #[error("not supported by the linear DNG reader: {0}")]
     Unsupported(String),
+    #[error("{0} (needs the `{1}` feature)")]
+    NotBuiltIn(&'static str, &'static str),
     #[error("image too large: {0}")]
     TooLarge(String),
     #[error("corrupt DNG: {0}")]
@@ -85,14 +108,6 @@ pub enum DngError {
 
 fn corrupt(message: impl Into<String>) -> DngError {
     DngError::Corrupt(message.into())
-}
-
-/// A color matrix and the illuminant it was calibrated for (EXIF LightSource).
-#[derive(Debug, Clone, PartialEq)]
-pub struct ColorMatrix {
-    pub illuminant: Option<u16>,
-    /// Row-major, 3 columns (XYZ to camera), one row per sample.
-    pub matrix: Vec<f64>,
 }
 
 /// A decoded linear DNG and the metadata the pipeline needs from it.
@@ -111,24 +126,28 @@ pub struct LinearDng {
     /// given its last entry. The DNG spec has no rule for them.
     pub clamped: u64,
     pub linearization_entries: usize,
-    pub black_level: Vec<f64>,
-    pub white_level: Vec<u32>,
-    pub color_matrix_1: Option<ColorMatrix>,
-    pub color_matrix_2: Option<ColorMatrix>,
-    pub as_shot_neutral: Option<Vec<f64>>,
-    pub baseline_exposure: Option<f64>,
-    /// ProfileGainTableMap is present (ProRAW's local tone map). Not applied.
-    pub has_gain_table_map: bool,
-    /// OpcodeList1, 2 and 3 are present. Not applied.
-    pub opcode_lists: [bool; 3],
+    /// The EXIF orientation, 1 to 8 (1 when absent or invalid). Not applied.
+    pub orientation: u8,
+    pub meta: RawMetadata,
 }
 
-/// Reads the full-size linear raw image of a DNG.
-pub fn decode_linear(data: &[u8]) -> Result<LinearDng, DngError> {
-    let tiff = Tiff::new(data).ok_or(DngError::NotTiff)?;
+/// Whether a TIFF file is a DNG (IFD0 holds a DNGVersion tag).
+pub fn is_dng(data: &[u8]) -> bool {
+    let Some(tiff) = Tiff::new(data) else {
+        return false;
+    };
+    let Some(at) = tiff.u32(4) else {
+        return false;
+    };
+    tiff.ifd(at as usize)
+        .is_ok_and(|ifd0| find(&ifd0, tag::DNG_VERSION).is_some())
+}
+
+/// IFD0 and the IFD of the full-size raw image (NewSubFileType 0), which is
+/// IFD0 itself or one of its SubIFDs.
+fn raw_ifd(tiff: &Tiff) -> Result<(Vec<Entry>, Vec<Entry>), DngError> {
     let ifd0_offset = tiff.u32(4).ok_or(DngError::NotTiff)?;
     let ifd0 = tiff.ifd(ifd0_offset as usize)?;
-
     let mut candidates = vec![ifd0.clone()];
     if let Some(e) = find(&ifd0, tag::SUB_IFDS) {
         for offset in tiff.ints(e)?.into_iter().take(MAX_SUB_IFDS) {
@@ -139,6 +158,195 @@ pub fn decode_linear(data: &[u8]) -> Result<LinearDng, DngError> {
         .into_iter()
         .find(|ifd| tiff.first_int(ifd, tag::NEW_SUBFILE_TYPE).unwrap_or(0) == 0)
         .ok_or(DngError::NoRawImage)?;
+    Ok((ifd0, raw))
+}
+
+/// Reads the metadata of any DNG, linear or CFA, without decoding its
+/// pixels. What the inventory of corpus files and the CFA path use.
+pub fn read_metadata(data: &[u8]) -> Result<(RawMetadata, u8), DngError> {
+    let tiff = Tiff::new(data).ok_or(DngError::NotTiff)?;
+    let (ifd0, raw) = raw_ifd(&tiff)?;
+    let spp = tiff.first_int(&raw, tag::SAMPLES_PER_PIXEL).unwrap_or(1);
+    // Checked before `metadata` sizes the level arrays by it.
+    if !(1..=4).contains(&spp) {
+        return Err(DngError::Unsupported(format!("{spp} samples per pixel")));
+    }
+    let bits = tiff
+        .first_int(&raw, tag::BITS_PER_SAMPLE)
+        .and_then(|b| u16::try_from(b).ok())
+        .filter(|b| (1..=16).contains(b))
+        .ok_or_else(|| corrupt("BitsPerSample"))?;
+    let width = tiff.required_int(&raw, tag::WIDTH)?;
+    let height = tiff.required_int(&raw, tag::HEIGHT)?;
+    Ok((
+        metadata(&tiff, &ifd0, &raw, spp, bits, (width, height))?,
+        orientation(&tiff, &ifd0),
+    ))
+}
+
+fn orientation(tiff: &Tiff, ifd0: &[Entry]) -> u8 {
+    match tiff.first_int(ifd0, tag::ORIENTATION) {
+        Some(v @ 1..=8) => v as u8,
+        _ => 1,
+    }
+}
+
+/// Largest black level pattern side accepted (6 for X-Trans).
+const MAX_BLACK_REPEAT: u32 = 16;
+
+/// The stage 0 metadata. Tags are looked up in the raw IFD first, then in
+/// IFD0, since writers differ on where they put them.
+fn metadata(
+    tiff: &Tiff,
+    ifd0: &[Entry],
+    raw: &[Entry],
+    spp: u32,
+    bits: u16,
+    (width, height): (u32, u32),
+) -> Result<RawMetadata, DngError> {
+    let get = |t| find(raw, t).or_else(|| find(ifd0, t));
+    let numbers = |t| get(t).map(|e| tiff.numbers(e)).transpose();
+    let spp_len = spp as usize;
+
+    let (rows, cols) = match get(tag::BLACK_LEVEL_REPEAT_DIM) {
+        Some(e) => match tiff.ints(e)?[..] {
+            [r, c]
+                if (1..=MAX_BLACK_REPEAT).contains(&r) && (1..=MAX_BLACK_REPEAT).contains(&c) =>
+            {
+                (r, c)
+            }
+            ref other => {
+                return Err(DngError::Unsupported(format!(
+                    "a black level pattern of {other:?}"
+                )));
+            }
+        },
+        None => (1, 1),
+    };
+    let pattern = (rows * cols) as usize * spp_len;
+    let black = match numbers(tag::BLACK_LEVEL)? {
+        None => vec![0.0; pattern],
+        Some(v) if v.len() == pattern => v,
+        Some(v) if v.len() == 1 => vec![v[0]; pattern],
+        Some(v) => {
+            return Err(corrupt(format!(
+                "{} black levels for a {rows}x{cols} pattern of {spp} samples",
+                v.len()
+            )));
+        }
+    };
+    let white = match get(tag::WHITE_LEVEL).map(|e| tiff.ints(e)).transpose()? {
+        None => vec![(1u32 << bits) - 1; spp_len],
+        Some(v) if v.len() == spp_len => v,
+        Some(v) if v.len() == 1 => vec![v[0]; spp_len],
+        Some(v) => {
+            return Err(corrupt(format!(
+                "{} white levels for {spp} samples",
+                v.len()
+            )));
+        }
+    };
+
+    let active_area = match get(tag::ACTIVE_AREA).map(|e| tiff.ints(e)).transpose()? {
+        None => None,
+        Some(v) => match v[..] {
+            [top, left, bottom, right]
+                if top < bottom && left < right && bottom <= height && right <= width =>
+            {
+                Some(Rect {
+                    top,
+                    left,
+                    bottom,
+                    right,
+                })
+            }
+            _ => return Err(corrupt(format!("ActiveArea {v:?} in {width}x{height}"))),
+        },
+    };
+    let default_crop = match (
+        numbers(tag::DEFAULT_CROP_ORIGIN)?.as_deref(),
+        numbers(tag::DEFAULT_CROP_SIZE)?.as_deref(),
+    ) {
+        (Some(&[x, y]), Some(&[w, h])) => Some(DefaultCrop {
+            x,
+            y,
+            width: w,
+            height: h,
+        }),
+        (None, Some(&[w, h])) => Some(DefaultCrop {
+            x: 0.0,
+            y: 0.0,
+            width: w,
+            height: h,
+        }),
+        _ => None,
+    };
+
+    let matrix = |m, i| -> Result<Option<ColorMatrix>, DngError> {
+        Ok(match get(m) {
+            Some(e) => Some(ColorMatrix {
+                illuminant: tiff.first_int(ifd0, i).and_then(|v| u16::try_from(v).ok()),
+                matrix: tiff.numbers(e)?,
+            }),
+            None => None,
+        })
+    };
+    let neutral = numbers(tag::AS_SHOT_NEUTRAL)?
+        .and_then(|v| <[f64; 3]>::try_from(v.get(..3)?).ok())
+        .filter(|n| n.iter().all(|c| c.is_finite() && *c > 0.0));
+    let white_xy = numbers(tag::AS_SHOT_WHITE_XY)?
+        .and_then(|v| <[f64; 2]>::try_from(&v[..]).ok())
+        .filter(|xy| xy.iter().all(|c| c.is_finite() && *c > 0.0));
+    let color = CameraColor {
+        color_matrix_1: matrix(tag::COLOR_MATRIX_1, tag::CALIBRATION_ILLUMINANT_1)?,
+        color_matrix_2: matrix(tag::COLOR_MATRIX_2, tag::CALIBRATION_ILLUMINANT_2)?,
+        forward_matrix_1: numbers(tag::FORWARD_MATRIX_1)?,
+        forward_matrix_2: numbers(tag::FORWARD_MATRIX_2)?,
+        camera_calibration_1: numbers(tag::CAMERA_CALIBRATION_1)?,
+        camera_calibration_2: numbers(tag::CAMERA_CALIBRATION_2)?,
+        analog_balance: numbers(tag::ANALOG_BALANCE)?,
+        as_shot: neutral
+            .map(AsShot::Neutral)
+            .or(white_xy.map(AsShot::WhiteXy)),
+        baseline_exposure: numbers(tag::BASELINE_EXPOSURE)?
+            .and_then(|v| v.first().copied())
+            .filter(|v| v.is_finite())
+            .unwrap_or(0.0),
+    };
+
+    let list = |t| -> Result<Vec<Opcode>, DngError> {
+        match get(t) {
+            Some(e) => parse_opcode_list(&tiff.blob(e)?)
+                .ok_or_else(|| corrupt(format!("opcode list in tag {t}"))),
+            None => Ok(Vec::new()),
+        }
+    };
+    Ok(RawMetadata {
+        levels: Levels {
+            black,
+            black_repeat: (rows as u16, cols as u16),
+            black_delta_h: numbers(tag::BLACK_LEVEL_DELTA_H)?.unwrap_or_default(),
+            black_delta_v: numbers(tag::BLACK_LEVEL_DELTA_V)?.unwrap_or_default(),
+            white,
+        },
+        active_area,
+        default_crop,
+        color,
+        opcodes: OpcodeLists {
+            list1: list(tag::OPCODE_LIST_1)?,
+            list2: list(tag::OPCODE_LIST_2)?,
+            list3: list(tag::OPCODE_LIST_3)?,
+        },
+        gain_table_map: get(tag::PROFILE_GAIN_TABLE_MAP)
+            .map(|e| tiff.blob(e))
+            .transpose()?,
+    })
+}
+
+/// Reads the full-size linear raw image of a DNG.
+pub fn decode_linear(data: &[u8]) -> Result<LinearDng, DngError> {
+    let tiff = Tiff::new(data).ok_or(DngError::NotTiff)?;
+    let (ifd0, raw) = raw_ifd(&tiff)?;
 
     let photometric = tiff.required_int(&raw, tag::PHOTOMETRIC)?;
     match u16::try_from(photometric) {
@@ -160,8 +368,9 @@ pub fn decode_linear(data: &[u8]) -> Result<LinearDng, DngError> {
         COMPRESSION_JPEG_XL | COMPRESSION_NONE => {}
         COMPRESSION_LOSSLESS_JPEG if cfg!(feature = "raw") => {}
         COMPRESSION_LOSSLESS_JPEG => {
-            return Err(DngError::Unsupported(
-                "compression 7 (lossless JPEG; needs the `raw` feature)".into(),
+            return Err(DngError::NotBuiltIn(
+                "lossless JPEG tiles (compression 7)",
+                "raw",
             ));
         }
         _ => {
@@ -171,22 +380,26 @@ pub fn decode_linear(data: &[u8]) -> Result<LinearDng, DngError> {
     if tiff.first_int(&raw, tag::PLANAR_CONFIGURATION).unwrap_or(1) != 1 {
         return Err(DngError::Unsupported("planar sample layout".into()));
     }
-    if find(&raw, tag::TILE_OFFSETS).is_none() {
-        return Err(DngError::Unsupported(
-            if find(&raw, tag::STRIP_OFFSETS).is_some() {
-                "strips instead of tiles"
-            } else {
-                "no tile offsets"
-            }
-            .into(),
-        ));
-    }
-
     let width = tiff.required_int(&raw, tag::WIDTH)?;
     let height = tiff.required_int(&raw, tag::HEIGHT)?;
     let spp = tiff.first_int(&raw, tag::SAMPLES_PER_PIXEL).unwrap_or(1);
-    let tile_w = tiff.required_int(&raw, tag::TILE_WIDTH)?;
-    let tile_h = tiff.required_int(&raw, tag::TILE_LENGTH)?;
+    // Strips (Samsung) are read as tiles the width of the image.
+    let strips = find(&raw, tag::TILE_OFFSETS).is_none();
+    let (offsets_tag, counts_tag, tile_w, tile_h) = if strips {
+        if find(&raw, tag::STRIP_OFFSETS).is_none() {
+            return Err(corrupt("no tile or strip offsets"));
+        }
+        let rows = tiff.first_int(&raw, tag::ROWS_PER_STRIP).unwrap_or(height);
+        let rows = rows.min(height);
+        (tag::STRIP_OFFSETS, tag::STRIP_BYTE_COUNTS, width, rows)
+    } else {
+        (
+            tag::TILE_OFFSETS,
+            tag::TILE_BYTE_COUNTS,
+            tiff.required_int(&raw, tag::TILE_WIDTH)?,
+            tiff.required_int(&raw, tag::TILE_LENGTH)?,
+        )
+    };
     if !(1..=4).contains(&spp) {
         return Err(DngError::Unsupported(format!("{spp} samples per pixel")));
     }
@@ -212,10 +425,8 @@ pub fn decode_linear(data: &[u8]) -> Result<LinearDng, DngError> {
 
     let tiles_across = width.div_ceil(tile_w);
     let tiles_down = height.div_ceil(tile_h);
-    let offsets =
-        tiff.ints(find(&raw, tag::TILE_OFFSETS).ok_or_else(|| corrupt("TileOffsets"))?)?;
-    let counts =
-        tiff.ints(find(&raw, tag::TILE_BYTE_COUNTS).ok_or_else(|| corrupt("no TileByteCounts"))?)?;
+    let offsets = tiff.ints(find(&raw, offsets_tag).ok_or_else(|| corrupt("no offsets"))?)?;
+    let counts = tiff.ints(find(&raw, counts_tag).ok_or_else(|| corrupt("no byte counts"))?)?;
     let tile_count = (tiles_across as usize) * (tiles_down as usize);
     if offsets.len() != tile_count || counts.len() != tile_count {
         return Err(corrupt(format!(
@@ -236,12 +447,19 @@ pub fn decode_linear(data: &[u8]) -> Result<LinearDng, DngError> {
         .collect::<Result<_, _>>()?;
     // Checked before the output is allocated: tiles that cannot hold their
     // pixels fail here, not after a large allocation.
-    let full_tile_bytes = tile_w as usize * tile_h as usize * spp as usize * 2;
-    for tile in &tiles {
+    let row_bytes = tile_w as usize * spp as usize * 2;
+    for (i, tile) in tiles.iter().enumerate() {
         if tile.is_empty() {
             return Err(corrupt("an empty tile"));
         }
-        if compression == COMPRESSION_NONE && tile.len() < full_tile_bytes {
+        let y0 = (i / tiles_across as usize) * tile_h as usize;
+        // The last strip holds only the rows left; tiles are always full.
+        let rows = if strips {
+            (tile_h as usize).min(height as usize - y0)
+        } else {
+            tile_h as usize
+        };
+        if compression == COMPRESSION_NONE && tile.len() < row_bytes * rows {
             return Err(corrupt("an uncompressed tile is too short"));
         }
     }
@@ -264,7 +482,10 @@ pub fn decode_linear(data: &[u8]) -> Result<LinearDng, DngError> {
         tiles_across: tiles_across as usize,
         bits,
         big_endian: tiff.big_endian,
+        strips,
     };
+    let meta = metadata(&tiff, &ifd0, &raw, spp, bits, (width, height))?;
+
     let len = layout.width * layout.height * layout.spp;
     let mut pixels = Vec::new();
     pixels
@@ -301,16 +522,6 @@ pub fn decode_linear(data: &[u8]) -> Result<LinearDng, DngError> {
         .into_iter()
         .sum();
 
-    let matrix = |m, i| -> Result<Option<ColorMatrix>, DngError> {
-        Ok(match find(&ifd0, m) {
-            Some(e) => Some(ColorMatrix {
-                illuminant: tiff.first_int(&ifd0, i).and_then(|v| u16::try_from(v).ok()),
-                matrix: tiff.numbers(e)?,
-            }),
-            None => None,
-        })
-    };
-    let present = |t| find(&raw, t).is_some() || find(&ifd0, t).is_some();
     Ok(LinearDng {
         width,
         height,
@@ -320,29 +531,8 @@ pub fn decode_linear(data: &[u8]) -> Result<LinearDng, DngError> {
         pixels,
         clamped,
         linearization_entries: table.len(),
-        black_level: match find(&raw, tag::BLACK_LEVEL) {
-            Some(e) => tiff.numbers(e)?,
-            None => vec![0.0],
-        },
-        white_level: match find(&raw, tag::WHITE_LEVEL) {
-            Some(e) => tiff.ints(e)?,
-            None => vec![(1u32 << bits) - 1],
-        },
-        color_matrix_1: matrix(tag::COLOR_MATRIX_1, tag::CALIBRATION_ILLUMINANT_1)?,
-        color_matrix_2: matrix(tag::COLOR_MATRIX_2, tag::CALIBRATION_ILLUMINANT_2)?,
-        as_shot_neutral: find(&ifd0, tag::AS_SHOT_NEUTRAL)
-            .map(|e| tiff.numbers(e))
-            .transpose()?,
-        baseline_exposure: find(&ifd0, tag::BASELINE_EXPOSURE)
-            .map(|e| tiff.numbers(e))
-            .transpose()?
-            .and_then(|v| v.first().copied()),
-        has_gain_table_map: present(tag::PROFILE_GAIN_TABLE_MAP),
-        opcode_lists: [
-            present(tag::OPCODE_LIST_1),
-            present(tag::OPCODE_LIST_2),
-            present(tag::OPCODE_LIST_3),
-        ],
+        orientation: orientation(&tiff, &ifd0),
+        meta,
     })
 }
 
@@ -355,6 +545,8 @@ struct Layout {
     tiles_across: usize,
     bits: u16,
     big_endian: bool,
+    /// Strips, not tiles: the last one holds only the rows left, unpadded.
+    strips: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -364,6 +556,16 @@ struct Placement {
 }
 
 impl Layout {
+    /// Rows a tile or strip stores: the tile height, or for a strip the
+    /// rows that fall inside the image.
+    fn stored_rows(&self, y0: usize) -> usize {
+        if self.strips {
+            self.tile_h.min(self.height - y0)
+        } else {
+            self.tile_h
+        }
+    }
+
     /// Columns and rows of a tile that fall inside the image.
     fn visible(&self, tile: Placement) -> (usize, usize) {
         (
@@ -460,34 +662,22 @@ fn lossless_jpeg_tile(
     band: &mut [u16],
     table: &[u16],
 ) -> Result<u64, DngError> {
-    use rawler::decompressors::ljpeg::LjpegDecompressor;
     let row_len = layout.tile_w * layout.spp;
-    let tile_samples = row_len * layout.tile_h;
-    // rawler is not hardened against bad input the way this module is: keep
-    // a panic in it from taking the process down.
-    let decoded = std::panic::catch_unwind(|| -> Result<Vec<u16>, String> {
-        let ljpeg = LjpegDecompressor::new(bytes)?;
-        let (w, h) = (ljpeg.width(), ljpeg.height());
-        // The stream is read as a flat run of samples, as TIFF lays out a
-        // tile. It must cover the tile, with at most a few rows to spare.
-        match w.checked_mul(h) {
-            Some(n) if n >= tile_samples && n <= tile_samples + 4 * row_len => {}
-            _ => {
-                return Err(format!(
-                    "a {w}x{h} stream for a {row_len}x{} tile",
-                    layout.tile_h
-                ));
-            }
-        }
-        let mut out = Vec::new();
-        out.try_reserve_exact(w * h)
-            .map_err(|_| format!("no memory for a {w}x{h} stream"))?;
-        out.resize(w * h, 0u16);
-        ljpeg.decode(&mut out, 0, w, w, h, false)?;
-        Ok(out)
-    })
-    .map_err(|_| corrupt("lossless JPEG tile: the decoder panicked"))?
-    .map_err(|e| corrupt(format!("lossless JPEG tile: {e}")))?;
+    let stored_rows = layout.stored_rows(tile.y0);
+    let tile_samples = row_len * stored_rows;
+    // The stream is read as a flat run of samples, as TIFF lays out a tile.
+    // It must cover the tile, with at most a few rows to spare.
+    let decoded = crate::ljpeg::decode(bytes, tile_samples + 4 * row_len).map_err(|e| match e {
+        crate::ljpeg::Error::Unsupported(m) => DngError::Unsupported(m),
+        crate::ljpeg::Error::Corrupt(m) => corrupt(format!("lossless JPEG tile: {m}")),
+    })?;
+    if decoded.data.len() < tile_samples {
+        return Err(corrupt(format!(
+            "lossless JPEG tile: a {}x{} stream for a {row_len}x{stored_rows} tile",
+            decoded.width, decoded.height
+        )));
+    }
+    let decoded = decoded.data;
 
     let (cols, rows) = layout.visible(tile);
     let spp = layout.spp;
@@ -519,7 +709,7 @@ fn uncompressed_tile(
         )));
     }
     let row_bytes = layout.tile_w * layout.spp * 2;
-    if bytes.len() < row_bytes * layout.tile_h {
+    if bytes.len() < row_bytes * layout.stored_rows(tile.y0) {
         return Err(corrupt("an uncompressed tile is too short"));
     }
     let (cols, rows) = layout.visible(tile);
@@ -612,6 +802,28 @@ impl<'a> Tiff<'a> {
                 })
             })
             .collect()
+    }
+
+    /// An entry's values as raw bytes, for binary tags (opcode lists, the
+    /// gain table map). Bounded by the file's size, not by `MAX_VALUES`.
+    fn blob(&self, e: Entry) -> Result<Vec<u8>, DngError> {
+        if !matches!(e.ty, 1 | 7) {
+            return Err(corrupt(format!("tag {} is not binary", e.tag)));
+        }
+        let count = e.count as usize;
+        if count <= 4 {
+            return Ok(e.value[..count].to_vec());
+        }
+        let offset = if self.big_endian {
+            u32::from_be_bytes(e.value)
+        } else {
+            u32::from_le_bytes(e.value)
+        } as usize;
+        offset
+            .checked_add(count)
+            .and_then(|end| self.data.get(offset..end))
+            .map(<[u8]>::to_vec)
+            .ok_or_else(|| corrupt(format!("tag {} lies outside the file", e.tag)))
     }
 
     /// Where an entry's values start, and their total size in bytes.
@@ -736,11 +948,15 @@ mod tests {
         ((37 * x + 91 * y + 13 * c) % 1100) as u16
     }
 
+    fn fixture(name: &str) -> Vec<u8> {
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/dng");
+        std::fs::read(format!("{dir}/{name}")).unwrap()
+    }
+
     /// Tiles `<prefix>_<i>.<ext>` of tests/fixtures/dng.
     fn fixture_tiles(prefix: &str, ext: &str) -> Vec<Vec<u8>> {
-        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/dng");
         (0..6)
-            .map(|i| std::fs::read(format!("{dir}/{prefix}_{i}.{ext}")).unwrap())
+            .map(|i| fixture(&format!("{prefix}_{i}.{ext}")))
             .collect()
     }
 
@@ -773,6 +989,7 @@ mod tests {
         Rational(Vec<(u32, u32)>),
         SRational(Vec<(i32, i32)>),
         Undefined(Vec<u8>),
+        Byte(Vec<u8>),
     }
 
     /// A minimal TIFF writer for building test DNGs.
@@ -835,6 +1052,7 @@ mod tests {
                             .collect(),
                     ),
                     Val::Undefined(v) => (7, v.len(), v),
+                    Val::Byte(v) => (1, v.len(), v),
                 };
                 let value = if bytes.len() <= 4 {
                     let mut v = bytes.clone();
@@ -875,6 +1093,8 @@ mod tests {
         table: bool,
         /// The raw image in a SubIFD behind a preview IFD0, or in IFD0.
         sub_ifd: bool,
+        /// Strips of this many rows instead of tiles (`tile` is ignored).
+        strips: Option<u32>,
     }
 
     fn spec(tiles: Vec<Vec<u8>>, compression: u16) -> Spec {
@@ -889,7 +1109,18 @@ mod tests {
             tiles,
             table: true,
             sub_ifd: true,
+            strips: None,
         }
+    }
+
+    /// An OpcodeList2 holding one optional GainMap with 5 parameter bytes.
+    fn gain_map_list() -> Vec<u8> {
+        let mut list = 1u32.to_be_bytes().to_vec();
+        for word in [9u32, 0x0103_0000, 1, 5] {
+            list.extend(word.to_be_bytes());
+        }
+        list.extend([7; 5]);
+        list
     }
 
     fn table() -> Vec<u16> {
@@ -910,19 +1141,41 @@ mod tests {
             (tag::COMPRESSION, Val::Short(vec![s.compression])),
             (tag::PHOTOMETRIC, Val::Short(vec![s.photometric])),
             (tag::SAMPLES_PER_PIXEL, Val::Short(vec![s.spp])),
-            (tag::TILE_WIDTH, Val::Long(vec![s.tile.0])),
-            (tag::TILE_LENGTH, Val::Long(vec![s.tile.1])),
-            (tag::TILE_OFFSETS, Val::Long(offsets)),
-            (
-                tag::TILE_BYTE_COUNTS,
-                Val::Long(s.tiles.iter().map(|t| t.len() as u32).collect()),
-            ),
+        ];
+        let counts = Val::Long(s.tiles.iter().map(|t| t.len() as u32).collect());
+        raw.extend(match s.strips {
+            Some(rows) => vec![
+                (tag::ROWS_PER_STRIP, Val::Long(vec![rows])),
+                (tag::STRIP_OFFSETS, Val::Long(offsets)),
+                (tag::STRIP_BYTE_COUNTS, counts),
+            ],
+            None => vec![
+                (tag::TILE_WIDTH, Val::Long(vec![s.tile.0])),
+                (tag::TILE_LENGTH, Val::Long(vec![s.tile.1])),
+                (tag::TILE_OFFSETS, Val::Long(offsets)),
+                (tag::TILE_BYTE_COUNTS, counts),
+            ],
+        });
+        raw.extend(vec![
             (
                 tag::BLACK_LEVEL,
-                Val::Rational(vec![(1, 2), (0, 1), (3, 1)]),
+                Val::Rational(
+                    [(1, 2), (0, 1), (3, 1)]
+                        .into_iter()
+                        .cycle()
+                        .take(usize::from(s.spp))
+                        .collect(),
+                ),
             ),
             (tag::WHITE_LEVEL, Val::Long(vec![61380])),
-        ];
+            (tag::ACTIVE_AREA, Val::Long(vec![1, 2, s.size.1, s.size.0])),
+            (
+                tag::DEFAULT_CROP_ORIGIN,
+                Val::Rational(vec![(1, 1), (1, 2)]),
+            ),
+            (tag::DEFAULT_CROP_SIZE, Val::Long(vec![30, 20])),
+            (tag::OPCODE_LIST_2, Val::Undefined(gain_map_list())),
+        ]);
         if s.table {
             raw.push((tag::LINEARIZATION_TABLE, Val::Short(table())));
         }
@@ -943,9 +1196,26 @@ mod tests {
             ),
             (tag::CALIBRATION_ILLUMINANT_1, Val::Short(vec![21])),
             (
-                tag::AS_SHOT_NEUTRAL,
-                Val::Rational(vec![(1, 1), (1, 1), (1, 1)]),
+                tag::FORWARD_MATRIX_1,
+                Val::SRational(vec![
+                    (1, 1),
+                    (0, 1),
+                    (0, 1),
+                    (0, 1),
+                    (1, 1),
+                    (0, 1),
+                    (0, 1),
+                    (0, 1),
+                    (1, 1),
+                ]),
             ),
+            (
+                tag::AS_SHOT_NEUTRAL,
+                // A fourth value, as some cameras write: only three are kept.
+                Val::Rational(vec![(1, 2), (1, 1), (3, 4), (0, 0)]),
+            ),
+            (tag::DNG_VERSION, Val::Byte(vec![1, 6, 0, 0])),
+            (tag::ORIENTATION, Val::Short(vec![6])),
             (tag::BASELINE_EXPOSURE, Val::SRational(vec![(-51, 100)])),
             (
                 tag::PROFILE_GAIN_TABLE_MAP,
@@ -995,16 +1265,50 @@ mod tests {
             "the fixture must reach past the table"
         );
         assert_eq!(img.clamped, clamped);
-        assert_eq!(img.black_level, vec![0.5, 0.0, 3.0]);
-        assert_eq!(img.white_level, vec![61380]);
-        let m = img.color_matrix_1.as_ref().unwrap();
+        assert_eq!(img.orientation, 6);
+        let meta = &img.meta;
+        assert_eq!(meta.levels.black, vec![0.5, 0.0, 3.0]);
+        assert_eq!(meta.levels.black_repeat, (1, 1));
+        assert!(meta.levels.black_delta_h.is_empty() && meta.levels.black_delta_v.is_empty());
+        assert_eq!(meta.levels.white, vec![61380; 3]);
+        assert_eq!(
+            meta.active_area,
+            Some(Rect {
+                top: 1,
+                left: 2,
+                bottom: H,
+                right: W
+            })
+        );
+        assert_eq!(
+            meta.default_crop,
+            Some(DefaultCrop {
+                x: 1.0,
+                y: 0.5,
+                width: 30.0,
+                height: 20.0
+            })
+        );
+        let color = &meta.color;
+        let m = color.color_matrix_1.as_ref().unwrap();
         assert_eq!(m.illuminant, Some(21));
         assert_eq!(&m.matrix[..4], &[-0.5, 1.0, 0.0, 0.25]);
-        assert_eq!(img.color_matrix_2, None);
-        assert_eq!(img.as_shot_neutral, Some(vec![1.0; 3]));
-        assert_eq!(img.baseline_exposure, Some(-0.51));
-        assert!(img.has_gain_table_map);
-        assert_eq!(img.opcode_lists, [false; 3]);
+        assert_eq!(color.color_matrix_2, None);
+        assert_eq!(color.forward_matrix_1.as_deref().map(<[f64]>::len), Some(9));
+        assert_eq!(color.forward_matrix_2, None);
+        assert_eq!(color.as_shot, Some(AsShot::Neutral([0.5, 1.0, 0.75])));
+        assert_eq!(color.baseline_exposure, -0.51);
+        assert_eq!(
+            meta.gain_table_map.as_deref(),
+            Some(&[1, 2, 3, 4, 5, 6][..])
+        );
+        assert_eq!(meta.opcodes.list1, Vec::new());
+        assert_eq!(meta.opcodes.list3, Vec::new());
+        let gain = &meta.opcodes.list2;
+        assert_eq!(gain.len(), 1);
+        assert_eq!(gain[0].kind, crate::raw::OpcodeKind::GainMap);
+        assert!(gain[0].optional);
+        assert_eq!(gain[0].params, [7; 5]);
     }
 
     #[test]
@@ -1069,6 +1373,53 @@ mod tests {
         }
     }
 
+    /// Uncompressed 16-bit strips of `rows` rows; the last one holds only
+    /// the rows left, as TIFF writes it.
+    fn raw_strips(rows: u32) -> Vec<Vec<u8>> {
+        (0..H.div_ceil(rows))
+            .map(|i| {
+                let mut out = Vec::new();
+                for y in i * rows..((i + 1) * rows).min(H) {
+                    for x in 0..W {
+                        for c in 0..3 {
+                            out.extend(sample(x, y, c).to_le_bytes());
+                        }
+                    }
+                }
+                out
+            })
+            .collect()
+    }
+
+    #[test]
+    fn strips_with_a_short_last_strip() {
+        let mut s = spec(raw_strips(16), COMPRESSION_NONE);
+        s.strips = Some(16);
+        check(&decode_linear(&build(&s)).unwrap(), true);
+        // A last strip shorter than its rows.
+        s.tiles[1].truncate(W as usize * 6 * 10);
+        assert!(matches!(error(&s), DngError::Corrupt(m) if m.contains("too short")));
+    }
+
+    /// One 12-bit lossless JPEG strip with a restart every 4 rows, as
+    /// Samsung writes them (tests/fixtures/dng/make-restarts.py).
+    #[cfg(feature = "raw")]
+    fn restart_strip() -> Spec {
+        let mut s = spec(
+            vec![fixture("lj12_restarts.ljpg")],
+            COMPRESSION_LOSSLESS_JPEG,
+        );
+        s.bits = 12;
+        s.strips = Some(H);
+        s
+    }
+
+    #[cfg(feature = "raw")]
+    #[test]
+    fn lossless_jpeg_strip_with_restarts() {
+        check(&decode_linear(&build(&restart_strip())).unwrap(), true);
+    }
+
     #[test]
     fn raw_image_in_ifd0() {
         let mut s = spec(jxl_tiles(16), COMPRESSION_JPEG_XL);
@@ -1088,7 +1439,7 @@ mod tests {
 
         if !cfg!(feature = "raw") {
             let s = spec(jxl_tiles(16), COMPRESSION_LOSSLESS_JPEG);
-            assert!(matches!(error(&s), DngError::Unsupported(m) if m.contains("`raw` feature")));
+            assert!(matches!(error(&s), DngError::NotBuiltIn(_, "raw")));
         }
         let s = spec(jxl_tiles(16), 34713);
         assert!(matches!(error(&s), DngError::Unsupported(m) if m.contains("34713")));
@@ -1098,6 +1449,15 @@ mod tests {
         assert!(matches!(error(&s), DngError::Unsupported(_)));
 
         assert!(matches!(decode_linear(b"GIF89a"), Err(DngError::NotTiff)));
+    }
+
+    #[test]
+    fn read_metadata_rejects_a_huge_sample_count() {
+        let mut s = spec(jxl_tiles(16), COMPRESSION_JPEG_XL);
+        s.spp = 60_000;
+        assert!(
+            matches!(read_metadata(&build(&s)), Err(DngError::Unsupported(m)) if m.contains("60000"))
+        );
     }
 
     #[test]
@@ -1134,8 +1494,8 @@ mod tests {
         assert!(matches!(error(&s), DngError::Corrupt(m) if m.contains("empty")));
     }
 
-    /// Writes the seed inputs of the `dng_linear` fuzz target:
-    /// cargo test -p genzo-imgio write_fuzz_seeds -- --ignored
+    /// Writes the seed inputs of the `dng_linear` and `decode` fuzz targets:
+    /// cargo test -p genzo-imgio --features raw write_fuzz_seeds -- --ignored
     #[test]
     #[ignore = "writes files into fuzz/seeds"]
     fn write_fuzz_seeds() {
@@ -1149,6 +1509,15 @@ mod tests {
         let mut ljpeg = spec(fixture_tiles("lj12", "ljpg"), COMPRESSION_LOSSLESS_JPEG);
         ljpeg.bits = 12;
         std::fs::write(format!("{dir}/lossless-jpeg-tiles.dng"), build(&ljpeg)).unwrap();
+        let mut strips = spec(raw_strips(16), COMPRESSION_NONE);
+        strips.strips = Some(16);
+        std::fs::write(format!("{dir}/uncompressed-strips.dng"), build(&strips)).unwrap();
+        #[cfg(feature = "raw")]
+        std::fs::write(
+            format!("{dir}/lossless-jpeg-strip-restarts.dng"),
+            build(&restart_strip()),
+        )
+        .unwrap();
     }
 
     #[test]

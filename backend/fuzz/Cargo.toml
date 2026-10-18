@@ -48,3 +48,14 @@ path = "fuzz_targets/dng_linear.rs"
 test = false
 doc = false
 bench = false
+
+# imgio::decode, the path the pipeline uses: format sniffing, routing, the
+# stage 0 metadata (levels, color tags, opcode lists) and every decoder
+# behind it. Start from the DNG seeds:
+#   cargo +nightly fuzz run decode seeds/dng_linear
+[[bin]]
+name = "decode"
+path = "fuzz_targets/decode.rs"
+test = false
+doc = false
+bench = false

@@ -20,7 +20,8 @@ heic = ["dep:genzo-heif"]
 # The linear DNG reader (src/dng.rs): ProRAW and other LinearRaw DNGs,
 # including JPEG XL tiles (DNG 1.7). Pure Rust (jxl-oxide, MIT OR Apache-2.0).
 dng = ["dep:jxl-oxide", "dep:rayon"]
-# RAW and DNG decoding through rawler (LGPL-2.1, pure Rust). 0.C spike.
+# RAW and CFA DNG decoding through rawler (LGPL-2.1, pure Rust), and the
+# lossless JPEG tiles of iPhone 12 to 15 Pro ProRAW. Implies `dng`.
 raw = ["dep:rawler", "dng"]
 
 [dependencies]
@@ -41,5 +42,15 @@ required-features = ["raw"]
 name = "dng_jxl_probe"
 required-features = ["dng"]
 
+[[example]]
+name = "dng_inventory"
+required-features = ["dng"]
+
 [dev-dependencies]
 genzo-golden.workspace = true
+criterion.workspace = true
+
+[[bench]]
+name = "decode"
+harness = false
+required-features = ["raw"]

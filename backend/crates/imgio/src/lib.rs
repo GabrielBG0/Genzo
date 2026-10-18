@@ -1,16 +1,21 @@
 //! Decoding and encoding of image files.
 //!
 //! Every decoder returns the same normalized [`DecodedImage`], so the
-//! pipeline never sees a file format. HEIC and HEIF decode through the
-//! bundled libheif (the `heic` feature). Linear DNGs (ProRAW, including
-//! JPEG XL tiles) have their own reader in [`dng`] (the `dng` feature), not
-//! yet part of [`decode`]: the normalized RAW output comes with M1. rawler
-//! for camera RAW, and JPEG, TIFF and PNG, are still to come.
+//! pipeline never sees a file format (DEV-01, stage 0). HEIC and HEIF decode
+//! through the bundled libheif (the `heic` feature). Linear DNGs (ProRAW,
+//! including JPEG XL tiles) have their own reader in [`dng`] (the `dng`
+//! feature). rawler for CFA DNG and camera RAW, and JPEG, TIFF and PNG, are
+//! still to come.
 
 #[cfg(feature = "dng")]
 pub mod dng;
 mod heic;
 pub mod jpeg;
+#[cfg(feature = "raw")]
+mod ljpeg;
+pub mod raw;
+
+pub use raw::RawMetadata;
 
 /// A file format Genzo recognizes from its first bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -32,16 +37,27 @@ pub enum FileFormat {
     Orf,
 }
 
+/// Why a file did not decode. The engine shows the photo's embedded preview
+/// for all of them (DEV-01, States): `Corrupt` is the "damaged" state, every
+/// other variant "unsupported".
 #[derive(Debug, thiserror::Error)]
 pub enum DecodeError {
     #[error("unrecognized file format")]
     UnknownFormat,
-    #[error("decoding {0:?} is not implemented yet")]
-    Unsupported(FileFormat),
+    /// A format, or a variant of one, Genzo does not decode (yet).
+    #[error("{0:?} file not supported: {1}")]
+    Unsupported(FileFormat, String),
     #[error("{0:?} support is not included in this build (the `{1}` feature is off)")]
     NotBuiltIn(FileFormat, &'static str),
+    /// Truncated, or failing a decoder's bounds checks.
     #[error("corrupt or unreadable {format:?} file: {message}")]
     Corrupt { format: FileFormat, message: String },
+}
+
+impl DecodeError {
+    fn not_yet(format: FileFormat) -> Self {
+        Self::Unsupported(format, "decoding it is not implemented yet".into())
+    }
 }
 
 /// Identifies a file from its first bytes. Never panics, whatever the input.
@@ -94,13 +110,25 @@ pub enum ColorEncoding {
     Icc(Vec<u8>),
 }
 
-/// Pixel data of a decoded image.
+/// Pixel data of a decoded image, with what is needed to interpret it.
 #[derive(Debug, Clone)]
 pub enum Pixels {
     /// Interleaved RGBA, 16 bits per channel over the full 0..=65535 range,
-    /// encoded per the image's [`ColorEncoding`] (not linear). Non-RAW
-    /// formats decode to this.
-    Rgba16(Vec<u16>),
+    /// encoded per `color` (not linear). Non-RAW formats decode to this.
+    Rgba16 {
+        data: Vec<u16>,
+        color: ColorEncoding,
+    },
+    /// Linear camera samples of a RAW file that needs no demosaic (ProRAW
+    /// and other LinearRaw DNGs), row by row: 3 interleaved samples per
+    /// pixel, or 1 for a monochrome image. They are after the
+    /// LinearizationTable and before the levels, white balance and
+    /// BaselineExposure, which the pipeline applies from `raw`.
+    Linear {
+        samples_per_pixel: u8,
+        data: Vec<u16>,
+        raw: Box<RawMetadata>,
+    },
 }
 
 /// The normalized decode output every decoder produces.
@@ -112,10 +140,13 @@ pub struct DecodedImage {
     /// Bits per channel in the file, before widening to 16.
     pub source_bits: u8,
     pub has_alpha: bool,
-    pub color: ColorEncoding,
     pub pixels: Pixels,
-    /// Raw EXIF (TIFF structure), for metadata. Its orientation tag is
-    /// already reflected in the pixels and must not be applied again.
+    /// The EXIF or DNG orientation, 1 to 8, *not* applied to the pixels: the
+    /// pipeline's geometry step applies it (DEV-01, Geometry). HEIC reports
+    /// 1, since libheif applies the container's rotation and mirror itself.
+    pub orientation: u8,
+    /// Raw EXIF (TIFF structure), for metadata. Use `orientation`, never the
+    /// orientation tag in here.
     pub exif: Option<Vec<u8>>,
 }
 
@@ -146,8 +177,57 @@ impl Default for DecodeOptions {
 pub fn decode(data: &[u8], options: DecodeOptions) -> Result<DecodedImage, DecodeError> {
     match sniff(data).ok_or(DecodeError::UnknownFormat)? {
         FileFormat::Heif => heic::decode(data, options),
-        other => Err(DecodeError::Unsupported(other)),
+        FileFormat::Tiff => decode_tiff(data),
+        other => Err(DecodeError::not_yet(other)),
     }
+}
+
+/// DNG, told apart from plain TIFF and TIFF-based camera RAW by its
+/// DNGVersion tag.
+#[cfg(feature = "dng")]
+fn decode_tiff(data: &[u8]) -> Result<DecodedImage, DecodeError> {
+    use dng::DngError;
+    let format = FileFormat::Tiff;
+    if !dng::is_dng(data) {
+        return Err(DecodeError::not_yet(format));
+    }
+    let corrupt = |message: String| DecodeError::Corrupt { format, message };
+    let img = dng::decode_linear(data).map_err(|e| match e {
+        DngError::Unsupported(m) => DecodeError::Unsupported(format, m),
+        DngError::NotBuiltIn(_, feature) => DecodeError::NotBuiltIn(format, feature),
+        DngError::Corrupt(m) => corrupt(m),
+        e @ (DngError::NotTiff | DngError::NoRawImage | DngError::TooLarge(_)) => {
+            corrupt(e.to_string())
+        }
+    })?;
+    if !matches!(img.samples_per_pixel, 1 | 3) {
+        return Err(DecodeError::Unsupported(
+            format,
+            format!(
+                "a linear DNG with {} samples per pixel",
+                img.samples_per_pixel
+            ),
+        ));
+    }
+    Ok(DecodedImage {
+        format,
+        width: img.width,
+        height: img.height,
+        source_bits: img.bits_per_sample as u8,
+        has_alpha: false,
+        pixels: Pixels::Linear {
+            samples_per_pixel: img.samples_per_pixel,
+            data: img.pixels,
+            raw: Box::new(img.meta),
+        },
+        orientation: img.orientation,
+        exif: None,
+    })
+}
+
+#[cfg(not(feature = "dng"))]
+fn decode_tiff(_: &[u8]) -> Result<DecodedImage, DecodeError> {
+    Err(DecodeError::NotBuiltIn(FileFormat::Tiff, "dng"))
 }
 
 /// Decodes a file's embedded preview, if it has one. Fast enough for the
@@ -155,7 +235,7 @@ pub fn decode(data: &[u8], options: DecodeOptions) -> Result<DecodedImage, Decod
 pub fn decode_preview(data: &[u8]) -> Result<Option<Preview>, DecodeError> {
     match sniff(data).ok_or(DecodeError::UnknownFormat)? {
         FileFormat::Heif => heic::decode_preview(data),
-        other => Err(DecodeError::Unsupported(other)),
+        other => Err(DecodeError::not_yet(other)),
     }
 }
 
@@ -184,8 +264,19 @@ mod tests {
         ));
         assert!(matches!(
             decode(&[0xFF, 0xD8, 0xFF, 0xE1], DecodeOptions::default()),
-            Err(DecodeError::Unsupported(FileFormat::Jpeg))
+            Err(DecodeError::Unsupported(FileFormat::Jpeg, _))
         ));
+        // A TIFF without DNGVersion: plain TIFF or camera RAW, not read yet.
+        let plain_tiff = b"II*\0\x08\0\0\0\0\0\0\0\0\0";
+        let err = decode(plain_tiff, DecodeOptions::default()).unwrap_err();
+        if cfg!(feature = "dng") {
+            assert!(matches!(err, DecodeError::Unsupported(FileFormat::Tiff, _)));
+        } else {
+            assert!(matches!(
+                err,
+                DecodeError::NotBuiltIn(FileFormat::Tiff, "dng")
+            ));
+        }
     }
 
     #[test]
