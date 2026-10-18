@@ -12,7 +12,6 @@ mod sdk_stage2;
 
 use std::sync::{Mutex, MutexGuard};
 
-use genzo_golden::corpus;
 use genzo_imgio::{DecodeOptions, decode};
 use genzo_pipeline::gpu::raw_stages::{RawStages, TileConfig, Until};
 use genzo_pipeline::gpu::{AdapterChoice, Gpu, GpuError};
@@ -33,7 +32,7 @@ fn gpu() -> Option<(MutexGuard<'static, ()>, Gpu)> {
 }
 
 fn load(key: &str) -> Option<RawSource> {
-    let bytes = std::fs::read(corpus(key)?).unwrap();
+    let bytes = std::fs::read(sdk_stage2::corpus_file(key)?).unwrap();
     Some(RawSource::from_decoded(decode(&bytes, DecodeOptions::default()).unwrap()).unwrap())
 }
 

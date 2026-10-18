@@ -234,6 +234,25 @@ pub(crate) fn decode_dng(data: &[u8]) -> Result<DecodedImage, DecodeError> {
     })
 }
 
+/// A black level pattern (`rows` × `cols`, row by row) that starts at the
+/// sensor's first sample, as rawler gives it, made to start at the active
+/// area's top left `(left, top)` instead, as DNG and `Levels` do. The same
+/// shift as rawler's own `BlackLevel::shift`, which its DNG writer uses.
+fn black_from_active_area(
+    black: &[f64],
+    rows: usize,
+    cols: usize,
+    (left, top): (u32, u32),
+) -> Vec<f64> {
+    (0..rows * cols)
+        .map(|i| {
+            let r = (i / cols + top as usize) % rows;
+            let c = (i % cols + left as usize) % cols;
+            black[r * cols + c]
+        })
+        .collect()
+}
+
 /// rawler's rectangle as ours, if it is non-empty and lies inside the
 /// image. rawler builds it from file data without checks.
 fn rect(r: &rawler::imgop::Rect, width: usize, height: usize) -> Option<Rect> {
@@ -287,16 +306,7 @@ fn metadata(img: &RawImage, format: FileFormat) -> Result<RawMetadata, DecodeErr
         None => None,
     };
     let origin = active.map_or((0, 0), |a| (a.left, a.top));
-    // rawler's pattern starts at the sensor's first sample; ours, as in DNG,
-    // at the active area's top left.
-    let black: Vec<f64> = (0..rows * cols)
-        .map(|i| {
-            let (r, c) = (i / cols, i % cols);
-            let r = (r + origin.1 as usize) % rows;
-            let c = (c + origin.0 as usize) % cols;
-            black[r * cols + c]
-        })
-        .collect();
+    let black = black_from_active_area(&black, rows, cols, origin);
     let default_crop = match &img.crop_area {
         Some(c) => {
             let c = rect(c, img.width, img.height).ok_or_else(|| bad("crop", c))?;
@@ -392,6 +402,33 @@ fn cct(illuminant: u16) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn black_pattern_moves_to_the_active_area() {
+        // Sensor sites (0, 0) 10, (0, 1) 11, (1, 0) 12, (1, 1) 13.
+        let black = [10.0, 11.0, 12.0, 13.0];
+        assert_eq!(black_from_active_area(&black, 2, 2, (0, 0)), black);
+        // Active area at column 1, row 0: its first site is sensor (0, 1).
+        assert_eq!(
+            black_from_active_area(&black, 2, 2, (1, 0)),
+            [11.0, 10.0, 13.0, 12.0]
+        );
+        // At (3, 5): odd both ways, so sensor (1, 1) first.
+        assert_eq!(
+            black_from_active_area(&black, 2, 2, (3, 5)),
+            [13.0, 12.0, 11.0, 10.0]
+        );
+        // Against rawler's own shift, on a 3 x 2 pattern.
+        let six: Vec<u32> = (0..6).collect();
+        let shifted = rawler::rawimage::BlackLevel::new(&six, 2, 3, 1).shift(1, 2);
+        let ours = black_from_active_area(&[0.0, 1.0, 2.0, 3.0, 4.0, 5.0], 3, 2, (1, 2));
+        let theirs: Vec<f64> = shifted
+            .levels
+            .iter()
+            .map(|r| f64::from(r.as_f32()))
+            .collect();
+        assert_eq!(ours, theirs);
+    }
 
     fn fixture(name: &str) -> Vec<u8> {
         let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/dng");

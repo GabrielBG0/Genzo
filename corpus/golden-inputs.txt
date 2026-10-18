@@ -9,3 +9,4 @@ raw/OM Digital Solutions/OM-3/P5048182.ORF
 raw/Fujifilm/X-T5/DSCF0021.RAF
 raw/Pentax/K10D/IMGP5398.DNG
 raw/Google/Pixel 4a/PXL_20201121_100251397.dng
+raw/Leica/Q2/L1000750.DNG

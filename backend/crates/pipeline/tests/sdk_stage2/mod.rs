@@ -2,7 +2,28 @@
 //! (tests/fixtures/sdk-stage2, written by scripts/stage1-reference.py), and
 //! the comparison of a stage 1 result against them.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+/// A corpus file, or None to skip it. CI fetches the files listed in
+/// corpus/golden-inputs.txt and requires those (GENZO_REQUIRE_CORPUS=1);
+/// the others (the Halide DNG is not on raw.pixls.us) are local only.
+pub fn corpus_file(key: &str) -> Option<PathBuf> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../corpus");
+    let path = root.join(key);
+    if path.exists() {
+        return Some(path);
+    }
+    let listed = std::fs::read_to_string(root.join("golden-inputs.txt"))
+        .unwrap_or_default()
+        .lines()
+        .any(|l| l.trim() == key);
+    if listed {
+        // Panics when CI requires the corpus, else skips with a message.
+        return genzo_golden::corpus(key);
+    }
+    eprintln!("skipped: {key} is local only and missing");
+    None
+}
 
 pub struct Crop {
     pub x: u32,

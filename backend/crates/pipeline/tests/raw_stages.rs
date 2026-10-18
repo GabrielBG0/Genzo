@@ -177,27 +177,30 @@ fn bayer() -> RawSource {
     }
 }
 
-/// A linear RGB image of the same scene, black levels per sample.
-fn linear() -> RawSource {
+/// A linear RGB image of the same scene, black levels per sample; with one
+/// sample, a monochrome plane (the scene's green).
+fn linear_with(samples: u32) -> RawSource {
     let stored = (W + LEFT + 7, H + TOP + 7);
-    let lin = Linearization::new(&levels(3), 3, (W, H)).unwrap();
-    let mut data = vec![600u16; (stored.0 * stored.1 * 3) as usize];
+    let n = samples as usize;
+    let lin = Linearization::new(&levels(n), samples, (W, H)).unwrap();
+    let mut data = vec![600u16; (stored.0 * stored.1 * samples) as usize];
     for ay in 0..H {
         for ax in 0..W {
             let (x, y) = (ax + LEFT, ay + TOP);
             let rgb = scene(ax, ay, W, H);
-            for p in 0..3 {
+            for p in 0..n {
                 let black = f64::from(lin.black(ay, ax, p)) / f64::from(lin.scale[p]);
-                let code =
-                    value(rgb[p]) / f64::from(lin.scale[p]) + black + noise(x * 3 + p as u32, y);
-                data[((y * stored.0 + x) * 3) as usize + p] =
+                let code = value(rgb[if n == 1 { 1 } else { p }]) / f64::from(lin.scale[p])
+                    + black
+                    + noise(x * 3 + p as u32, y);
+                data[((y * stored.0 + x) * samples) as usize + p] =
                     code.round().clamp(0.0, 65535.0) as u16;
             }
         }
     }
     RawSource {
         stored,
-        samples: 3,
+        samples,
         data,
         bayer: None,
         active: Rect {
@@ -208,8 +211,12 @@ fn linear() -> RawSource {
         },
         linearization: lin,
         fix_bad_pixels: Vec::new(),
-        gain_maps: gain_maps(3),
+        gain_maps: gain_maps(samples),
     }
+}
+
+fn linear() -> RawSource {
+    linear_with(3)
 }
 
 const ONE_TILE: TileConfig = TileConfig {
@@ -244,7 +251,12 @@ fn tiles_equal_one_tile_bit_for_bit() {
     let mut plain = bayer();
     plain.gain_maps.clear();
     plain.fix_bad_pixels.clear();
-    for (name, src) in [("bayer", bayer()), ("linear", linear()), ("plain", plain)] {
+    for (name, src) in [
+        ("bayer", bayer()),
+        ("linear", linear()),
+        ("mono", linear_with(1)),
+        ("plain", plain),
+    ] {
         for until in [Until::Stage2, Until::Stage3] {
             let whole = render(&gpu, ONE_TILE, &src, until);
             let tiled = render(&gpu, SMALL, &src, until);
@@ -267,8 +279,19 @@ fn a_narrow_apron_shows() {
 #[test]
 fn stages_1_and_2_match_the_reference() {
     let Some((_lock, gpu)) = gpu() else { return };
-    for (name, src) in [("bayer", bayer()), ("linear", linear())] {
+    for (name, src) in [
+        ("bayer", bayer()),
+        ("linear", linear()),
+        ("mono", linear_with(1)),
+    ] {
         let got = render(&gpu, SMALL, &src, Until::Stage2);
+        // A monochrome plane comes back copied to R, G and B.
+        let got: Vec<f32> = if name == "mono" {
+            assert!(got.chunks(3).all(|c| c[0] == c[1] && c[1] == c[2]));
+            got.chunks(3).map(|c| c[0]).collect()
+        } else {
+            got
+        };
         let mut want = stage1(&src);
         stage2(&mut want, &src, WB);
         if src.bayer.is_some() {
@@ -370,7 +393,18 @@ fn golden_raw_stages() {
         genzo_golden::Producer::Gpu {
             adapter: gpu.info.name.clone(),
         },
-    );
+    )
+    // RCD's direction choices can flip between adapters that fuse
+    // multiply-adds and those that do not (see rcd_matches_the_darktable_
+    // reference), which moves a few pixels a lot. Measured WARP against the
+    // RTX 3060: PSNR 77.6 dB, ΔE p99 0.015, 0.003 % of pixels above ΔE 1, max
+    // 2.3. So the mean and PSNR stay tight and only the maximum is loosened.
+    .with_tolerance(genzo_golden::Tolerance {
+        mean_de: 0.05,
+        max_de: 6.0,
+        min_psnr_db: 65.0,
+        max_abs: None,
+    });
     let pixels = rgb.chunks(3).map(|c| [c[0], c[1], c[2]]).collect();
     genzo_golden::check(&case, &genzo_golden::Image::new(W, H, pixels));
 }

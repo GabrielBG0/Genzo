@@ -107,6 +107,9 @@ jobs:
         run: |
           cargo clippy --locked -p genzo-imgio --all-targets --features raw
           cargo test --locked -p genzo-imgio --features raw
+          # Stage 1 against the DNG SDK's own stage 2 image, and the GainMaps
+          # against Adobe DNG Converter: CPU only, on the same corpus.
+          cargo test --locked -p genzo-pipeline --test stage1_sdk --test gain_map
       # GPU tests run here on whatever adapter the runner has (WARP on Windows,
       # Metal on macOS) and are skipped without one; the gpu job below requires
       # the reference device.

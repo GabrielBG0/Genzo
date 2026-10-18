@@ -1,7 +1,13 @@
 //! Criterion benchmark for stages 1 to 3 on the GPU, tile by tile, on a
 //! 12 MP synthetic Bayer sensor (DEV-01, Tiling): the settled render's work
 //! up to the demosaic. Each tile is read back for now; plan step 5b2 feeds
-//! the tiles to stage 4 and the pyramid instead, which removes most of that.
+//! the tiles to stage 4 and the pyramid instead.
+//!
+//! Measured on the RTX 3060 (2026-10-18), stages 1 to 3: 107 ms per 12 MP
+//! frame. Copying the mapped RGBA32F tiles out takes about 58 ms of that and
+//! goes away in 5b2; the GPU work and the copy into the readback buffer about
+//! 18 ms; uploading the raw tiles (straight from the stored rows, no
+//! repacking) about 1 ms.
 //!
 //! Skipped without a GPU adapter. `GENZO_ADAPTER=software` benchmarks the
 //! software adapter.

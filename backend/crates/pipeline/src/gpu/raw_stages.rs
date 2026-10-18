@@ -78,6 +78,7 @@ struct MapUniform {
 #[derive(Clone, Copy)]
 enum Slot {
     Float,
+    Uint,
     Storage,
     Store(wgpu::TextureFormat),
 }
@@ -103,6 +104,11 @@ fn pass(device: &wgpu::Device, name: &str, body: &str, slots: &[Slot]) -> Pass {
         let ty = match *slot {
             Slot::Float => wgpu::BindingType::Texture {
                 sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                view_dimension: wgpu::TextureViewDimension::D2,
+                multisampled: false,
+            },
+            Slot::Uint => wgpu::BindingType::Texture {
+                sample_type: wgpu::TextureSampleType::Uint,
                 view_dimension: wgpu::TextureViewDimension::D2,
                 multisampled: false,
             },
@@ -162,7 +168,7 @@ struct Passes {
 
 impl Passes {
     fn new(device: &wgpu::Device) -> Self {
-        use Slot::{Float, Storage, Store};
+        use Slot::{Float, Storage, Store, Uint};
         use wgpu::TextureFormat::{R32Float, Rg32Float, Rgba32Float};
         Self {
             stage1: pass(
@@ -170,7 +176,7 @@ impl Passes {
                 "tile stage 1",
                 include_str!("shaders/tile_stage1.wgsl"),
                 &[
-                    Storage,
+                    Uint,
                     Storage,
                     Storage,
                     Storage,
@@ -257,7 +263,8 @@ fn storage(device: &wgpu::Device, label: &str, bytes: u64) -> wgpu::Buffer {
 #[derive(Debug)]
 struct Tiles {
     size: (u32, u32),
-    raw: wgpu::Buffer,
+    /// The raw rect: one 16-bit sample per texel, `samples` texels per pixel.
+    raw: wgpu::Texture,
     cfa: wgpu::Texture,
     vh: wgpu::Texture,
     lpf: wgpu::Texture,
@@ -273,10 +280,22 @@ impl Tiles {
     fn new(device: &wgpu::Device, size: (u32, u32), samples: u32) -> Self {
         use wgpu::TextureFormat::{R32Float, Rg32Float, Rgba32Float};
         let (w, h) = (size.0 + 2 * RAW_MARGIN, size.1 + 2 * RAW_MARGIN);
-        let raw_bytes = u64::from(w) * u64::from(h) * u64::from(samples) * 2;
         Self {
             size,
-            raw: storage(device, "tile raw", raw_bytes),
+            raw: device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("tile raw"),
+                size: wgpu::Extent3d {
+                    width: w * samples,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::R16Uint,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            }),
             cfa: texture(device, "tile cfa", size, R32Float),
             vh: texture(device, "tile vh", size, R32Float),
             lpf: texture(device, "tile lpf", size, R32Float),
@@ -342,7 +361,8 @@ impl RawStages {
         self.tiles.as_ref().map_or(0, |t| {
             let px = u64::from(t.size.0) * u64::from(t.size.1);
             // cfa, vh, lpf, pq_dir, green: 4 B; pq, rb: 8 B; rgb: 16 B.
-            t.raw.size() + px * (5 * 4 + 2 * 8 + 16) + t.readback.size()
+            let raw = u64::from(t.raw.width()) * u64::from(t.raw.height()) * 2;
+            raw + px * (5 * 4 + 2 * 8 + 16) + t.readback.size()
         })
     }
 
@@ -377,11 +397,8 @@ impl RawStages {
         let fits = self.tiles.as_ref().is_some_and(|t| {
             t.size.0 >= largest.0
                 && t.size.1 >= largest.1
-                && t.raw.size()
-                    >= u64::from(largest.0 + 2 * RAW_MARGIN)
-                        * u64::from(largest.1 + 2 * RAW_MARGIN)
-                        * u64::from(src.samples)
-                        * 2
+                && t.raw.width() >= (largest.0 + 2 * RAW_MARGIN) * src.samples
+                && t.raw.height() >= largest.1 + 2 * RAW_MARGIN
         });
         if !fits {
             self.tiles = None;
@@ -518,24 +535,30 @@ impl RawStages {
         gpu.queue
             .write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&uniforms));
 
-        // The raw rect, two 16-bit samples per word.
+        // The raw rect straight from the stored image, at its row stride.
         let n = src.samples as usize;
-        let mut words = Vec::with_capacity((job.raw.width * job.raw.height) as usize * n / 2 + 1);
-        let mut pending: Option<u16> = None;
-        for y in job.raw.y..job.raw.y + job.raw.height {
-            let start = (y as usize * src.stored.0 as usize + job.raw.x as usize) * n;
-            for &s in &src.data[start..start + job.raw.width as usize * n] {
-                match pending.take() {
-                    Some(lo) => words.push(u32::from(lo) | u32::from(s) << 16),
-                    None => pending = Some(s),
-                }
-            }
-        }
-        if let Some(lo) = pending {
-            words.push(u32::from(lo));
-        }
-        gpu.queue
-            .write_buffer(&t.raw, 0, bytemuck::cast_slice(&words));
+        let stride = src.stored.0 as usize * n;
+        let start = job.raw.y as usize * stride + job.raw.x as usize * n;
+        let end = start + (job.raw.height as usize - 1) * stride + job.raw.width as usize * n;
+        gpu.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &t.raw,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            bytemuck::cast_slice(&src.data[start..end]),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(stride as u32 * 2),
+                rows_per_image: Some(job.raw.height),
+            },
+            wgpu::Extent3d {
+                width: job.raw.width * src.samples,
+                height: job.raw.height,
+                depth_or_array_layers: 1,
+            },
+        );
 
         let u = self.uniforms.as_entire_binding();
         let bind = |pass: &Pass, resources: Vec<wgpu::BindingResource>| {
@@ -562,7 +585,7 @@ impl RawStages {
             bind(
                 &ps.stage1,
                 vec![
-                    t.raw.as_entire_binding(),
+                    views.r(&views.raw),
                     image.black.as_entire_binding(),
                     image.maps.as_entire_binding(),
                     image.gains.as_entire_binding(),
@@ -698,6 +721,7 @@ impl RawStages {
 
 /// Views of the tile textures, for one tile's bind groups.
 struct TileViews {
+    raw: wgpu::TextureView,
     cfa: wgpu::TextureView,
     vh: wgpu::TextureView,
     lpf: wgpu::TextureView,
@@ -711,6 +735,7 @@ struct TileViews {
 impl TileViews {
     fn new(t: &Tiles) -> Self {
         Self {
+            raw: view(&t.raw),
             cfa: view(&t.cfa),
             vh: view(&t.vh),
             lpf: view(&t.lpf),

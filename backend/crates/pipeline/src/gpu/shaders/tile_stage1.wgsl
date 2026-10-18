@@ -16,7 +16,7 @@ struct Map {
     geo: vec4<f32>,
 }
 
-@group(0) @binding(1) var<storage, read> raw: array<u32>;
+@group(0) @binding(1) var raw: texture_2d<u32>;
 @group(0) @binding(2) var<storage, read> black: array<f32>;
 @group(0) @binding(3) var<storage, read> maps: array<Map>;
 @group(0) @binding(4) var<storage, read> gains: array<f32>;
@@ -26,8 +26,8 @@ struct Map {
 // The stored sample at stored `s`, plane `plane`; `s` must lie in the raw rect.
 fn raw_at(s: vec2<i32>, plane: u32) -> u32 {
     let r = vec2<i32>(tile.raw.xy);
-    let i = (u32(s.y - r.y) * tile.raw.z + u32(s.x - r.x)) * tile.info.x + plane;
-    return (raw[i >> 1u] >> ((i & 1u) * 16u)) & 0xFFFFu;
+    let x = (s.x - r.x) * i32(tile.info.x) + i32(plane);
+    return textureLoad(raw, vec2<i32>(x, s.y - r.y), 0).r;
 }
 
 fn in_raw(s: vec2<i32>) -> bool {

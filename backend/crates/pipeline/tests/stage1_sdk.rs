@@ -5,7 +5,6 @@
 
 mod sdk_stage2;
 
-use genzo_golden::corpus;
 use genzo_imgio::{DecodeOptions, decode};
 use genzo_pipeline::raw::RawSource;
 use genzo_pipeline::reference::stages::stage1;
@@ -28,7 +27,9 @@ const MEAN: f64 = 2e-6;
 #[test]
 fn cpu_stage1_matches_the_sdk() {
     for r in sdk_stage2::references() {
-        let Some(path) = corpus(&r.key) else { continue };
+        let Some(path) = sdk_stage2::corpus_file(&r.key) else {
+            continue;
+        };
         let img = decode(&std::fs::read(path).unwrap(), DecodeOptions::default()).unwrap();
         let src = RawSource::from_decoded(img).unwrap();
         assert_eq!(src.size(), (r.width, r.height), "{}", r.name);
@@ -53,7 +54,7 @@ fn negative_controls_fail() {
     let refs = sdk_stage2::references();
     let load = |name: &str| {
         let r = refs.iter().find(|r| r.name == name).unwrap();
-        let path = corpus(&r.key)?;
+        let path = sdk_stage2::corpus_file(&r.key)?;
         let img = decode(&std::fs::read(path).unwrap(), DecodeOptions::default()).unwrap();
         Some((r, RawSource::from_decoded(img).unwrap()))
     };
