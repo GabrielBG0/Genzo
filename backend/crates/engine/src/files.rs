@@ -65,6 +65,7 @@ fn describe_encoding(color: &ColorEncoding) -> String {
             }
         ),
         ColorEncoding::Icc(icc) => format!("ICC profile, {} bytes", icc.len()),
+        ColorEncoding::AdobeRgb => "Adobe RGB (EXIF, no profile)".into(),
     }
 }
 

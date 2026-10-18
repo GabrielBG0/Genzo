@@ -348,3 +348,28 @@ fn every_corpus_file_is_recognized() {
         );
     }
 }
+
+/// A TIFF-based camera RAW cut short is damaged; it never comes back as the
+/// thumbnail in its IFD0 (the plain-TIFF fallback refuses a reduced or
+/// small first image). The Kodak DCR is on the CI list; the others local.
+#[test]
+fn truncated_camera_raw_is_never_its_thumbnail() {
+    for key in [
+        "raw/Kodak/DCS760C/86L57188.DCR",
+        "raw/Nikon/D850/Nikon-D850-12bit-compressed.NEF",
+        "raw/Sony/ILCE-7RM5/7RM5-LosslessCompressedLarge.ARW",
+        "raw/Phase One/P65+/CF027310.IIQ",
+    ] {
+        let Some(bytes) = file(key) else { continue };
+        let half = &bytes[..bytes.len() / 2];
+        match decode(half, DecodeOptions::default()) {
+            Ok(img) => panic!(
+                "{key} cut in half decoded as {}x{} {:?}",
+                img.width,
+                img.height,
+                std::mem::discriminant(&img.pixels)
+            ),
+            Err(e) => println!("{key}: {e}"),
+        }
+    }
+}

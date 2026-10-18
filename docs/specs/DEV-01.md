@@ -82,7 +82,20 @@ Which decoder reads which format:
     - White levels come from rawler's camera database and differ from LibRaw's on 9 of the 13 compared files (for example D850: 3880 against 4095; CR3: 14888 against 16383). Stage 2's highlight clipping depends on them, so they are checked again when stage 2 is built.
   - **Unsupported by name:** Nikon High Efficiency ("Nikon High Efficiency RAW is not supported yet") and GoPro GPR (VC-5).
 - **Nikon High Efficiency:** the JPEG XS decoder (decided), behind the `jpeg-xs` cargo feature that release builds leave off (patent pool, see `docs/licenses.md`). Without the feature, and until the decoder lands, these files are *unsupported* (see States).
-- **HEIC:** libheif. **JPEG:** zune-jpeg (the spec's choice). **TIFF, PNG:** pure-Rust decoders chosen in the implementation PR, after a license check.
+- **HEIC:** libheif.
+- **JPEG:** zune-jpeg 0.5.15 (the spec's choice), to RGBA16.
+  - The color encoding is the ICC profile if there is one; otherwise Adobe RGB when EXIF declares it the DCF way (ColorSpace 0xFFFF with Interoperability index "R03"), which cameras set to Adobe RGB write instead of a profile; otherwise sRGB.
+  - Unsupported: CMYK and YCCK, 12-bit, arithmetic-coded and lossless JPEG.
+  - Against libjpeg-turbo the samples differ by at most 1 step (8-bit) for grayscale, 2 for 4:4:4, 3 for 4:2:2 and 4 for 4:2:0, with a mean under 0.33 step (`imgio/tests/image_formats.rs`). The IDCTs agree to a step; the rest is chroma upsampling at color edges.
+- **PNG:** the png crate 0.17.16. Palette, tRNS and 1, 2 and 4-bit gray are expanded; 16-bit stays 16-bit; Adam7 is deinterlaced; the orientation comes from eXIf.
+  - Color by PNG 3's precedence: cICP, then iCCP, then sRGB.
+  - A file with only gAMA or cHRM, or no color chunk, is taken as sRGB (decided for M1).
+- **TIFF (plain images):** the tiff crate 0.11.3. 8 and 16-bit gray, gray and alpha, RGB and RGBA, in strips or tiles, chunky or planar, uncompressed, LZW, Deflate, PackBits or JPEG.
+  - YCbCr from JPEG-in-TIFF is converted to RGB with the file's YCbCrCoefficients and ReferenceBlackWhite.
+  - Associated (premultiplied) alpha is turned into straight alpha.
+  - Unsupported: CMYK, Lab, palette (the tiff crate refuses it), floating point, bilevel.
+  - **Routing:** a non-DNG TIFF goes to the camera decoder first. Only if that fails, and IFD0 holds a full image the way a plain TIFF does, is it read as a TIFF image. IFD0 must not be reduced-resolution, must have a TIFF 6 photometric, and its image data must be at least half the file, or everything else under 64 KiB. So an exported TIFF whose Make names a camera opens, and a truncated NEF, ARW or IIQ never comes back as its thumbnail.
+- Every non-RAW decoder checks the size against the 400 MP limit before allocating. The decoders' own limits are raised to match: zune-jpeg's 16384 px per side, png's 64 MiB and tiff's 256 MiB defaults would refuse real panoramas and large TIFFs.
 
 Large linear DNGs decode their tiles in parallel and stream them into stage 1. No full-size `u16` copy is held beside the input, so a 48 MP ProRAW peaks below the 445 MiB measured in M0.
 

@@ -46,7 +46,13 @@ wgpu = { version = "=30.0.1", default-features = false, features = ["wgsl", "dx1
 pollster = "=1.0.1"
 bytemuck = { version = "1", features = ["derive"] }
 criterion = { version = "=0.8.2", default-features = false }
-png = "0.17"
+# Image decoders for non-RAW files (imgio). Pinned exactly: they parse
+# untrusted files. zune-jpeg and png are the versions already in rawler's
+# tree.
+png = "=0.17.16"
+zune-jpeg = "=0.5.15"
+zune-core = "=0.5.3"
+tiff = { version = "=0.11.3", default-features = false, features = ["deflate", "lzw", "jpeg"] }
 half = "2"
 
 [workspace.lints.rust]

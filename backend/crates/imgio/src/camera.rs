@@ -49,7 +49,7 @@ fn rawler_error(format: FileFormat, e: RawlerError) -> DecodeError {
         RawlerError::Unsupported { what, .. }
             if format == FileFormat::Tiff && what.contains("No decoder found") =>
         {
-            unsupported(format, "plain TIFF images are not supported yet")
+            unsupported(format, crate::NOT_A_CAMERA_RAW)
         }
         RawlerError::Unsupported {
             what, make, model, ..

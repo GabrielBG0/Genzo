@@ -63,3 +63,27 @@ bench = false
 # rawler 0.8.0 with Genzo's patch, as in backend/Cargo.toml (vendor/README.md).
 [patch.crates-io]
 rawler = { path = "../vendor/rawler" }
+
+# The non-RAW decoders, one target each, through imgio::decode and only on
+# their own format. Seeds are copies of crates/imgio/tests/fixtures/images:
+#   cargo +nightly fuzz run jpeg seeds/jpeg   (and png, tiff)
+[[bin]]
+name = "jpeg"
+path = "fuzz_targets/jpeg.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "png"
+path = "fuzz_targets/png.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "tiff"
+path = "fuzz_targets/tiff.rs"
+test = false
+doc = false
+bench = false

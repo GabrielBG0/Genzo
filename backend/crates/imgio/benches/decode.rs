@@ -55,5 +55,61 @@ fn decode(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, decode);
+/// JPEG, PNG and TIFF of the same 12 MP photo. The corpus has no CC0 JPEG
+/// or PNG, so they are made here from Adobe's 16-bit TIFF render of the
+/// iPhone 12 Pro file (corpus/reference, local only): a real photo's
+/// content, which is what compression speed depends on.
+fn non_raw(c: &mut Criterion) {
+    let Some(path) = corpus("reference/IMG_1361/IMG_1361.tiff") else {
+        return;
+    };
+    let tiff = std::fs::read(path).unwrap();
+    let img = genzo_imgio::decode(&tiff, DecodeOptions::default()).unwrap();
+    let genzo_imgio::Pixels::Rgba16 { data, .. } = &img.pixels else {
+        unreachable!("a TIFF decodes to RGBA16")
+    };
+    let (w, h) = (img.width, img.height);
+    let rgb8: Vec<u8> = data
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .flat_map(|p| [p[0] >> 8, p[1] >> 8, p[2] >> 8].map(|v| v as u8))
+        .collect();
+    let mut jpeg = Vec::new();
+    jpeg_encoder::Encoder::new(&mut jpeg, 90)
+        .encode(&rgb8, w as u16, h as u16, jpeg_encoder::ColorType::Rgb)
+        .unwrap();
+    let mut png16 = Vec::new();
+    {
+        let mut e = png::Encoder::new(&mut png16, w, h);
+        e.set_color(png::ColorType::Rgb);
+        e.set_depth(png::BitDepth::Sixteen);
+        let be: Vec<u8> = data
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .flat_map(|p| {
+                p[..3]
+                    .iter()
+                    .flat_map(|v| v.to_be_bytes())
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        e.write_header().unwrap().write_image_data(&be).unwrap();
+    }
+    let mut group = c.benchmark_group("decode");
+    group.sample_size(10);
+    for (name, file) in [
+        ("TIFF 12 MP, 16-bit uncompressed", &tiff),
+        ("JPEG 12 MP, quality 90, 4:2:0", &jpeg),
+        ("PNG 12 MP, 16-bit", &png16),
+    ] {
+        group.bench_function(name, |b| {
+            b.iter(|| genzo_imgio::decode(file, DecodeOptions::default()).unwrap());
+        });
+    }
+    group.finish();
+}
+
+criterion_group!(benches, decode, non_raw);
 criterion_main!(benches);

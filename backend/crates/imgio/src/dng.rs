@@ -16,9 +16,10 @@ use rayon::prelude::*;
 use jxl_oxide::{AllocTracker, JxlImage};
 
 use crate::raw::{
-    AsShot, CameraColor, CfaPattern, ColorMatrix, DefaultCrop, Levels, Opcode, OpcodeLists,
-    RawMetadata, Rect, parse_opcode_list,
+    AsShot, CameraColor, ColorMatrix, DefaultCrop, Levels, Opcode, OpcodeLists, RawMetadata, Rect,
+    parse_opcode_list,
 };
+use crate::tiff_ifd::{Entry, Tiff, TiffError, find};
 
 /// TIFF compression code for JPEG XL tiles (DNG 1.7).
 pub const COMPRESSION_JPEG_XL: u16 = 52546;
@@ -39,9 +40,6 @@ const MAX_PIXELS: u64 = 400_000_000;
 const MAX_SAMPLES: u64 = 400_000_000;
 /// Largest tile side accepted.
 const MAX_TILE_SIDE: u32 = 8192;
-/// Most entries read from one IFD, and most values from one entry.
-const MAX_IFD_ENTRIES: usize = 1024;
-const MAX_VALUES: usize = 1 << 20;
 /// Most SubIFDs searched for the raw image.
 const MAX_SUB_IFDS: usize = 16;
 /// Memory the JPEG XL decoder may hold at once, over all tiles in flight.
@@ -50,8 +48,11 @@ const JXL_MEMORY_LIMIT: usize = 2 << 30;
 mod tag {
     pub const NEW_SUBFILE_TYPE: u16 = 254;
     pub const ORIENTATION: u16 = 274;
+    #[cfg(feature = "raw")]
     pub const CFA_REPEAT_PATTERN_DIM: u16 = 33421;
+    #[cfg(feature = "raw")]
     pub const CFA_PATTERN: u16 = 33422;
+    #[cfg(feature = "raw")]
     pub const CFA_PLANE_COLOR: u16 = 50710;
     pub const WIDTH: u16 = 256;
     pub const HEIGHT: u16 = 257;
@@ -110,6 +111,12 @@ pub enum DngError {
     TooLarge(String),
     #[error("corrupt DNG: {0}")]
     Corrupt(String),
+}
+
+impl From<TiffError> for DngError {
+    fn from(e: TiffError) -> Self {
+        DngError::Corrupt(e.0)
+    }
 }
 
 fn corrupt(message: impl Into<String>) -> DngError {
@@ -184,7 +191,9 @@ pub(crate) const PHOTOMETRIC_LINEAR_DNG: u16 = PHOTOMETRIC_LINEAR_RAW;
 /// left, so it is shifted back by that offset. rawler shifts the other way,
 /// which only agrees for patterns of period 2 (backend/vendor/README.md), so
 /// the pattern is read here.
-pub(crate) fn cfa_pattern(data: &[u8]) -> Result<CfaPattern, DngError> {
+#[cfg(feature = "raw")]
+pub(crate) fn cfa_pattern(data: &[u8]) -> Result<crate::raw::CfaPattern, DngError> {
+    use crate::raw::CfaPattern;
     let tiff = Tiff::new(data).ok_or(DngError::NotTiff)?;
     let (ifd0, raw) = raw_ifd(&tiff)?;
     let get = |t| find(&raw, t).or_else(|| find(&ifd0, t));
@@ -870,208 +879,6 @@ fn uncompressed_tile(
     Ok(clamped)
 }
 
-/// One IFD entry: its type, count and the 4 bytes that hold the value or
-/// its offset.
-#[derive(Debug, Clone, Copy)]
-struct Entry {
-    tag: u16,
-    ty: u16,
-    count: u32,
-    value: [u8; 4],
-}
-
-fn find(ifd: &[Entry], tag: u16) -> Option<Entry> {
-    ifd.iter().find(|e| e.tag == tag).copied()
-}
-
-/// A bounds-checked view of a TIFF file.
-struct Tiff<'a> {
-    data: &'a [u8],
-    big_endian: bool,
-}
-
-impl<'a> Tiff<'a> {
-    fn new(data: &'a [u8]) -> Option<Self> {
-        let big_endian = match data.get(..4)? {
-            b"II*\0" => false,
-            b"MM\0*" => true,
-            _ => return None,
-        };
-        Some(Self { data, big_endian })
-    }
-
-    fn bytes<const N: usize>(&self, at: usize) -> Option<[u8; N]> {
-        self.data.get(at..at.checked_add(N)?)?.try_into().ok()
-    }
-
-    fn u16(&self, at: usize) -> Option<u16> {
-        let b = self.bytes::<2>(at)?;
-        Some(if self.big_endian {
-            u16::from_be_bytes(b)
-        } else {
-            u16::from_le_bytes(b)
-        })
-    }
-
-    fn u32(&self, at: usize) -> Option<u32> {
-        let b = self.bytes::<4>(at)?;
-        Some(if self.big_endian {
-            u32::from_be_bytes(b)
-        } else {
-            u32::from_le_bytes(b)
-        })
-    }
-
-    fn ifd(&self, at: usize) -> Result<Vec<Entry>, DngError> {
-        let bad = || corrupt(format!("IFD at {at} lies outside the file"));
-        let n = usize::from(self.u16(at).ok_or_else(bad)?);
-        if n > MAX_IFD_ENTRIES {
-            return Err(corrupt(format!("IFD at {at} has {n} entries")));
-        }
-        (0..n)
-            .map(|i| {
-                let e = at + 2 + i * 12;
-                Ok(Entry {
-                    tag: self.u16(e).ok_or_else(bad)?,
-                    ty: self.u16(e + 2).ok_or_else(bad)?,
-                    count: self.u32(e + 4).ok_or_else(bad)?,
-                    value: self.bytes::<4>(e + 8).ok_or_else(bad)?,
-                })
-            })
-            .collect()
-    }
-
-    /// An entry's values as raw bytes, for binary tags (opcode lists, the
-    /// gain table map). Bounded by the file's size, not by `MAX_VALUES`.
-    fn blob(&self, e: Entry) -> Result<Vec<u8>, DngError> {
-        if !matches!(e.ty, 1 | 7) {
-            return Err(corrupt(format!("tag {} is not binary", e.tag)));
-        }
-        let count = e.count as usize;
-        if count <= 4 {
-            return Ok(e.value[..count].to_vec());
-        }
-        let offset = if self.big_endian {
-            u32::from_be_bytes(e.value)
-        } else {
-            u32::from_le_bytes(e.value)
-        } as usize;
-        offset
-            .checked_add(count)
-            .and_then(|end| self.data.get(offset..end))
-            .map(<[u8]>::to_vec)
-            .ok_or_else(|| corrupt(format!("tag {} lies outside the file", e.tag)))
-    }
-
-    /// Where an entry's values start, and their total size in bytes.
-    fn location(&self, e: Entry) -> Result<(usize, usize), DngError> {
-        let size = match e.ty {
-            1 | 2 | 6 | 7 => 1,
-            3 | 8 => 2,
-            4 | 9 | 11 => 4,
-            5 | 10 | 12 => 8,
-            other => return Err(corrupt(format!("tag {} has type {other}", e.tag))),
-        };
-        let count = e.count as usize;
-        if count > MAX_VALUES {
-            return Err(corrupt(format!("tag {} has {count} values", e.tag)));
-        }
-        let total = size * count;
-        if total <= 4 {
-            return Ok((usize::MAX, total));
-        }
-        let offset = if self.big_endian {
-            u32::from_be_bytes(e.value)
-        } else {
-            u32::from_le_bytes(e.value)
-        } as usize;
-        match offset.checked_add(total) {
-            Some(end) if end <= self.data.len() => Ok((offset, total)),
-            _ => Err(corrupt(format!("tag {} lies outside the file", e.tag))),
-        }
-    }
-
-    /// Reads value `i` of an entry as raw bytes of `N`, inline or not.
-    fn raw<const N: usize>(&self, e: Entry, base: usize, i: usize) -> Option<[u8; N]> {
-        if base == usize::MAX {
-            e.value.get(i * N..i * N + N)?.try_into().ok()
-        } else {
-            self.bytes::<N>(base + i * N)
-        }
-    }
-
-    fn uint<const N: usize>(&self, b: [u8; N]) -> u64 {
-        let mut v = 0u64;
-        for i in 0..N {
-            let byte = if self.big_endian { b[i] } else { b[N - 1 - i] };
-            v = (v << 8) | u64::from(byte);
-        }
-        v
-    }
-
-    /// All values of an unsigned integer entry (BYTE, SHORT or LONG).
-    fn ints(&self, e: Entry) -> Result<Vec<u32>, DngError> {
-        let (base, _) = self.location(e)?;
-        let bad = || corrupt(format!("tag {}", e.tag));
-        (0..e.count as usize)
-            .map(|i| {
-                Ok(match e.ty {
-                    1 | 7 => self.uint(self.raw::<1>(e, base, i).ok_or_else(bad)?) as u32,
-                    3 => self.uint(self.raw::<2>(e, base, i).ok_or_else(bad)?) as u32,
-                    4 => self.uint(self.raw::<4>(e, base, i).ok_or_else(bad)?) as u32,
-                    _ => return Err(corrupt(format!("tag {} is not an integer", e.tag))),
-                })
-            })
-            .collect()
-    }
-
-    /// All values of a numeric entry, rationals included, as f64.
-    fn numbers(&self, e: Entry) -> Result<Vec<f64>, DngError> {
-        let (base, _) = self.location(e)?;
-        let bad = || corrupt(format!("tag {}", e.tag));
-        (0..e.count as usize)
-            .map(|i| {
-                Ok(match e.ty {
-                    1 | 7 => self.uint(self.raw::<1>(e, base, i).ok_or_else(bad)?) as f64,
-                    3 => self.uint(self.raw::<2>(e, base, i).ok_or_else(bad)?) as f64,
-                    4 => self.uint(self.raw::<4>(e, base, i).ok_or_else(bad)?) as f64,
-                    8 => f64::from(
-                        self.uint(self.raw::<2>(e, base, i).ok_or_else(bad)?) as u16 as i16
-                    ),
-                    9 => f64::from(
-                        self.uint(self.raw::<4>(e, base, i).ok_or_else(bad)?) as u32 as i32
-                    ),
-                    11 => f64::from(f32::from_bits(
-                        self.uint(self.raw::<4>(e, base, i).ok_or_else(bad)?) as u32,
-                    )),
-                    12 => f64::from_bits(self.uint(self.raw::<8>(e, base, i).ok_or_else(bad)?)),
-                    5 | 10 => {
-                        let b = self.raw::<8>(e, base, i).ok_or_else(bad)?;
-                        let num = self.uint::<4>([b[0], b[1], b[2], b[3]]) as u32;
-                        let den = self.uint::<4>([b[4], b[5], b[6], b[7]]) as u32;
-                        let (num, den) = if e.ty == 10 {
-                            (f64::from(num as i32), f64::from(den as i32))
-                        } else {
-                            (f64::from(num), f64::from(den))
-                        };
-                        if den == 0.0 { 0.0 } else { num / den }
-                    }
-                    _ => return Err(corrupt(format!("tag {} is not a number", e.tag))),
-                })
-            })
-            .collect()
-    }
-
-    fn first_int(&self, ifd: &[Entry], tag: u16) -> Option<u32> {
-        self.ints(find(ifd, tag)?).ok()?.first().copied()
-    }
-
-    fn required_int(&self, ifd: &[Entry], tag: u16) -> Result<u32, DngError> {
-        self.first_int(ifd, tag)
-            .ok_or_else(|| corrupt(format!("missing or unreadable tag {tag}")))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1586,7 +1393,7 @@ mod tests {
     }
 
     #[cfg(feature = "raw")]
-    fn decoded_cfa(file: &[u8]) -> (CfaPattern, Vec<u16>) {
+    fn decoded_cfa(file: &[u8]) -> (crate::raw::CfaPattern, Vec<u16>) {
         match crate::decode(file, crate::DecodeOptions::default())
             .unwrap()
             .pixels

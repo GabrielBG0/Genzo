@@ -11,11 +11,16 @@
 mod camera;
 #[cfg(feature = "dng")]
 pub mod dng;
+mod exif;
 mod heic;
 pub mod jpeg;
 #[cfg(feature = "raw")]
 mod ljpeg;
+mod png_image;
+mod raster;
 pub mod raw;
+mod tiff_ifd;
+mod tiff_image;
 
 pub use raw::RawMetadata;
 
@@ -110,6 +115,10 @@ pub enum ColorEncoding {
     },
     /// An embedded ICC profile, applied by the color crate.
     Icc(Vec<u8>),
+    /// Adobe RGB (1998), declared the DCF way by cameras that embed no
+    /// profile: EXIF ColorSpace 0xFFFF and Interoperability index "R03".
+    /// An embedded profile takes precedence.
+    AdobeRgb,
 }
 
 /// Pixel data of a decoded image, with what is needed to interpret it.
@@ -188,11 +197,12 @@ impl Default for DecodeOptions {
 pub fn decode(data: &[u8], options: DecodeOptions) -> Result<DecodedImage, DecodeError> {
     match sniff(data).ok_or(DecodeError::UnknownFormat)? {
         FileFormat::Heif => heic::decode(data, options),
+        FileFormat::Jpeg => jpeg::decode(data),
+        FileFormat::Png => png_image::decode(data),
         FileFormat::Tiff => decode_tiff(data),
         f @ (FileFormat::Cr3 | FileFormat::Raf | FileFormat::Rw2 | FileFormat::Orf) => {
             decode_camera(data, f)
         }
-        other => Err(DecodeError::not_yet(other)),
     }
 }
 
@@ -207,18 +217,43 @@ fn decode_camera(_: &[u8], format: FileFormat) -> Result<DecodedImage, DecodeErr
     Err(DecodeError::NotBuiltIn(format, "raw"))
 }
 
-/// DNG, told apart from plain TIFF and TIFF-based camera RAW by its
-/// DNGVersion tag.
-#[cfg(feature = "dng")]
+/// The three kinds of file behind the TIFF magic: DNG (told apart by its
+/// DNGVersion tag), TIFF-based camera RAW (NEF, ARW, 3FR, IIQ, ...), and
+/// plain TIFF images.
+///
+/// A non-DNG TIFF goes to the camera decoder first. Only when that fails,
+/// and IFD0 holds a full image the way a plain TIFF does, is it read as a
+/// TIFF image: an exported TIFF whose Make names a camera still opens, and a
+/// damaged camera RAW never comes back as its thumbnail.
 fn decode_tiff(data: &[u8]) -> Result<DecodedImage, DecodeError> {
+    if tiff_ifd::ifd0_has_tag(data, tiff_ifd::DNG_VERSION) {
+        return decode_dng(data);
+    }
+    let camera = decode_camera(data, FileFormat::Tiff);
+    match camera {
+        Ok(img) => Ok(img),
+        Err(e) if tiff_image::looks_like_plain_tiff(data) => {
+            tiff_image::decode(data).map_err(|tiff_error| match e {
+                // No camera format matched: the TIFF decoder's error is the
+                // relevant one.
+                DecodeError::NotBuiltIn(..) => tiff_error,
+                DecodeError::Unsupported(_, ref m) if m == NOT_A_CAMERA_RAW => tiff_error,
+                camera_error => camera_error,
+            })
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// What the camera decoder says of a TIFF that is no camera RAW it knows.
+pub(crate) const NOT_A_CAMERA_RAW: &str =
+    "neither a camera RAW format Genzo reads nor a plain TIFF image";
+
+#[cfg(feature = "dng")]
+fn decode_dng(data: &[u8]) -> Result<DecodedImage, DecodeError> {
     use dng::DngError;
     let format = FileFormat::Tiff;
     let corrupt = |message: String| DecodeError::Corrupt { format, message };
-    // Plain TIFF and TIFF-based camera RAW (NEF, ARW, 3FR, IIQ, ...) have no
-    // DNGVersion. rawler reads the camera RAW; plain TIFF comes later.
-    if !dng::is_dng(data) {
-        return decode_camera(data, format);
-    }
     match dng::photometric(data) {
         Ok(dng::PHOTOMETRIC_LINEAR_DNG) => {}
         Ok(dng::PHOTOMETRIC_CFA_DNG) => return decode_cfa_dng(data),
@@ -263,6 +298,11 @@ fn decode_tiff(data: &[u8]) -> Result<DecodedImage, DecodeError> {
     })
 }
 
+#[cfg(not(feature = "dng"))]
+fn decode_dng(_: &[u8]) -> Result<DecodedImage, DecodeError> {
+    Err(DecodeError::NotBuiltIn(FileFormat::Tiff, "dng"))
+}
+
 #[cfg(all(feature = "dng", feature = "raw"))]
 fn decode_cfa_dng(data: &[u8]) -> Result<DecodedImage, DecodeError> {
     camera::decode_dng(data)
@@ -271,11 +311,6 @@ fn decode_cfa_dng(data: &[u8]) -> Result<DecodedImage, DecodeError> {
 #[cfg(all(feature = "dng", not(feature = "raw")))]
 fn decode_cfa_dng(_: &[u8]) -> Result<DecodedImage, DecodeError> {
     Err(DecodeError::NotBuiltIn(FileFormat::Tiff, "raw"))
-}
-
-#[cfg(not(feature = "dng"))]
-fn decode_tiff(_: &[u8]) -> Result<DecodedImage, DecodeError> {
-    Err(DecodeError::NotBuiltIn(FileFormat::Tiff, "dng"))
 }
 
 /// Decodes a file's embedded preview, if it has one. Fast enough for the
@@ -310,27 +345,27 @@ mod tests {
             decode(b"GIF89a", DecodeOptions::default()),
             Err(DecodeError::UnknownFormat)
         ));
+        // A JPEG cut short is damaged, not unsupported.
         assert!(matches!(
             decode(&[0xFF, 0xD8, 0xFF, 0xE1], DecodeOptions::default()),
-            Err(DecodeError::Unsupported(FileFormat::Jpeg, _))
+            Err(DecodeError::Corrupt {
+                format: FileFormat::Jpeg,
+                ..
+            })
         ));
-        // A TIFF without DNGVersion: plain TIFF or camera RAW, not read yet.
+        // A TIFF with an empty IFD0: no camera RAW and no image.
         let plain_tiff = b"II*\0\x08\0\0\0\0\0\0\0\0\0";
         let err = decode(plain_tiff, DecodeOptions::default()).unwrap_err();
         if cfg!(feature = "raw") {
             assert!(
-                matches!(&err, DecodeError::Unsupported(FileFormat::Tiff, m) if m == "plain TIFF images are not supported yet"),
+                matches!(&err, DecodeError::Unsupported(FileFormat::Tiff, m) if m == NOT_A_CAMERA_RAW),
                 "{err:?}"
             );
-        } else if cfg!(feature = "dng") {
+        } else {
+            // Not a DNG, and no camera decoder in this build.
             assert!(matches!(
                 err,
                 DecodeError::NotBuiltIn(FileFormat::Tiff, "raw")
-            ));
-        } else {
-            assert!(matches!(
-                err,
-                DecodeError::NotBuiltIn(FileFormat::Tiff, "dng")
             ));
         }
     }
