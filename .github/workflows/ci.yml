@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Weekly full run on main: new RustSec advisories appear without a change here,
+  # and the deny job otherwise runs only when a manifest or lockfile changes.
+  # A scheduled run has no previous commit, so ci-changes.py runs every job.
+  schedule:
+    - cron: "0 6 * * 1"
 
 env:
   CARGO_TERM_COLOR: always
@@ -17,15 +22,20 @@ env:
 # macOS builds target 13.0 and those two OSes are checked by hand.
 
 jobs:
-  # Lists the changed files. A change that touches only documentation skips the
-  # jobs below, and one that cannot change the benchmarks skips the benchmark
-  # steps (scripts/ci-changes.py says which files count).
+  # Lists the changed files and decides which jobs below they need: a frontend
+  # change skips the backend jobs and the other way round, documentation skips
+  # everything, and an unknown file runs everything (scripts/ci-changes.py).
   changes:
     name: Changed files
     runs-on: ubuntu-latest
     outputs:
-      code: ${{ steps.filter.outputs.code }}
+      backend: ${{ steps.filter.outputs.backend }}
+      gpu: ${{ steps.filter.outputs.gpu }}
       bench: ${{ steps.filter.outputs.bench }}
+      architecture: ${{ steps.filter.outputs.architecture }}
+      deny: ${{ steps.filter.outputs.deny }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+      shell: ${{ steps.filter.outputs.shell }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -47,7 +57,7 @@ jobs:
   backend:
     name: Backend (${{ matrix.os }})
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.backend == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -91,7 +101,7 @@ jobs:
   gpu:
     name: GPU tests (lavapipe)
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.gpu == 'true'
     runs-on: ubuntu-22.04
     env:
       # lavapipe is the golden-image reference device. Fail instead of skipping
@@ -138,7 +148,7 @@ jobs:
   architecture:
     name: Architecture rules
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.architecture == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -148,7 +158,7 @@ jobs:
   deny:
     name: Licenses and advisories
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.deny == 'true'
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -164,7 +174,7 @@ jobs:
   frontend:
     name: Frontend
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.frontend == 'true'
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -190,7 +200,7 @@ jobs:
   shell:
     name: Shell (${{ matrix.os }})
     needs: changes
-    if: needs.changes.outputs.code == 'true'
+    if: needs.changes.outputs.shell == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -236,4 +246,4 @@ jobs:
         run: |
           echo "A required job failed or was cancelled."
           exit 1
-      - run: 'echo "Code changed: ${{ needs.changes.outputs.code }}"'
+      - run: echo "Every job passed or was not needed."
