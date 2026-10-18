@@ -325,6 +325,10 @@ fn decode_cfa_dng(_: &[u8]) -> Result<DecodedImage, DecodeError> {
 pub fn decode_preview(data: &[u8]) -> Result<Option<Preview>, DecodeError> {
     match sniff(data).ok_or(DecodeError::UnknownFormat)? {
         FileFormat::Heif => heic::decode_preview(data),
+        // Only the EXIF thumbnail is a JPEG file's preview: not its own
+        // image, nor the MPF images or gain maps (Ultra HDR) after it.
+        FileFormat::Jpeg => Ok(jpeg_app1_exif(data)
+            .and_then(|app1| preview::decode(app1, &preview_hints(data, FileFormat::Jpeg)))),
         format => Ok(preview::decode(data, &preview_hints(data, format))),
     }
 }
@@ -354,8 +358,9 @@ fn preview_hints(data: &[u8], format: FileFormat) -> preview::FileHints {
 fn cr3_cmt1(data: &[u8]) -> Option<&[u8]> {
     let head = &data[..data.len().min(1 << 20)];
     let at = memchr::memmem::find(head, b"CMT1")?;
-    let size = u32::from_be_bytes(data.get(at - 4..at)?.try_into().ok()?) as usize;
-    data.get(at + 4..(at - 4).checked_add(size)?)
+    let box_start = at.checked_sub(4)?;
+    let size = u32::from_be_bytes(data.get(box_start..at)?.try_into().ok()?) as usize;
+    data.get(at + 4..box_start.checked_add(size)?)
 }
 
 /// The body of a JPEG's APP1 EXIF segment, walking the markers from SOI.

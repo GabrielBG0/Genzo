@@ -100,25 +100,17 @@ fn header(data: &[u8], start: usize) -> Option<(u32, u32, usize)> {
     None
 }
 
-/// Where a stream's entropy data end: just past the first EOI. Stuffed
-/// 0xFF bytes (FF 00), restart markers and later scans' headers (progressive)
-/// are passed over.
-fn stream_end(data: &[u8], from: usize) -> Option<usize> {
-    let mut at = from;
-    loop {
-        at += memchr::memchr(0xFF, data.get(at..)?)?;
-        match *data.get(at + 1)? {
-            0xD9 => return Some(at + 2),
-            _ => at += 1,
-        }
-    }
-}
-
 /// Every embedded JPEG stream in `data`, in file order, except one at
 /// offset 0 (a JPEG file's own image, which is not its preview).
 pub(crate) fn candidates(data: &[u8]) -> Vec<Candidate> {
     let mut out = Vec::new();
     let finder = memchr::memmem::Finder::new(&[0xFF, 0xD8, 0xFF]);
+    // A stream ends just past the first EOI after its entropy data begin
+    // (stuffing keeps FF D9 out of entropy data). The first EOI after one
+    // position is also the first after every earlier one, so it is found
+    // once and reused: the scan stays linear however many headers there are.
+    let eoi = memchr::memmem::Finder::new(&[0xFF, 0xD9]);
+    let mut next_eoi: Option<usize> = None;
     for start in finder.find_iter(data) {
         if start == 0 {
             continue;
@@ -126,8 +118,16 @@ pub(crate) fn candidates(data: &[u8]) -> Vec<Candidate> {
         let Some((width, height, entropy)) = header(data, start) else {
             continue;
         };
-        let Some(end) = stream_end(data, entropy) else {
-            continue;
+        let end = match next_eoi {
+            Some(e) if e >= entropy => e + 2,
+            _ => match data.get(entropy..).and_then(|d| eoi.find(d)) {
+                Some(off) => {
+                    next_eoi = Some(entropy + off);
+                    entropy + off + 2
+                }
+                // No EOI after here, so none after any later header either.
+                None => break,
+            },
         };
         let c = Candidate {
             start,
