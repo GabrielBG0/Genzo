@@ -29,6 +29,12 @@
     "sha256": "17a24d42735464525773048172c888ea24d13ba4b907e64580b63c3bab987ae5",
     "why": "GPR"
   },
+  "raw/Google/Pixel 4a/PXL_20201121_100251397.dng": {
+    "bytes": 13586704,
+    "license": "CC0-1.0",
+    "sha256": "11b38186ee3455376291bcdb3049728a3f9dcd94b9e82ff76855d9f3430e44be",
+    "why": "phone CFA DNG with lens-shading GainMaps in OpcodeList2"
+  },
   "raw/Hasselblad/H3D/A9391120.3FR": {
     "bytes": 53594112,
     "license": "CC0-1.0",

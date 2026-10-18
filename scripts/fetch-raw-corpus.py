@@ -50,6 +50,7 @@ CORPUS = [
     ("GoPro", "HERO6 Black", "GPR"),
     ("Kodak", "DCS760C", "legacy"),
     ("Apple", "iPhone 12 Pro", "ProRAW, lossless JPEG, not white balanced in the camera", "IMG_1361"),
+    ("Google", "Pixel 4a", "phone CFA DNG with lens-shading GainMaps in OpcodeList2"),
 ]
 
 RAW_EXT = re.compile(r"\.(nef|nrw|cr2|cr3|crw|arw|raf|rw2|orf|dng|pef|3fr|iiq|gpr|dcr|kdc|srw|raw|rwl|erf|mef|mrw|srf|sr2)$", re.I)

@@ -210,6 +210,10 @@ pub struct RawMetadata {
     pub default_crop: Option<DefaultCrop>,
     pub color: CameraColor,
     pub opcodes: OpcodeLists,
+    /// What the pipeline applies of `opcodes`, typed, and whether lens
+    /// corrections were skipped (`crate::opcodes::plan`). Filled by
+    /// `imgio::decode`; empty from the metadata readers.
+    pub opcode_plan: crate::opcodes::OpcodePlan,
     /// DNG ProfileGainTableMap (ProRAW's local tone map), raw bytes. Read and
     /// kept, never applied in M1 (decided).
     pub gain_table_map: Option<Vec<u8>>,

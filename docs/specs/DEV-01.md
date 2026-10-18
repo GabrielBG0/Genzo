@@ -109,8 +109,10 @@ Large linear DNGs decode their tiles in parallel and stream them into stage 1. N
 
 | File | List | Opcode | Optional |
 |---|---|---|---|
-| Galaxy S23 Ultra (linear DNG) | 2 | GainMap × 4 | yes |
-| Leica Q2 (CFA DNG) | 1 | FixBadPixelsConstant | **no** |
+| Galaxy S23 Ultra (linear DNG) | 2 | GainMap × 4: no-ops (1 × 1, gain 1.0), their area left over from another sensor mode and larger than the image | yes |
+| Google Pixel 4a (CFA DNG) | 2 | GainMap × 4: real lens shading, 30 × 40 points, gains 1.0 to 3.4, one per Bayer site | **no** |
+| Google Pixel 4a | 3 | WarpRectilinear (the identity) | yes |
+| Leica Q2 (CFA DNG) | 1 | FixBadPixelsConstant (constant 0; the file has no zero samples, so it changes nothing) | **no** |
 | Leica Q2 | 3 | WarpRectilinear | **no** |
 | iPhone 16 Pro Bayer DNG (Halide) | 3 | WarpRectilinear2, FixVignetteRadial | **no** |
 | iPhone 12 Pro and 16 Pro ProRAW, Pentax K10D | | none | |
@@ -119,6 +121,12 @@ Adobe DNG Converter's output of the camera RAW files carries no opcodes. So M1 i
 
 - GainMap (OpcodeList2, used by Samsung and Pixel phones) is applied in M1 whatever the inventory shows.
 - FixBadPixelsConstant (OpcodeList1, Leica) is applied in M1.
+- **How they are applied** follows the Adobe DNG SDK (`dng_gain_map.cpp`, `dng_bad_pixels.cpp`), read from its source in GoPro's GPR repository. darktable and RawTherapee each cover only part of it.
+  - The CPU reference is `genzo_pipeline::reference::opcodes`; the GPU stage 1 is tested against it. Each opcode's area is intersected with the image, keeping its row and column pitch from its own top left. OpcodeList1 runs on the raw image as stored; OpcodeList2 and 3 on the image after linearization, whose origin is the ActiveArea's top left.
+  - **GainMap:** a pixel's relative position is that of its center, ((row + 0.5) / height, (col + 0.5) / width). The map index is (position − origin) / spacing, interpolated bilinearly and held at the first and last points. The value, normalized to white = 1, is multiplied by the gain and clipped at 1. Map plane = min(plane, MapPlanes − 1).
+  - **FixBadPixelsConstant:** on the stored 16-bit values, a sample equal to the constant becomes the rounded mean of its same-color neighbors that are not bad, read from the original. A green site (row + col + phase + phase / 2 even) uses its four diagonal neighbors; a red or blue site the four two pixels away on its row and column. With four neighbors the mean is (sum + 2) / 4. With none, the sample is kept. Where the SDK pads the image at its edges, Genzo leaves the outside neighbors out.
+  - **Checked:** synthetic tests of each rule, and the Pixel 4a's maps against Adobe DNG Converter's rendering of the same file (`pipeline/tests/gain_map.rs`). Per 64 px block, the ratio to Adobe is flat: a spread of 1.01 in green and 1.06 in red and blue, against 2.3 to 2.7 without the maps and 1.2 with the red and blue maps swapped.
+- Opcodes are parsed and planned at decode (`imgio::opcodes::plan`): GainMap and FixBadPixelsConstant are applied; one whose parameters do not parse is skipped when optional, else the photo is unsupported.
 - An opcode M1 does not implement is skipped when it is marked optional.
 - When an unimplemented opcode is not marked optional, the photo is *unsupported*, except for the lens opcodes.
 - The lens opcodes (WarpRectilinear, WarpRectilinear2, FixVignetteRadial) are skipped in M1 whether or not they are marked optional (decided 2026-10-18). When a non-optional one is skipped, the status bar says "Lens corrections from the file are not applied yet". Stage 5 takes them up in M3.

@@ -373,3 +373,53 @@ fn truncated_camera_raw_is_never_its_thumbnail() {
         }
     }
 }
+
+/// What each corpus DNG's opcode lists plan to (DEV-01 inventory and the
+/// M1 decision): the opcodes applied per list, and whether lens
+/// corrections were skipped because a lens opcode is not optional.
+#[test]
+fn opcode_plans_follow_the_m1_rules() {
+    use genzo_imgio::opcodes::StageOpcode;
+    let cases = [
+        // Four real lens-shading maps; its WarpRectilinear is optional.
+        (
+            "raw/Google/Pixel 4a/PXL_20201121_100251397.dng",
+            (0, 4, 0),
+            false,
+        ),
+        // FixBadPixelsConstant applied; its WarpRectilinear is not optional.
+        ("raw/Leica/Q2/L1000750.DNG", (1, 0, 0), true),
+        // WarpRectilinear2 and FixVignetteRadial, neither optional.
+        (
+            "bayer-dng/iphone/Halide_iPhone16Pro_bayer.dng",
+            (0, 0, 0),
+            true,
+        ),
+        ("raw/Pentax/K10D/IMGP5398.DNG", (0, 0, 0), false),
+    ];
+    for (key, (n1, n2, n3), lens) in cases {
+        let Some(bytes) = file(key) else { continue };
+        let img = decode(&bytes, DecodeOptions::default()).unwrap_or_else(|e| panic!("{key}: {e}"));
+        let Pixels::Cfa { raw, .. } = &img.pixels else {
+            panic!("{key}: not a CFA image")
+        };
+        let p = &raw.opcode_plan;
+        assert_eq!(
+            (p.list1.len(), p.list2.len(), p.list3.len()),
+            (n1, n2, n3),
+            "{key}"
+        );
+        assert_eq!(p.lens_corrections_skipped, lens, "{key}");
+        if key.contains("Pixel") {
+            for op in &p.list2 {
+                let StageOpcode::GainMap(g) = op else {
+                    panic!("{op:?}")
+                };
+                assert_eq!(
+                    (g.points_v, g.points_h, g.area.row_pitch, g.area.col_pitch),
+                    (30, 40, 2, 2)
+                );
+            }
+        }
+    }
+}

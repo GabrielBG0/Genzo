@@ -483,6 +483,7 @@ fn metadata(
             list2: list(tag::OPCODE_LIST_2)?,
             list3: list(tag::OPCODE_LIST_3)?,
         },
+        opcode_plan: Default::default(),
         gain_table_map: get(tag::PROFILE_GAIN_TABLE_MAP)
             .map(|e| tiff.blob(e))
             .transpose()?,
@@ -1436,6 +1437,26 @@ mod tests {
         }
         // ... which is not what shifting the other way gives.
         assert_ne!(pattern.color_at(0, 0), codes[6 + 2]);
+    }
+
+    /// A DNG whose OpcodeList3 holds an opcode M1 does not implement and
+    /// that is not optional: unsupported, with the opcode named.
+    #[test]
+    fn a_required_unknown_opcode_makes_the_file_unsupported() {
+        let mut list = 1u32.to_be_bytes().to_vec();
+        for word in [99u32, 0x0103_0000, 0, 0] {
+            list.extend(word.to_be_bytes());
+        }
+        let mut s = spec(raw_tiles(false), COMPRESSION_NONE);
+        s.extra = vec![(tag::OPCODE_LIST_3, Val::Undefined(list.clone()))];
+        match crate::decode(&build(&s), crate::DecodeOptions::default()) {
+            Err(crate::DecodeError::Unsupported(_, m)) => assert!(m.contains("Unknown(99)"), "{m}"),
+            other => panic!("expected unsupported, got {other:?}"),
+        }
+        // Marked optional, it is skipped.
+        list[15] = 1;
+        s.extra = vec![(tag::OPCODE_LIST_3, Val::Undefined(list))];
+        assert!(crate::decode(&build(&s), crate::DecodeOptions::default()).is_ok());
     }
 
     #[test]
