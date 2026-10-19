@@ -373,7 +373,7 @@ Stages 1 to 4 run per tile, so full-resolution intermediates exist only for one 
     - 1:1 is an exact copy of level 0, in every orientation, at pans that put tile boundaries inside the view.
     - Criterion 6: a 3000 × 2000 image at 1:1 across 1024 px tile boundaries gives the same frame with 1024 px tiles and as one tile.
     - Criterion 7 at default edits: Fit against 1:1 averaged down, mean ΔE2000 0.70.
-    - Criterion 8 per pixel at 1:1, on the decoder's own fixtures (JPEG, PNG, 16-bit TIFF and PNG, gray, an lcms2 ICC profile, Display P3 by cICP and the NCLX HEIC into a P3 frame): within 1 code each.
+    - Criterion 8 per pixel at 1:1, on the decoder's own fixtures (JPEG, PNG, 16-bit TIFF and PNG, gray, an lcms2 ICC profile, Display P3 by cICP and the NCLX HEIC into a P3 frame): within 1 code each for 8-bit sources and 1.5 for 16-bit ones, as criterion 8 states (measured: 1 code at most).
   - **Bench** (RTX 3060, a 2560 × 1440 view at 1:1, tiles rendered, sampled and through stage 9): Bayer 48 MP 5.9 ms cold and 2.5 ms for a 256 px pan; X-Trans 40 MP 47 ms cold and 6.6 ms. Criterion 14 asks under 100 ms.
 - **GPU memory for one 48 MP edit** (8064 × 6048) has the following worst case. The memory-accounting test asserts the total. Each cap is a fixed constant that the test checks (`pipeline::budget`, `pipeline/tests/memory.rs`). The caps hold the sizes as drivers allocate them: NVIDIA's Vulkan driver pads textures by up to 7 % (measured 2026-10-18), and WARP allocates the exact sizes. The test measures what is allocated where the backend reports it (Vulkan and DX12 do), after the render and at its peak, sampled after each tile's submit while uploads are still staged.
 

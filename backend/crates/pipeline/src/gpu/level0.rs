@@ -246,7 +246,12 @@ impl Level0Cache {
             tiles_across: self.tiles.0,
             slots_across: self.slots_across,
         };
-        stages.render_level0(gpu, src, transform, region, &target)?;
+        if let Err(e) = stages.render_level0(gpu, src, transform, region, &target) {
+            // The slots just given to `missing` hold no valid pixels: forget
+            // everything, so the next call starts over and renders again.
+            self.key = None;
+            return Err(e.into());
+        }
         Ok(())
     }
 
