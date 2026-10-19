@@ -525,6 +525,24 @@ mod tests {
         let _ = InputEncoding::icc(&flipped);
     }
 
+    /// The icc fuzz target's seeds: `cargo test -p genzo-color -- --ignored
+    /// write_fuzz_seeds`.
+    #[test]
+    #[ignore]
+    fn write_fuzz_seeds() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fuzz/seeds/icc");
+        std::fs::create_dir_all(&dir).unwrap();
+        for (name, p) in [
+            ("srgb", ColorProfile::new_srgb()),
+            ("display-p3", ColorProfile::new_display_p3()),
+            ("adobe-rgb", ColorProfile::new_adobe_rgb()),
+            ("bt2020", ColorProfile::new_bt2020()),
+            ("gray-2.2", ColorProfile::new_gray_with_gamma(2.2)),
+        ] {
+            std::fs::write(dir.join(format!("{name}.icc")), p.encode().unwrap()).unwrap();
+        }
+    }
+
     #[test]
     fn lut_holds_every_code() {
         let enc = InputEncoding::adobe_rgb();

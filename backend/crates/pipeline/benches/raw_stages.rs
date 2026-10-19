@@ -13,10 +13,12 @@
 //! software adapter.
 
 use criterion::{Criterion, criterion_group, criterion_main};
-use genzo_pipeline::camera_color::camera_transform;
+use genzo_color::encoding::InputEncoding;
+use genzo_pipeline::camera_color::{camera_transform, encoded_transform};
 use genzo_pipeline::gpu::raw_stages::{RawStages, TileConfig, Until};
 use genzo_pipeline::gpu::synthetic::{scene_raw, scene_xtrans_raw};
 use genzo_pipeline::gpu::{AdapterChoice, Gpu};
+use genzo_pipeline::raw::RawSource;
 
 fn stages(c: &mut Criterion) {
     let Ok(gpu) = Gpu::open(AdapterChoice::from_env()) else {
@@ -71,6 +73,24 @@ fn pyramid(c: &mut Criterion) {
             })
         });
     }
+    // A non-RAW image: a 24 MP sRGB JPEG's codes, through the curves.
+    let (w, h) = (6000u32, 4000u32);
+    let rgba: Vec<u16> = (0..w * h)
+        .flat_map(|i| {
+            let (x, y) = (i % w, i / w);
+            [x * 65535 / w, y * 65535 / h, (x ^ y) & 0xffff, 65535].map(|v| v as u16)
+        })
+        .collect();
+    let enc = InputEncoding::srgb();
+    let src = RawSource::from_encoded((w, h), &rgba, &enc).unwrap();
+    let t = encoded_transform(&enc);
+    let mut stages = RawStages::new(&gpu, TileConfig::default());
+    stages.render_pyramid(&gpu, &src, &t).unwrap();
+    group.bench_function("sRGB 24MP", |b| {
+        b.iter(|| {
+            stages.render_pyramid(&gpu, &src, &t).unwrap();
+        })
+    });
     group.finish();
 }
 

@@ -439,3 +439,43 @@ fn decoder_fixtures_match_moxcms() {
     }
     println!("encodings seen: {kinds:?}");
 }
+
+/// The stored golden of a non-RAW pyramid's first level: the synthetic
+/// scene, read as Display P3 values and stored as 16-bit codes, through
+/// stages 1 to 4, viewed as sRGB. Written on lavapipe.
+#[test]
+fn golden_display_p3_level1() {
+    let Some((_lock, gpu)) = gpu() else { return };
+    let (w, h) = (768u32, 512u32);
+    let mut rgba = Vec::with_capacity((w * h * 4) as usize);
+    for y in 0..h {
+        for x in 0..w {
+            let v = genzo_pipeline::gpu::synthetic::scene(x, y, w, h);
+            for c in v {
+                let code = genzo_color::srgb_encode(f64::from(c).clamp(0.0, 1.0)) * 65535.0;
+                rgba.push(code.round() as u16);
+            }
+            rgba.push(65535);
+        }
+    }
+    let enc = InputEncoding::display_p3();
+    let src = RawSource::from_encoded((w, h), &rgba, &enc).unwrap();
+    let level1 = &levels(&gpu, SMALL, &src)[0];
+    let to_srgb =
+        genzo_color::mat_mul(&invert(&genzo_color::SRGB_TO_XYZ).unwrap(), &WORKING_TO_XYZ);
+    let case = genzo_golden::Case::new(
+        env!("CARGO_MANIFEST_DIR"),
+        "pyramid/encoded-display-p3-level1",
+        genzo_golden::Space::Linear(genzo_golden::View {
+            matrix: to_srgb,
+            exposure_ev: 0.0,
+        }),
+        genzo_golden::Producer::Gpu {
+            adapter: gpu.info.name.clone(),
+        },
+    );
+    genzo_golden::check(
+        &case,
+        &genzo_golden::Image::new(w / 2, h / 2, level1.clone()),
+    );
+}
