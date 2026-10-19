@@ -167,6 +167,20 @@ pub fn encode(working: [f64; 3], target: Target, compress_gamut: bool) -> [f64; 
     rgb.map(|v| srgb_encode(v.clamp(0.0, 1.0)))
 }
 
+/// One frame pixel: stage 9, and the dither for pixel (x, y) when `dithered`
+/// (not for an unedited non-RAW photo, decided 2026-10-19: it shows its own
+/// codes).
+pub fn pixel(
+    working: [f64; 3],
+    (x, y): (u32, u32),
+    target: Target,
+    compress_gamut: bool,
+    dithered: bool,
+) -> [u8; 3] {
+    let noise = if dithered { dither(x, y) } else { 0.0 };
+    encode(working, target, compress_gamut).map(|v| quantize(v, noise))
+}
+
 /// Whether a source with `to_working` (linear source RGB to AP1) fits in
 /// `target`, so a non-RAW photo skips gamut compression (DEV-01): each
 /// source primary lands inside the target's 0 to 1, within `1e-6`.
@@ -181,12 +195,12 @@ pub fn xyz_to_oklab(xyz: [f64; 3]) -> [f64; 3] {
     mul(&OKLAB_M2, lms)
 }
 
-const OKLAB_M1: Mat3 = [
+pub const OKLAB_M1: Mat3 = [
     [0.818_933_010_1, 0.361_866_742_4, -0.128_859_713_7],
     [0.032_984_543_6, 0.929_311_871_5, 0.036_145_638_7],
     [0.048_200_301_8, 0.264_366_269_1, 0.633_851_707_0],
 ];
-const OKLAB_M2: Mat3 = [
+pub const OKLAB_M2: Mat3 = [
     [0.210_454_255_3, 0.793_617_785_0, -0.004_072_046_8],
     [1.977_998_495_1, -2.428_592_205_0, 0.450_593_709_9],
     [0.025_904_037_1, 0.782_771_766_2, -0.808_675_766_0],

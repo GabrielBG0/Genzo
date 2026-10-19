@@ -146,3 +146,19 @@ pub fn scene_xtrans_raw(width: u32, height: u32) -> crate::raw::RawSource {
     src.cfa = Some(crate::raw::Cfa::XTrans(XTRANS));
     src
 }
+
+/// An image of 2 x 2 blocks, one per color, `across` blocks per row: RGBA.
+pub fn blocks(colors: &[[u16; 3]], across: usize) -> ((u32, u32), Vec<u16>) {
+    let down = colors.len().div_ceil(across);
+    let (w, h) = (2 * across, 2 * down);
+    let mut rgba = vec![0u16; w * h * 4];
+    for (i, c) in colors.iter().enumerate() {
+        let (bx, by) = (2 * (i % across), 2 * (i / across));
+        for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+            let o = ((by + dy) * w + bx + dx) * 4;
+            rgba[o..o + 3].copy_from_slice(c);
+            rgba[o + 3] = 65535;
+        }
+    }
+    ((w as u32, h as u32), rgba)
+}
