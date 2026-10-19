@@ -21,7 +21,7 @@ Sources: the spec's *Image pipeline and performance* and *RAW and format support
 - local adjustments and masks (M3)
 - AI denoise (M4)
 - applying the ProRAW gain table map (later, opt-in)
-- DCP profiles and the profile tables embedded in DNG (not planned)
+- DCP profiles and the profile tables embedded in DNG (not planned), except ProfileToneCurve, which Genzo Standard uses (DEV-02)
 
 The UI for the edit parameters is DEV-02 (Basic panel) and DEV-12 (crop). Their ranges, units and defaults are defined here, under Data, and only here.
 
@@ -64,7 +64,8 @@ The order is fixed, as the spec sets it. The table shows which stages M1 builds 
   - ForwardMatrix1 and 2 when present;
   - the as-shot neutral or white balance coefficients (only the first three; the fourth is NaN on every body tested);
   - BaselineExposure;
-  - ShadowScale (DNG tag 50739, default 1), for the base curve's black (DEV-02).
+  - ShadowScale (DNG tag 50739, default 1), for the base curve's black (DEV-02);
+  - the profile's ProfileToneCurve (50940), DefaultBlackRender (51110) and ColorimetricReference (50879), when present, for the base curve (DEV-02).
 - **The opcode lists** (1, 2 and 3), parsed into a typed list. Each opcode keeps its optional flag.
 - **Orientation**, the EXIF or DNG value 1 to 8, *not* applied to the pixels (see Geometry).
 - **The embedded preview**, through `imgio::decode_preview`, as RGBA8 with its orientation (not applied, as for the image) and color encoding.
@@ -307,7 +308,7 @@ This stage works on linear AP1 at viewport resolution. User adjustments change l
    - `r(u) = u²` up to `u = 1`, and `2u − 1` past it. So the change starts flat at middle gray, reaches the full shift at the source point, and continues smoothly beyond it. The curve stays monotonic over the whole range: its slope is at least 0.24 for Whites and 0.55 for Blacks.
 4. **Contrast:** global. An S-curve in `t` around middle gray, which leaves middle gray unchanged.
 5. **The profile's base tone curve.**
-   - Genzo Standard applies Genzo's base tone curve, which maps scene-referred values to display-referred 0 to 1: the Adobe DNG SDK's default rendering (its exposure ramp, then its default tone curve, keeping hue, in linear ProPhoto RGB). The curve and how it is applied are defined in the DEV-02 spec.
+   - Genzo Standard applies Genzo's base tone curve, which maps scene-referred values to display-referred 0 to 1: the Adobe DNG SDK's default rendering (its exposure ramp, then its default tone curve, or the file's own ProfileToneCurve when it has one, keeping hue, in linear ProPhoto RGB). The curve and how it is applied are defined in the DEV-02 spec.
    - Genzo Linear applies none: values are clamped at display white, after the output transform's gamut compression.
    - Non-RAW files use "Embedded": no base curve, since they are display-referred already.
 

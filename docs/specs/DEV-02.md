@@ -13,7 +13,7 @@ Sources: the spec's feature table (revision 89: "Camera profile selection (matri
 **Out of scope for M1**, with their milestone:
 - Texture, Clarity, Dehaze (M3)
 - Auto tone (Ctrl U) and auto white balance (Ctrl Shift U) (M4)
-- profiles other than Genzo Standard and Genzo Linear: DCP files, the profile tables embedded in DNG, ProfileToneCurve (not planned in M1, see *Genzo Standard*)
+- profiles other than Genzo Standard and Genzo Linear: DCP files, the hue and saturation tables embedded in DNG (not planned in M1, see *Genzo Standard*)
 - the per-color B&W mix (M3)
 - clipping preview while Alt-dragging a slider: DEV-03 owns it
 
@@ -37,7 +37,7 @@ From top to bottom, as screen D1 lays it out:
 
 ### Genzo Standard: the base tone curve
 
-Genzo Standard is the Adobe DNG SDK 1.4's default rendering (`dng_render.cpp`, `dng_reference.cpp`), ported step by step as stage 4 was. Two parts: the SDK's exposure ramp, which sets the black and white points, and its default tone curve (`dng_tone_curve_acr3_default`), applied so that hue holds. With it, a RAW file looks as Adobe's own renderer shows it with the default settings and no camera profile tables.
+Genzo Standard is the Adobe DNG SDK 1.4's default rendering (`dng_render.cpp`, `dng_reference.cpp`), ported step by step as stage 4 was. Two parts: the SDK's exposure ramp, which sets the black and white points, and a tone curve, applied so that hue holds. The curve is the file's own ProfileToneCurve when it has a valid one, and the SDK's default (`dng_tone_curve_acr3_default`) otherwise, as the SDK chooses (owner, 2026-10-19). With it, a RAW file looks as Adobe's own renderer shows it with the default settings and no hue or saturation tables.
 
 It runs as the last step of stage 6, after exposure, Highlights, Shadows, Whites, Blacks and Contrast (DEV-01, *Stage 6*). It works per channel, not on luminance, unlike the steps before it. For each pixel:
 
@@ -48,17 +48,22 @@ It runs as the last step of stage 6, after exposure, Highlights, Shadows, Whites
    - **The black point `B`** is the SDK's default black, `0.001 × 5 × ShadowScale`, carried into the same units: `B = 0.005 × ShadowScale × 2^(BaselineExposure + exposure)`. The SDK's black is in scene units, before any exposure gain, and this keeps it there. Without the factor, the black of the iPhone 13 Pro Max file (+2.50 EV) would be 5.7 times too low. `B` is limited to `0.99 × W`, as in the SDK.
    - **The toe.** Near `B` the ramp is a quadratic of radius `r = min(0.5 × B, (W − B) / 16)`: below `B − r` it is 0, within `r` of `B` it is `(x − (B − r))² / (4 r (W − B))`, above it the line. This is the SDK's code with its `minBlack` equal to `B`.
    - ShadowScale is the DNG tag (default 1). Only DNGs carry it. In the corpus it is 1, except Adobe's conversion of the Canon CRAW file (0.906). The 5 is the SDK's default Shadows value.
-   - The profile's DefaultBlackRender tag is not read. No corpus file has it.
-3. **The tone curve, keeping hue** (`RefBaselineRGBTone`). The curve is the SDK's 1025-entry table, interpolated linearly. Each pixel's largest and smallest channels go through the curve; the middle one is placed at the same fraction between them as before: `mid' = min' + (max' − min') × (mid − min) / (max − min)`. Two equal channels go through the curve; three equal channels stay neutral. The SDK samples the curve into a 4097-entry table, but every table knot is one of its samples, so interpolating the 1025 entries directly gives the same values to f32 rounding.
+   - **DefaultBlackRender** (DNG tag 51110): when the profile sets it to 1 (None), `B` is 0 and the toe goes with it, as in the SDK. No corpus file has it.
+   - **ColorimetricReference** (DNG tag 50879): a DNG that says it is output-referred (1) gets no black and no curve, as in the SDK: `B` is 0 and step 3 is skipped. No corpus file has it; ProRAW leaves the tag out, which means scene-referred.
+3. **The tone curve, keeping hue** (`RefBaselineRGBTone`).
+   - **Which curve.** The file's ProfileToneCurve (DNG tag 50940, in the profile of the main image) when it is valid, else the SDK's ACR3 table of 1025 entries. Valid is the SDK's rule: an even count of floats, at least 2 points, every coordinate in 0 to 1, and x strictly increasing. Genzo adds a cap of 4096 points; past it, or when the tag is invalid, the ACR3 curve is used and the status bar says "The file's tone curve can't be read; using the default". In the corpus only the ProRAW files (iPhone 12 Pro, 16 Pro) carry one, of 257 points. The Adobe Standard profiles in Adobe DNG Converter's references have none.
+   - **The file's curve is a spline**, solved as the SDK solves it (`dng_spline_solver`: C1 and C2 continuous, slopes from the weighted neighbor slopes, then the tridiagonal solve), and evaluated per segment as a cubic Bezier (`EvaluateSplineSegment`). Below the first point and above the last it is constant.
+   - **One table for both curves.** As the SDK does (`dng_1d_table`, not subsampled), the curve is evaluated at the 4097 points `i / 4096` in f64, stored as f32, and interpolated linearly. The table is built on the CPU once per photo and uploaded. For the ACR3 curve this gives the same values as interpolating its 1025 entries, since every one of them is a table point.
+   - **RGBTone.** Each pixel's largest and smallest channels go through the curve; the middle one is placed at the same fraction between them as before: `mid' = min' + (max' − min') × (mid − min) / (max − min)`. Two equal channels go through the curve; three equal channels stay neutral.
 4. **Back to AP1** with the inverse matrix of step 1.
 
-The output is display-referred: 0 to 1 in each channel, with middle gray (0.18 after exposure) at 0.388, sRGB code 167. Stage 7 and the output transform (stage 9) follow, as DEV-01 describes. Gamut compression still runs for RAW photos, though nothing past display white reaches it.
+The output is display-referred: 0 to 1 in each channel. With the ACR3 curve, middle gray (0.18 after exposure) lands at 0.388, sRGB code 167. Apple's curves are much darker in the midtones: they map 0.18 to 0.122 (iPhone 12 Pro) and 0.125 (16 Pro), about sRGB code 98. Stage 7 and the output transform (stage 9) follow, as DEV-01 describes. Gamut compression still runs for RAW photos, though nothing past display white reaches it.
 
 **Where Genzo differs from the SDK**, on purpose:
 - **Negative exposure.** For an exposure below 0 EV in total, the SDK keeps its white at 1 and darkens its tone curve with a quadratic (`dng_function_exposure_tone`), which is not a gain. Genzo applies negative exposure as a gain, like positive exposure (DEV-01 criterion 12). The two agree only at a total exposure of 0 EV or more.
 - **Values past white and below 0** are kept through stage 6 in Genzo, and the SDK clips them to 0 to 1 before its ramp. The ramp maps them to 0 and 1 anyway, so the result is the same.
 - **Highlight desaturation** (DEV-01, stage 4) is Genzo's. The SDK has none, so pixels near the clip level differ.
-- **Embedded profile data is ignored:** ProfileToneCurve, ProfileHueSatMap and ProfileLookTable. The corpus's ProRAW files (iPhone 12 Pro, 16 Pro) carry a 257-point ProfileToneCurve. Adobe DNG Converter's references carry the hue and saturation tables. The SDK would use them. Genzo Standard looks the same for every camera instead. Reading a file's own profile is a later profile, not part of Genzo Standard.
+- **The hue and saturation tables are ignored:** ProfileHueSatMap and ProfileLookTable. Adobe DNG Converter's references carry them (the Adobe Standard profile), and the SDK would use them. Reading them is a later profile, not part of Genzo Standard. A file's ProfileToneCurve is used, as the SDK uses it.
 
 **Licensing.** The table and the RGBTone method are Adobe's code from the DNG SDK copy in gopro/gpr, under BSD-3-Clause, as `color::camera` is. The ported file carries the notice, and `docs/licenses.md` lists it.
 
@@ -189,7 +194,7 @@ Ctrl U and Ctrl Shift U are not registered until their commands exist (M4).
 
 DEV-02 adds no fields. It reads and writes the edit struct in DEV-01, *Data*: `profile`, `treatment`, `white_balance` (`mode`, `temp`, `tint`), `exposure`, `contrast`, `highlights`, `shadows`, `whites`, `blacks`, `vibrance`, `saturation`.
 
-The decoder carries one more DNG tag for the base curve: ShadowScale (50739, default 1), in the color data of DEV-01's stage 0.
+The decoder carries four more DNG tags for the base curve, in the color data of DEV-01's stage 0: ShadowScale (50739, default 1), ProfileToneCurve (50940, the points as read, or absent), DefaultBlackRender (51110, default 0) and ColorimetricReference (50879, default 0).
 
 The white balance presets are constants in `color` (their xy), not stored.
 
@@ -200,6 +205,8 @@ The white balance presets are constants in `color` (their xy), not stored.
 - **Temp past the slider's range after a pick** (light below 2000 K): clamped to 2000 K, and the photo stays slightly warm.
 - **BaselineExposure below 0** (Pentax K10D: −0.5 EV): it lowers the black too, as in the SDK.
 - **A very dark or bright exposure:** `B` grows with the exposure gain, and is limited to 0.99 × W. At +5 EV and +2.50 EV BaselineExposure, `B` is 0.905, so almost everything is white; that is the SDK's behavior.
+- **A file's curve that is not monotonic, or a spline that overshoots 0 to 1** between its points: Genzo applies it as the SDK does, without fixing it. The SDK's validity rule does not ask for monotonic y values. Both ProRAW curves in the corpus are monotonic and stay within 0 to 1 once solved.
+- **A ProfileToneCurve with a huge point count** (a damaged or hostile file): past 4096 points the decoder does not read it, and the ACR3 curve is used (see *Which curve*). The decode fuzz target covers the tag.
 - **Negative working-space values** (noise, colors outside ProPhoto): below the ramp's black, so 0. A color outside ProPhoto but inside AP1 loses that part here; AP1 reaches slightly past ProPhoto near its red primary.
 - **Switching profile** keeps every slider value; only the base curve changes.
 - **B&W, then Color**: Vibrance and Saturation come back with their values.
@@ -207,16 +214,22 @@ The white balance presets are constants in `color` (their xy), not stored.
 
 ## Acceptance criteria
 
-1. **The curve is Adobe's.** The `color` crate's table equals the SDK's `dng_tone_curve_acr3_default` table, all 1025 values as f32. The curve evaluated on a grid of 10,000 points matches the SDK's `Evaluate` within 1e-6. *Check:* a `color` test against values the probe prints.
+1. **The curves are Adobe's.**
+   - The `color` crate's ACR3 table equals the SDK's `dng_tone_curve_acr3_default` table, all 1025 values as f32. The curve evaluated on a grid of 10,000 points matches the SDK's `Evaluate` within 1e-6.
+   - Genzo's spline, solved from the two ProRAW curves and from synthetic point sets (2 points, 3 points, uneven spacing, a non-monotonic set), matches the SDK's `dng_spline_solver::Evaluate` within 1e-9 on the same grid.
+   - The 4097-entry table equals the SDK's `fToneCurve` table as f32, for ACR3 and both ProRAW curves, at exposure 0.
+   - Invalid curves (odd count, one point, x not increasing, a value outside 0 to 1, 4097 points) fall back to ACR3.
+
+   *Check:* `color` tests against values the probe prints.
 2. **The ramp is Adobe's.** `dng_function_exposure_ramp` and Genzo's ramp agree within 1e-9 on a grid of inputs, for blacks of 0, 1e-4, 0.005, 0.05 and 0.5 and white 1, toe included. *Check:* a `color` test against the probe.
 3. **RGBTone is Adobe's.** Genzo's CPU reference matches `RefBaselineRGBTone` within 1e-6 on 100,000 random triples, with ties (two or three equal channels), zeros and ones among them. The GPU matches the CPU reference within one f16 step. *Check:* `color` and pipeline tests.
-4. **Properties.** The curve is monotonic, maps 0 to 0 and 1 to 1, and maps 0.18 to 0.388 ± 0.001. Neutral pixels stay neutral (OkLCh chroma ≤ 0.001 after stage 9, before quantizing). The fraction (mid − min) / (max − min) in ProPhoto is the same before and after, within 1e-5. *Check:* `color` tests.
-5. **Whole render against the SDK.** The probe renders four corpus DNGs with no profile tables (Leica Q2, Pentax K10D, the Halide iPhone 16 Pro Bayer DNG, Galaxy S23 Ultra) through `dng_render`: the ACR3 curve set explicitly, Shadows 5, exposure 0 and +1 EV, final space linear ProPhoto RGB as floats. Genzo renders the same files to the end of stage 6 and converts to the same space. Compared as 64 px block means over the default crop:
+4. **Properties.** The ACR3 curve is monotonic, maps 0 to 0 and 1 to 1, and maps 0.18 to 0.388 ± 0.001. Neutral pixels stay neutral (OkLCh chroma ≤ 0.001 after stage 9, before quantizing). The fraction (mid − min) / (max − min) in ProPhoto is the same before and after, within 1e-5. *Check:* `color` tests.
+5. **Whole render against the SDK.** The probe renders six corpus DNGs with no hue or saturation tables through `dng_render`: four on the ACR3 curve (Leica Q2, Pentax K10D, the Halide iPhone 16 Pro Bayer DNG, Galaxy S23 Ultra) and the two ProRAW files on their own ProfileToneCurve (the 16 Pro patched from DNG 1.7 to 1.4, as the color probe does). Settings: the SDK's curve choice left as it is, Shadows 5, exposure 0 and +1 EV, final space linear ProPhoto RGB as floats. Genzo renders the same files to the end of stage 6 and converts to the same space. Compared as 64 px block means over the default crop:
    - mean difference ≤ 0.5 % of white and the 99th percentile ≤ 2 % (the demosaics differ, and Genzo desaturates near the clip);
    - these are targets: the PR that first runs the test records the measured values here.
 
    Negative exposure is not compared (see *Where Genzo differs*). *Check:* a corpus test (local), with the probe extended by a `render_probe`.
-6. **Golden images.** Stage 6 with Genzo Standard, and with Genzo Linear, on the CC0 set: DEV-01 criterion 5's tolerances, as display output after stage 9.
+6. **Golden images.** Stage 6 with Genzo Standard, and with Genzo Linear, on the CC0 set, which includes the iPhone 12 Pro ProRAW file and so its own curve: DEV-01 criterion 5's tolerances, as display output after stage 9.
 7. **Presets.** Each preset's Temp and Tint turn back into its xy within 1e-4. Cloudy is 6504 K ± 2 K and Tungsten 2856 K ± 2 K with tint 0 ± 0.5, as DEV-01 criterion 10. No two presets round to the same shown values. *Check:* `color` tests.
 8. **The picker.**
    - **RAW:** a synthetic sensor (the Pixel 4a profile run backwards, as in DEV-01's pyramid test) shows a gray patch lit by illuminant A, white balanced As Shot at D65. A pick on the patch gives 2856 K ± 20 K and tint 0 ± 2, and the patch renders with OkLCh chroma ≤ 0.005.
