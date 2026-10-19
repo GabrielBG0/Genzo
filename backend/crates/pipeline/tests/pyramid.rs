@@ -172,10 +172,12 @@ fn pyramid_levels(gpu: &Gpu, config: TileConfig, src: &RawSource) -> Vec<Vec<[f3
 
 const ONE_TILE: TileConfig = TileConfig {
     tile: 4096,
+    xtrans_tile: 4096,
     apron: 24,
 };
 const SMALL: TileConfig = TileConfig {
     tile: 64,
+    xtrans_tile: 60,
     apron: 24,
 };
 

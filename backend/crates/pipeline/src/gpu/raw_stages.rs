@@ -25,10 +25,12 @@ use crate::tiles::{TileJob, jobs};
 
 const WG: u32 = 16;
 
-/// Tile size and apron (DEV-01: 1024 and 24 px for Bayer and linear input).
+/// Tile sizes and apron (DEV-01: 1024 px for Bayer and linear input, 512
+/// for X-Trans, whose demosaic keeps 8 directional images; 24 px of apron).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TileConfig {
     pub tile: u32,
+    pub xtrans_tile: u32,
     pub apron: u32,
 }
 
@@ -36,9 +38,48 @@ impl Default for TileConfig {
     fn default() -> Self {
         Self {
             tile: 1024,
+            xtrans_tile: 512,
             apron: 24,
         }
     }
+}
+
+/// The green hexagon around each pixel of a 3 x 3 cell of an X-Trans
+/// pattern (from its origin) as (x, y) offsets, and the solitary green's
+/// (x, y) in the cell: darktable's `allhex` and `sgrow`/`sgcol`.
+pub fn xtrans_hexagons(x: &[[u8; 6]; 6]) -> ([[[(i32, i32); 8]; 3]; 3], (i32, i32)) {
+    const ORTH: [i32; 12] = [1, 0, 0, 1, -1, 0, 0, -1, 1, 0, 0, 1];
+    const PATT: [[i32; 16]; 2] = [
+        [0, 1, 0, -1, 2, 0, -1, 0, 1, 1, 1, -1, 0, 0, 0, 0],
+        [0, 1, 0, -2, 1, 0, -2, 0, 1, 1, -2, -2, 1, -1, -1, 1],
+    ];
+    let fc = |r: i32, c: i32| x[r.rem_euclid(6) as usize][c.rem_euclid(6) as usize];
+    let mut hex = [[[(0, 0); 8]; 3]; 3];
+    let mut sgreen = (0, 0);
+    for row in 0..3 {
+        for col in 0..3 {
+            let mut ng = 0;
+            for d in (0..10).step_by(2) {
+                let g = usize::from(fc(row, col) == 1);
+                if fc(row + ORTH[d], col + ORTH[d + 2]) == 1 {
+                    ng = 0;
+                } else {
+                    ng += 1;
+                }
+                if ng == 4 {
+                    sgreen = (col, row);
+                }
+                if ng == g + 1 {
+                    for c in 0..8 {
+                        let v = ORTH[d] * PATT[g][c * 2] + ORTH[d + 1] * PATT[g][c * 2 + 1];
+                        let h = ORTH[d + 2] * PATT[g][c * 2] + ORTH[d + 3] * PATT[g][c * 2 + 1];
+                        hex[row as usize][col as usize][c ^ (g * 2 & d)] = (h, v);
+                    }
+                }
+            }
+        }
+    }
+    (hex, sgreen)
 }
 
 /// The raw rect reaches this far past the padded rect: FixBadPixelsConstant
@@ -71,6 +112,123 @@ struct TileUniforms {
     /// as in tile_common.wgsl.
     cfa: [u32; 4],
     xtrans: [[u32; 4]; 9],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct XImageUniforms {
+    hex: [[i32; 4]; 36],
+    sgreen: [i32; 4],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable, Default)]
+struct XRunUniforms {
+    p: [i32; 4],
+    q: [u32; 4],
+}
+
+/// The entry points of tile_xtrans.wgsl, in pass order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum XStep {
+    Copy,
+    CopySet,
+    MinMax,
+    Green,
+    Recalc,
+    Solitary,
+    RedBlue,
+    TwoByTwo,
+    Derivatives,
+    Homogeneity,
+    HomoSum,
+    Final,
+}
+
+const XSTEPS: [(XStep, &str); 12] = [
+    (XStep::Copy, "copy"),
+    (XStep::CopySet, "copy_set"),
+    (XStep::MinMax, "minmax"),
+    (XStep::Green, "green"),
+    (XStep::Recalc, "recalc"),
+    (XStep::Solitary, "solitary"),
+    (XStep::RedBlue, "red_blue"),
+    (XStep::TwoByTwo, "two_by_two"),
+    (XStep::Derivatives, "derivatives"),
+    (XStep::Homogeneity, "homogeneity"),
+    (XStep::HomoSum, "homo_sum"),
+    (XStep::Final, "final_rgb"),
+];
+
+/// darktable's host loop for Markesteijn, 3 passes (process_markesteijn_cl):
+/// each step and its run parameters.
+fn xtrans_sequence() -> (Vec<(XStep, usize)>, Vec<XRunUniforms>) {
+    let mut runs = vec![XRunUniforms::default()];
+    let mut seq = vec![(XStep::Copy, 0), (XStep::MinMax, 0), (XStep::Green, 0)];
+    let mut push = |seq: &mut Vec<(XStep, usize)>, step, run: XRunUniforms| {
+        runs.push(run);
+        seq.push((step, runs.len() - 1));
+    };
+    for pass in 0..3u32 {
+        let base = if pass == 0 { 0 } else { 4 };
+        if pass == 1 {
+            seq.push((XStep::CopySet, 0));
+        }
+        if pass > 0 {
+            push(
+                &mut seq,
+                XStep::Recalc,
+                XRunUniforms {
+                    p: [0; 4],
+                    q: [0, base, 0, 0],
+                },
+            );
+        }
+        // The solitary green runs write images 0, 1, -, 2, -, 3 of the set
+        // and read the one they write next.
+        let images = [0, 1, 2, 2, 3, 3];
+        for d in 0..6i32 {
+            let i = if d % 2 == 0 { 1 } else { 0 };
+            let hcomp = if d % 2 == 0 { 0 } else { 2 };
+            push(
+                &mut seq,
+                XStep::Solitary,
+                XRunUniforms {
+                    p: [d, i, i ^ 1, hcomp],
+                    q: [base + images[d as usize], base, 0, 0],
+                },
+            );
+        }
+        for d in 0..4i32 {
+            push(
+                &mut seq,
+                XStep::RedBlue,
+                XRunUniforms {
+                    p: [d, 0, 0, 0],
+                    q: [base + d as u32, base, 0, 0],
+                },
+            );
+        }
+        for d in (0..8i32).step_by(2) {
+            push(
+                &mut seq,
+                XStep::TwoByTwo,
+                XRunUniforms {
+                    p: [d, 0, 0, 0],
+                    q: [base + d as u32 / 2, base, 0, 0],
+                },
+            );
+        }
+    }
+    for step in [
+        XStep::Derivatives,
+        XStep::Homogeneity,
+        XStep::HomoSum,
+        XStep::Final,
+    ] {
+        seq.push((step, 0));
+    }
+    (seq, runs)
 }
 
 #[repr(C)]
@@ -211,6 +369,7 @@ struct MapUniform {
 #[derive(Clone, Copy)]
 enum Slot {
     Uniform,
+    StorageRw,
     Float,
     Uint,
     Storage,
@@ -230,6 +389,44 @@ fn pass(device: &wgpu::Device, name: &str, body: &str, slots: &[Slot]) -> Pass {
 /// A pass from `body`, after the tile block (`tile_common.wgsl`) when
 /// `common`; binding 0 is a uniform buffer either way.
 fn pass_with(device: &wgpu::Device, name: &str, body: &str, slots: &[Slot], common: bool) -> Pass {
+    let layout = layout(device, name, slots);
+    let source = if common {
+        format!("{}\n{}", include_str!("shaders/tile_common.wgsl"), body)
+    } else {
+        body.to_owned()
+    };
+    let pipeline = pipeline(device, name, &layout, &source, "main");
+    Pass { layout, pipeline }
+}
+
+fn pipeline(
+    device: &wgpu::Device,
+    name: &str,
+    layout: &wgpu::BindGroupLayout,
+    source: &str,
+    entry: &str,
+) -> wgpu::ComputePipeline {
+    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some(name),
+        source: wgpu::ShaderSource::Wgsl(source.into()),
+    });
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some(name),
+        bind_group_layouts: &[Some(layout)],
+        immediate_size: 0,
+    });
+    device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+        label: Some(name),
+        layout: Some(&pipeline_layout),
+        module: &module,
+        entry_point: Some(entry),
+        compilation_options: Default::default(),
+        cache: None,
+    })
+}
+
+/// A bind group layout: binding 0 a uniform buffer, then `slots`.
+fn layout(device: &wgpu::Device, name: &str, slots: &[Slot]) -> wgpu::BindGroupLayout {
     let mut entries = vec![wgpu::BindGroupLayoutEntry {
         binding: 0,
         visibility: wgpu::ShaderStages::COMPUTE,
@@ -246,6 +443,11 @@ fn pass_with(device: &wgpu::Device, name: &str, body: &str, slots: &[Slot], comm
                 sample_type: wgpu::TextureSampleType::Float { filterable: false },
                 view_dimension: wgpu::TextureViewDimension::D2,
                 multisampled: false,
+            },
+            Slot::StorageRw => wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Storage { read_only: false },
+                has_dynamic_offset: false,
+                min_binding_size: None,
             },
             Slot::Uniform => wgpu::BindingType::Buffer {
                 ty: wgpu::BufferBindingType::Uniform,
@@ -275,33 +477,10 @@ fn pass_with(device: &wgpu::Device, name: &str, body: &str, slots: &[Slot], comm
             count: None,
         });
     }
-    let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
         label: Some(name),
         entries: &entries,
-    });
-    let source = if common {
-        format!("{}\n{}", include_str!("shaders/tile_common.wgsl"), body)
-    } else {
-        body.to_owned()
-    };
-    let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-        label: Some(name),
-        source: wgpu::ShaderSource::Wgsl(source.into()),
-    });
-    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-        label: Some(name),
-        bind_group_layouts: &[Some(&layout)],
-        immediate_size: 0,
-    });
-    let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-        label: Some(name),
-        layout: Some(&pipeline_layout),
-        module: &module,
-        entry_point: Some("main"),
-        compilation_options: Default::default(),
-        cache: None,
-    });
-    Pass { layout, pipeline }
+    })
 }
 
 #[derive(Debug)]
@@ -315,12 +494,37 @@ struct Passes {
     rcd_final: Pass,
     stage4: Pass,
     downsample: Pass,
+    /// Markesteijn: one layout, one pipeline per entry point (XSTEPS).
+    xtrans_layout: wgpu::BindGroupLayout,
+    xtrans: Vec<wgpu::ComputePipeline>,
 }
 
 impl Passes {
     fn new(device: &wgpu::Device) -> Self {
-        use Slot::{Float, Storage, Store, Uint, Uniform};
+        use Slot::{Float, Storage, StorageRw, Store, Uint, Uniform};
         use wgpu::TextureFormat::{R32Float, Rg32Float, Rgba16Float, Rgba32Float};
+        let xtrans_layout = layout(
+            device,
+            "tile xtrans",
+            &[
+                Uniform,
+                Uniform,
+                Float,
+                StorageRw,
+                StorageRw,
+                StorageRw,
+                Store(Rgba32Float),
+            ],
+        );
+        let source = format!(
+            "{}\n{}",
+            include_str!("shaders/tile_common.wgsl"),
+            include_str!("shaders/tile_xtrans.wgsl")
+        );
+        let xtrans = XSTEPS
+            .iter()
+            .map(|(_, entry)| pipeline(device, entry, &xtrans_layout, &source, entry))
+            .collect();
         Self {
             stage1: pass(
                 device,
@@ -384,6 +588,8 @@ impl Passes {
                 &[Float, Store(Rgba16Float)],
                 false,
             ),
+            xtrans_layout,
+            xtrans,
         }
     }
 }
@@ -423,27 +629,74 @@ fn storage(device: &wgpu::Device, label: &str, bytes: u64) -> wgpu::Buffer {
     })
 }
 
-/// The per-tile textures: allocated once at the largest padded size.
+/// Which demosaic a tile set is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Linear,
+    Bayer,
+    XTrans,
+}
+
+impl Kind {
+    fn of(src: &RawSource) -> Self {
+        match src.cfa {
+            None => Kind::Linear,
+            Some(Cfa::Bayer(_)) => Kind::Bayer,
+            Some(Cfa::XTrans(_)) => Kind::XTrans,
+        }
+    }
+}
+
+/// RCD's working textures.
 #[derive(Debug)]
-struct Tiles {
-    size: (u32, u32),
-    /// The raw rect: one 16-bit sample per texel, `samples` texels per pixel.
-    raw: wgpu::Texture,
-    cfa: wgpu::Texture,
+struct Rcd {
     vh: wgpu::Texture,
     lpf: wgpu::Texture,
     pq: wgpu::Texture,
     pq_dir: wgpu::Texture,
     green: wgpu::Texture,
     rb: wgpu::Texture,
+}
+
+/// Markesteijn's working buffers (tile_xtrans.wgsl) and a bind group per
+/// run of its sequence.
+#[derive(Debug)]
+struct Xt {
+    rgb: wgpu::Buffer,
+    scratch: wgpu::Buffer,
+    homo: wgpu::Buffer,
+    groups: Vec<wgpu::BindGroup>,
+}
+
+/// The per-tile resources: allocated once at the largest padded size, with
+/// the working set of one demosaic only.
+#[derive(Debug)]
+struct Tiles {
+    size: (u32, u32),
+    kind: Kind,
+    /// The raw rect: one 16-bit sample per texel, `samples` texels per pixel.
+    raw: wgpu::Texture,
+    cfa: wgpu::Texture,
     rgb: wgpu::Texture,
+    rcd: Option<Rcd>,
+    xt: Option<Xt>,
 }
 
 impl Tiles {
-    fn new(device: &wgpu::Device, size: (u32, u32), samples: u32) -> Self {
+    fn new(device: &wgpu::Device, size: (u32, u32), samples: u32, kind: Kind) -> Self {
         use wgpu::TextureFormat::{R32Float, Rg32Float, Rgba32Float};
         let (w, h) = (size.0 + 2 * RAW_MARGIN, size.1 + 2 * RAW_MARGIN);
+        let px = u64::from(size.0) * u64::from(size.1);
+        let buffer = |label, bytes: u64| {
+            device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some(label),
+                size: bytes,
+                usage: wgpu::BufferUsages::STORAGE,
+                mapped_at_creation: false,
+            })
+        };
         Self {
+            kind,
             size,
             raw: device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("tile raw"),
@@ -460,14 +713,36 @@ impl Tiles {
                 view_formats: &[],
             }),
             cfa: texture(device, "tile cfa", size, R32Float),
-            vh: texture(device, "tile vh", size, R32Float),
-            lpf: texture(device, "tile lpf", size, R32Float),
-            pq: texture(device, "tile pq", size, Rg32Float),
-            pq_dir: texture(device, "tile pq dir", size, R32Float),
-            green: texture(device, "tile green", size, R32Float),
-            rb: texture(device, "tile rb", size, Rg32Float),
             rgb: texture(device, "tile rgb", size, Rgba32Float),
+            rcd: (kind == Kind::Bayer).then(|| Rcd {
+                vh: texture(device, "tile vh", size, R32Float),
+                lpf: texture(device, "tile lpf", size, R32Float),
+                pq: texture(device, "tile pq", size, Rg32Float),
+                pq_dir: texture(device, "tile pq dir", size, R32Float),
+                green: texture(device, "tile green", size, R32Float),
+                rb: texture(device, "tile rb", size, Rg32Float),
+            }),
+            xt: (kind == Kind::XTrans).then(|| Xt {
+                // 8 images of 4 floats; 8 values; 8 bytes per pixel.
+                rgb: buffer("tile xt rgb", px * 128),
+                scratch: buffer("tile xt scratch", px * 32),
+                homo: buffer("tile xt homo", px * 8),
+                groups: Vec::new(),
+            }),
         }
+    }
+
+    /// The bytes of the working set (DEV-01's "stage 1 to 4 scratch").
+    fn scratch_bytes(&self) -> u64 {
+        let px = u64::from(self.size.0) * u64::from(self.size.1);
+        // cfa 4 B and rgb 16 B, plus RCD's vh, lpf, pq_dir, green (4 B) and
+        // pq, rb (8 B), or Markesteijn's buffers.
+        let set = match self.kind {
+            Kind::Linear => 0,
+            Kind::Bayer => 4 * 4 + 2 * 8,
+            Kind::XTrans => 128 + 32 + 8,
+        };
+        px * (4 + 16 + set)
     }
 }
 
@@ -486,6 +761,11 @@ pub struct RawStages {
     passes: Passes,
     uniforms: wgpu::Buffer,
     stage4_uniforms: wgpu::Buffer,
+    /// Markesteijn's per-image uniforms (hexagons, solitary green) and its
+    /// sequence of steps with a uniform buffer per run.
+    xt_image: wgpu::Buffer,
+    xt_sequence: Vec<(XStep, usize)>,
+    xt_runs: Vec<wgpu::Buffer>,
     tiles: Option<Tiles>,
     /// For [`RawStages::render`] only, made on first use.
     readback: Option<wgpu::Buffer>,
@@ -509,7 +789,30 @@ struct ImageBuffers {
 
 impl RawStages {
     pub fn new(gpu: &Gpu, config: TileConfig) -> Self {
+        let device = &gpu.device;
+        let (xt_sequence, runs) = xtrans_sequence();
+        let xt_runs = runs
+            .iter()
+            .map(|r| {
+                let b = device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("xtrans run"),
+                    size: std::mem::size_of::<XRunUniforms>() as u64,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+                gpu.queue.write_buffer(&b, 0, bytemuck::bytes_of(r));
+                b
+            })
+            .collect();
         Self {
+            xt_image: device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("xtrans image"),
+                size: std::mem::size_of::<XImageUniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }),
+            xt_sequence,
+            xt_runs,
             config,
             passes: Passes::new(&gpu.device),
             uniforms: gpu.device.create_buffer(&wgpu::BufferDescriptor {
@@ -535,11 +838,7 @@ impl RawStages {
     /// The bytes of one tile's working textures (DEV-01's "stage 1 to 4
     /// scratch"). Zero before the first render.
     pub fn scratch_bytes(&self) -> u64 {
-        self.tiles.as_ref().map_or(0, |t| {
-            let px = u64::from(t.size.0) * u64::from(t.size.1);
-            // cfa, vh, lpf, pq_dir, green: 4 B; pq, rb: 8 B; rgb: 16 B.
-            px * (5 * 4 + 2 * 8 + 16)
-        })
+        self.tiles.as_ref().map_or(0, Tiles::scratch_bytes)
     }
 
     /// The bytes of the raw tile the upload lands in (DEV-01's "upload
@@ -548,6 +847,44 @@ impl RawStages {
         self.tiles.as_ref().map_or(0, |t| {
             u64::from(t.raw.width()) * u64::from(t.raw.height()) * 2
         })
+    }
+
+    fn xt_groups(
+        &self,
+        device: &wgpu::Device,
+        cfa: &wgpu::Texture,
+        rgb: &wgpu::Texture,
+        xt: &Xt,
+    ) -> Vec<wgpu::BindGroup> {
+        let (cfa, rgb) = (view(cfa), view(rgb));
+        self.xt_runs
+            .iter()
+            .map(|run| {
+                let entries = [
+                    self.uniforms.as_entire_binding(),
+                    self.xt_image.as_entire_binding(),
+                    run.as_entire_binding(),
+                    wgpu::BindingResource::TextureView(&cfa),
+                    xt.rgb.as_entire_binding(),
+                    xt.scratch.as_entire_binding(),
+                    xt.homo.as_entire_binding(),
+                    wgpu::BindingResource::TextureView(&rgb),
+                ];
+                let entries: Vec<_> = entries
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, resource)| wgpu::BindGroupEntry {
+                        binding: i as u32,
+                        resource,
+                    })
+                    .collect();
+                device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("xtrans run"),
+                    layout: &self.passes.xtrans_layout,
+                    entries: &entries,
+                })
+            })
+            .collect()
     }
 
     /// The pyramid of the last [`RawStages::render_pyramid`].
@@ -563,11 +900,17 @@ impl RawStages {
         } else {
             RAW_MARGIN
         };
+        let kind = Kind::of(src);
+        let tile = if kind == Kind::XTrans {
+            self.config.xtrans_tile
+        } else {
+            self.config.tile
+        };
         let jobs = jobs(
             (w, h),
             (src.active.left, src.active.top),
             src.stored,
-            self.config.tile,
+            tile,
             self.config.apron,
             margin,
         );
@@ -575,7 +918,8 @@ impl RawStages {
             (a.max(j.padded.width), b.max(j.padded.height))
         });
         let fits = self.tiles.as_ref().is_some_and(|t| {
-            t.size.0 >= largest.0
+            t.kind == kind
+                && t.size.0 >= largest.0
                 && t.size.1 >= largest.1
                 && t.raw.width() >= (largest.0 + 2 * RAW_MARGIN) * src.samples
                 && t.raw.height() >= largest.1 + 2 * RAW_MARGIN
@@ -583,11 +927,17 @@ impl RawStages {
         if !fits {
             self.tiles = None;
             self.readback = None;
-            let full = self.config.tile + 2 * self.config.apron;
+            // wgpu frees dropped textures once no submitted work uses them.
+            let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+            let full = tile + 2 * self.config.apron;
             // Allocated at the configured size, so every later image fits;
             // smaller only when this image is.
             let size = (full.min(w).max(largest.0), full.min(h).max(largest.1));
-            self.tiles = Some(Tiles::new(&gpu.device, size, 3));
+            let mut tiles = Tiles::new(&gpu.device, size, 3, kind);
+            if let Some(xt) = tiles.xt.as_mut() {
+                xt.groups = self.xt_groups(&gpu.device, &tiles.cfa, &tiles.rgb, xt);
+            }
+            self.tiles = Some(tiles);
         }
         jobs
     }
@@ -635,6 +985,22 @@ impl RawStages {
     }
 
     fn upload_image(&self, gpu: &Gpu, src: &RawSource) -> ImageBuffers {
+        if let Some(Cfa::XTrans(x)) = src.cfa {
+            let (hex, sgreen) = xtrans_hexagons(&x);
+            let mut u = XImageUniforms {
+                hex: [[0; 4]; 36],
+                sgreen: [sgreen.0, sgreen.1, 0, 0],
+            };
+            for (cell, entries) in hex.iter().flatten().enumerate() {
+                for (k, &(dx, dy)) in entries.iter().enumerate() {
+                    let e = cell * 8 + k;
+                    u.hex[e / 2][(e & 1) * 2] = dx;
+                    u.hex[e / 2][(e & 1) * 2 + 1] = dy;
+                }
+            }
+            gpu.queue
+                .write_buffer(&self.xt_image, 0, bytemuck::bytes_of(&u));
+        }
         let lin = &src.linearization;
         let mut black = lin.pattern.clone();
         let mut deltas = [0u32; 4];
@@ -820,7 +1186,7 @@ impl RawStages {
                 ],
             ),
         )];
-        if demosaic && matches!(src.cfa, Some(Cfa::Bayer(_))) {
+        if demosaic && t.kind == Kind::Bayer {
             let v = &views;
             groups.push((&ps.vh, bind(&ps.vh, vec![v.r(&v.cfa), v.r(&v.vh)])));
             groups.push((
@@ -870,6 +1236,15 @@ impl RawStages {
                 cpass.set_pipeline(&pass.pipeline);
                 cpass.set_bind_group(0, group, &[]);
                 cpass.dispatch_workgroups(p.width.div_ceil(WG), p.height.div_ceil(WG), 1);
+            }
+            if demosaic && t.kind == Kind::XTrans {
+                let xt = t.xt.as_ref().expect("an X-Trans tile set");
+                for &(step, run) in &self.xt_sequence {
+                    let i = XSTEPS.iter().position(|(s, _)| *s == step).expect("listed");
+                    cpass.set_pipeline(&ps.xtrans[i]);
+                    cpass.set_bind_group(0, &xt.groups[run], &[]);
+                    cpass.dispatch_workgroups(p.width.div_ceil(WG), p.height.div_ceil(WG), 1);
+                }
             }
         }
         encoder
@@ -969,27 +1344,30 @@ impl RawStages {
 struct TileViews {
     raw: wgpu::TextureView,
     cfa: wgpu::TextureView,
+    rgb: wgpu::TextureView,
     vh: wgpu::TextureView,
     lpf: wgpu::TextureView,
     pq: wgpu::TextureView,
     pq_dir: wgpu::TextureView,
     green: wgpu::TextureView,
     rb: wgpu::TextureView,
-    rgb: wgpu::TextureView,
 }
 
 impl TileViews {
     fn new(t: &Tiles) -> Self {
+        // Without an RCD set, its views stand in on the cfa texture; they
+        // are never bound.
+        let rcd = |pick: fn(&Rcd) -> &wgpu::Texture| view(t.rcd.as_ref().map_or(&t.cfa, pick));
         Self {
             raw: view(&t.raw),
             cfa: view(&t.cfa),
-            vh: view(&t.vh),
-            lpf: view(&t.lpf),
-            pq: view(&t.pq),
-            pq_dir: view(&t.pq_dir),
-            green: view(&t.green),
-            rb: view(&t.rb),
             rgb: view(&t.rgb),
+            vh: rcd(|r| &r.vh),
+            lpf: rcd(|r| &r.lpf),
+            pq: rcd(|r| &r.pq),
+            pq_dir: rcd(|r| &r.pq_dir),
+            green: rcd(|r| &r.green),
+            rb: rcd(|r| &r.rb),
         }
     }
 

@@ -205,3 +205,187 @@ fn the_cpu_port_tracks_libraw_on_the_xt5() {
     assert!(m50 < 0.002, "median {m50}");
     assert!(m90 < 0.25 * l90, "{m90} against linear {l90}");
 }
+
+// The GPU port (gpu::raw_stages, tile_xtrans.wgsl) on a synthetic X-Trans
+// sensor whose active area starts 4 and 5 px in (1 and 2 mod 3), so the
+// stored-origin pattern, hexagons and solitary green phase all matter.
+
+use std::sync::{Mutex, MutexGuard};
+
+use genzo_imgio::raw::{Levels, Rect};
+use genzo_pipeline::gpu::raw_stages::{RawStages, TileConfig, Until};
+use genzo_pipeline::gpu::{AdapterChoice, Gpu, GpuError};
+use genzo_pipeline::raw::{Cfa, Linearization, RawSource};
+use genzo_pipeline::reference::stages::{stage1, stage2};
+
+static ONE_DEVICE: Mutex<()> = Mutex::new(());
+
+fn gpu() -> Option<(MutexGuard<'static, ()>, Gpu)> {
+    let lock = ONE_DEVICE.lock().unwrap_or_else(|e| e.into_inner());
+    match Gpu::open(AdapterChoice::from_env()) {
+        Ok(gpu) => {
+            eprintln!("adapter: {} ({})", gpu.info.name, gpu.info.backend);
+            Some((lock, gpu))
+        }
+        Err(GpuError::NoAdapter) if std::env::var("GENZO_REQUIRE_GPU").as_deref() != Ok("1") => {
+            eprintln!("skipped: no GPU adapter");
+            None
+        }
+        Err(e) => panic!("{e}"),
+    }
+}
+
+const W: u32 = 300;
+const H: u32 = 222;
+const LEFT: u32 = 4;
+const TOP: u32 = 5;
+const WB: [f32; 3] = [1.9, 1.0, 1.5];
+
+fn xtrans_sensor() -> RawSource {
+    let stored = (W + LEFT + 6, H + TOP + 7);
+    let levels = Levels {
+        black: vec![1020.0],
+        black_repeat: (1, 1),
+        black_delta_h: Vec::new(),
+        black_delta_v: Vec::new(),
+        white: vec![16383],
+    };
+    let lin = Linearization::new(&levels, 1, (W, H)).unwrap();
+    let range = 16383.0 - 1020.0;
+    let mut data = vec![1100u16; (stored.0 * stored.1) as usize];
+    for ay in 0..H {
+        for ax in 0..W {
+            let (x, y) = (ax + LEFT, ay + TOP);
+            let c = usize::from(XT5[(y % 6) as usize][(x % 6) as usize]);
+            let v = f64::from(scene(ax, ay, W, H)[c]) * 0.9 / f64::from(WB[c]);
+            let noise = f64::from((x * 7 + y * 13) % 9) - 4.0;
+            data[(y * stored.0 + x) as usize] = (v * range + 1020.0 + noise).round() as u16;
+        }
+    }
+    RawSource {
+        stored,
+        samples: 1,
+        data,
+        cfa: Some(Cfa::XTrans(XT5)),
+        active: Rect {
+            top: TOP,
+            left: LEFT,
+            bottom: TOP + H,
+            right: LEFT + W,
+        },
+        linearization: lin,
+        fix_bad_pixels: Vec::new(),
+        gain_maps: Vec::new(),
+        color: Default::default(),
+    }
+}
+
+const ONE_TILE: TileConfig = TileConfig {
+    tile: 4096,
+    xtrans_tile: 4096,
+    apron: 24,
+};
+const SMALL: TileConfig = TileConfig {
+    tile: 64,
+    xtrans_tile: 60,
+    apron: 24,
+};
+
+fn render(gpu: &Gpu, config: TileConfig, src: &RawSource) -> Vec<f32> {
+    RawStages::new(gpu, config)
+        .render(gpu, src, WB, Until::Stage3)
+        .unwrap()
+}
+
+fn first_difference(a: &[f32], b: &[f32]) -> Option<usize> {
+    a.iter()
+        .zip(b)
+        .position(|(x, y)| x.to_bits() != y.to_bits())
+}
+
+#[test]
+fn gpu_tiles_equal_one_tile_bit_for_bit() {
+    let Some((_lock, gpu)) = gpu() else { return };
+    let src = xtrans_sensor();
+    let whole = render(&gpu, ONE_TILE, &src);
+    // Determinism first: a race would show here.
+    assert_eq!(
+        first_difference(&whole, &render(&gpu, ONE_TILE, &src)),
+        None,
+        "two runs"
+    );
+    let tiled = render(&gpu, SMALL, &src);
+    assert_eq!(first_difference(&whole, &tiled), None, "tiled");
+    // 12 px is less than the 3-pass support (17).
+    let narrow = TileConfig { apron: 12, ..SMALL };
+    assert!(first_difference(&whole, &render(&gpu, narrow, &src)).is_some());
+}
+
+#[test]
+fn gpu_matches_the_cpu_port() {
+    let Some((_lock, gpu)) = gpu() else { return };
+    let src = xtrans_sensor();
+    let got = render(&gpu, SMALL, &src);
+    let mut cfa = stage1(&src);
+    stage2(&mut cfa, &src, WB);
+    cfa.iter_mut().for_each(|v| *v = v.max(0.0));
+    // The pattern from the active area's origin, which the port takes.
+    let mut active = [[0u8; 6]; 6];
+    for (r, row) in active.iter_mut().enumerate() {
+        for (c, v) in row.iter_mut().enumerate() {
+            *v = src.color_at(r as u32, c as u32).unwrap();
+        }
+    }
+    let want = markesteijn(&cfa, W as usize, H as usize, &active);
+    let mut d = Vec::new();
+    for (i, w) in want.iter().enumerate() {
+        for c in 0..3 {
+            let g = got[i * 3 + c];
+            d.push((g - w[c]).abs() / w[c].abs().max(0.05));
+        }
+    }
+    d.sort_by(f32::total_cmp);
+    let q = |f: f64| d[((d.len() - 1) as f64 * f) as usize];
+    let flipped = d.iter().filter(|&&v| v > 1e-2).count();
+    println!(
+        "GPU vs CPU port: median {:.1e}, 99.9 % {:.1e}, max {:.1e}; {flipped} of {} above 1 %",
+        q(0.5),
+        q(0.999),
+        q(1.0),
+        d.len()
+    );
+    assert!(q(0.5) < 1e-6, "{}", q(0.5));
+    // Markesteijn picks directions by comparing derivatives and counts, so
+    // a last-bit difference (the GPU's fused multiply-adds, a dot product's
+    // order, a multiply by 1/3 for a divide) moves a few values far, on high
+    // contrast. Those must be values where the algorithm itself is that
+    // sensitive: where the CPU port moves as far when its input is nudged
+    // by a few parts in 10^7 to 10^6. Measured (2026-10-19): of the GPU's
+    // values above 1 %, 29 of 29 on WARP and 82 of 94 on the RTX 3060 are
+    // such values (208 of them); 80 % must be.
+    let mut sensitive = vec![false; want.len() * 3];
+    for nudge in [1e-7f32, -1e-7, 3e-7, -3e-7, 5e-7, -5e-7, 1e-6, -1e-6, 2e-6, -2e-6, 3e-6, -3e-6] {
+        let nudged: Vec<f32> = cfa.iter().map(|v| v * (1.0 + nudge)).collect();
+        let again = markesteijn(&nudged, W as usize, H as usize, &active);
+        for (i, (p, q)) in want.iter().zip(&again).enumerate() {
+            for c in 0..3 {
+                if (p[c] - q[c]).abs() / p[c].abs().max(0.05) > 1e-2 {
+                    sensitive[i * 3 + c] = true;
+                }
+            }
+        }
+    }
+    let rel = |k: usize| (got[k] - want[k / 3][k % 3]).abs() / want[k / 3][k % 3].abs().max(0.05);
+    let gpu_flips: Vec<usize> = (0..want.len() * 3).filter(|&k| rel(k) > 1e-2).collect();
+    let explained = gpu_flips.iter().filter(|&&k| sensitive[k]).count();
+    let total = sensitive.iter().filter(|&&s| s).count();
+    println!(
+        "{explained} of {} GPU flips at values the CPU port flips under a nudge ({total} such values)",
+        gpu_flips.len()
+    );
+    assert!(
+        explained * 10 >= gpu_flips.len() * 8,
+        "{explained} of {}",
+        gpu_flips.len()
+    );
+}

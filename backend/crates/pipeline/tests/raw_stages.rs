@@ -223,10 +223,12 @@ fn linear() -> RawSource {
 
 const ONE_TILE: TileConfig = TileConfig {
     tile: 4096,
+    xtrans_tile: 4096,
     apron: 24,
 };
 const SMALL: TileConfig = TileConfig {
     tile: 64,
+    xtrans_tile: 60,
     apron: 24,
 };
 
@@ -273,7 +275,11 @@ fn a_narrow_apron_shows() {
     let src = bayer();
     let whole = render(&gpu, ONE_TILE, &src, Until::Stage3);
     // 6 px: wide enough for the bad-pixel fix, not for RCD's 10.
-    let narrow = TileConfig { tile: 64, apron: 6 };
+    let narrow = TileConfig {
+        tile: 64,
+        xtrans_tile: 60,
+        apron: 6,
+    };
     let tiled = render(&gpu, narrow, &src, Until::Stage3);
     assert!(first_difference(&whole, &tiled).is_some());
 }
