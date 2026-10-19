@@ -4,7 +4,7 @@
 //! (`dng_linearization_info.cpp`).
 
 use genzo_imgio::opcodes::{FixBadPixelsConstant, GainMap, OpcodePlan, StageOpcode};
-use genzo_imgio::raw::{Levels, Rect};
+use genzo_imgio::raw::{CameraColor, Levels, Rect};
 use genzo_imgio::{DecodedImage, Pixels};
 
 /// What stages 1 to 3 cannot take.
@@ -38,6 +38,8 @@ pub struct RawSource {
     pub fix_bad_pixels: Vec<FixBadPixelsConstant>,
     /// OpcodeList2: after linearization, in active-area coordinates.
     pub gain_maps: Vec<GainMap>,
+    /// The camera's color data, for stages 2 and 4 ([`crate::camera_color`]).
+    pub color: CameraColor,
 }
 
 /// Stage 1's levels, per plane, already multiplied by the scale: a sample
@@ -202,6 +204,7 @@ impl RawSource {
         });
         let size = (active.right - active.left, active.bottom - active.top);
         let linearization = Linearization::new(&raw.levels, samples, size)?;
+        let color = raw.color.clone();
         let OpcodePlan { list1, list2, .. } = raw.opcode_plan;
         if bayer.is_none() && !list1.is_empty() {
             return Err(RawError::Unsupported(
@@ -240,6 +243,7 @@ impl RawSource {
             linearization,
             fix_bad_pixels,
             gain_maps,
+            color,
         })
     }
 

@@ -162,7 +162,7 @@ The LinearizationTable is already applied by the decoder for linear DNG, and by 
 - **White balance.** Each channel is multiplied by its white balance multiplier, from the Temp and Tint of the edit (see Data). The multipliers are normalized so the smallest is 1.
 - **Highlight clipping.** Every channel is clipped at the level where the *first* channel saturates after white balance: `clip = min(multiplier[c])` in normalized units. A clipped area therefore comes out neutral white, not magenta or cyan. Real reconstruction of clipped color is later (decided 2026-10-18).
 
-While a slider is dragged, white balance runs as a ratio after the cached demosaic (stage 4). The settled render re-runs this stage and the demosaic with the new multipliers, as M0 does.
+While a slider is dragged, white balance runs as a ratio after the cached demosaic. The pyramid holds working-space values after stage 4, so the ratio `r` (new multipliers over the pyramid's) is applied there as one matrix, `M_new · diag(r) · M_old⁻¹`, where `M_old` is the matrix the pyramid was built with (it keeps its white point, multipliers and matrix). The settled render re-runs this stage and the demosaic with the new multipliers, as M0 does.
 
 ### Stage 3: demosaic
 
@@ -183,7 +183,11 @@ While a slider is dragged, white balance runs as a ratio after the cached demosa
 - **Non-RAW files** enter here: decoded values are linearized with their transfer function and converted from their primaries or ICC profile (moxcms) into the working space.
 - **AnalogBalance and CameraCalibration** enter the matrix as the DNG specification describes (chapter 6): XYZ to camera is AnalogBalance × CameraCalibration × ColorMatrix, and with ForwardMatrix tags, camera to XYZ is ForwardMatrix × D × (AnalogBalance × CameraCalibration)⁻¹, where D scales the reference neutral to 1. Both are real in the corpus: the iPhone 16 Pro ProRAW has AnalogBalance (2.35, 1, 1.86) with AsShotNeutral (1, 1, 1), and the Galaxy S23 Ultra has CameraCalibration1 and 2 that are not identity. Absent tags mean identity.
 - **BaselineExposure** is applied here as a gain of 2^BaselineExposure (+2.50 EV on the iPhone 13 Pro Max file, so it decides the default look).
-- **Highlight desaturation.** Pixels whose largest camera channel lies within the top 5 percent below the clip level are blended toward their own luminance, reaching neutral at the clip level. The edge of a clipped area then carries no color fringe.
+- **Highlight desaturation.** Pixels whose largest camera channel lies within the top 5 percent below the clip level are blended toward their own luminance, reaching neutral at the clip level. The edge of a clipped area then carries no color fringe. Exactly (`reference::stages::stage4`):
+  - the weight is `k = clamp((max(camera) − 0.95 · clip) / (0.05 · clip), 0, 1)`, where `camera` is the white balanced, demosaiced pixel and `clip` the clip level (the smallest multiplier);
+  - the pixel goes through the camera matrix first, then becomes `w + (Y − w) · k`, where `w` is its working-space RGB and `Y` its luminance (the Y row of `WORKING_TO_XYZ`, so a neutral stays where it is);
+  - BaselineExposure's gain comes last.
+- **When the camera's color is unusable** (no three-color ColorMatrix, a profile the SDK refuses, a singular matrix), camera values pass through unchanged, balanced only by the as-shot neutral, and the status bar says the photo's color profile could not be used. When only the as-shot white cannot be solved, D55 is used (`camera_color::ColorFallback`).
 
 The output of stage 4 builds the mip pyramid (see Tiling).
 
@@ -307,22 +311,30 @@ Stages 1 to 4 run per tile, so full-resolution intermediates exist only for one 
   - **RCD against `rcd.c`:** the GPU matches darktable's CPU code to f32 rounding (median 2e-7), except where RCD picks between two direction estimates by a comparison: a last-bit difference (fused multiply-adds on hardware GPUs) can flip the choice. On the RTX 3060 that is 9 of 146,000 values above 1 %; WARP, which does not fuse, flips none.
 - **The input** stays in CPU memory. Each tile's slice is uploaded through a staging buffer.
 - **The pyramid** is image-wide and starts at **level 1** (half size), in RGBA16F. Each tile's stage 4 output is reduced into level 1 with a 2 × 2 box filter, and levels 2 and up follow. **Level 0 (full resolution) is never kept for the whole image.**
+  - **Sizes:** each level is half the one above, rounded down (a texture's mip chain). An odd last row or column folds into the last texel, which then averages 3 instead of 2, so every pixel counts once. Levels go up to the first whose long edge is 256 px or less.
+  - **Stage 4 is fused into the reduction** (`tile_stage4.wgsl`): each level 1 texel runs stage 4 on its 2 × 2 block of the tile's demosaiced pixels and stores their mean. Tiles start on even pixels, and a last row or column of tiles only 1 px wide joins the one before, so a block, fold included, never straddles two tiles.
+  - **Two tiles are in flight at most.** Each holds its upload staging until the GPU is done with it.
+  - **A new photo frees the old pyramid first,** so two are never in GPU memory together.
+  - **Tests** (`pipeline/tests/pyramid.rs`):
+    - Tiled equals one tile, bit for bit, at every level.
+    - Each level matches the CPU reference within one f16 step.
+    - A synthetic sensor made by running the Pixel 4a's real profile backwards from a known scene renders back to it: 0.13 % on the gradients, neutral within 0.2 %.
 - **At 1:1 and during export**, level-0 tiles of 256 px are made on demand by running stages 1 to 4 on the region they need, apron included.
   - At 1:1 they are cached in an LRU with a fixed byte cap.
   - Order: visible tiles first, then a ring of one tile around them.
   - Export streams tiles through the whole pipeline and keeps none.
-- **GPU memory for one 48 MP edit** (8064 × 6048) has the following worst case. The memory-accounting test asserts the total. Each cap is a fixed constant that the test checks.
+- **GPU memory for one 48 MP edit** (8064 × 6048) has the following worst case. The memory-accounting test asserts the total. Each cap is a fixed constant that the test checks (`pipeline::budget`, `pipeline/tests/memory.rs`). The caps hold the sizes as drivers allocate them: NVIDIA's Vulkan driver pads textures by up to 7 % (measured 2026-10-18), and WARP allocates the exact sizes. The test measures what is allocated where the backend reports it (Vulkan and DX12 do), after the render and at its peak, sampled after each tile's submit while uploads are still staged.
 
 | Item | Size |
 |---|---|
-| Pyramid, levels 1 and up, RGBA16F (98 MB for level 1, plus a third) | 131 MB |
-| Stage 1 to 4 scratch for one tile, intermediates included: Bayer 52 B/px × 1072² = 60 MB (the mosaic, seven RCD buffers, RGBA32F output); X-Trans about 200 B/px × 560² = 63 MB | 63 MB |
-| Upload staging for one tile (linear DNG, 3 × u16) | 7 MB |
+| Pyramid, levels 1 and up, RGBA16F (98 MB for level 1, plus a third: 130 MB; 132.3 MB as NVIDIA allocates it) | 133 MB |
+| Stage 1 to 4 scratch for one tile, intermediates included: Bayer 52 B/px × 1072² = 60 MB (the mosaic, seven RCD buffers, RGBA32F output; 64.2 MB on NVIDIA); X-Trans about 200 B/px × 560² = 63 MB | 65 MB |
+| Uploads: the raw tile texture (linear DNG, 3 × u16: 6.9 MB; 7.4 MB on NVIDIA) and the staging of the two tiles in flight (2 × 6.9 MB); 21.2 MB at the measured peak | 22 MB |
 | Level-0 tile cache at 1:1 (fixed cap; about 480 tiles of 256², five 2560 × 1440 views with their rings) | 256 MB |
 | Viewport stage caches (fixed cap; stage 4 sampled, stage 6, stage 7 at 2560 × 1920 RGBA16F, plus the base layer) | 128 MB |
 | Output frame and two persistent readback buffers, RGBA8 | 60 MB |
 | Histogram and clipping masks | 10 MB |
-| **Total** | **655 MB**, under the 1 GB budget with 345 MB to spare |
+| **Total** | **674 MB**, under the 1 GB budget with 326 MB to spare |
 
 A software adapter uses the same sizes.
 

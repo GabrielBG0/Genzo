@@ -11,13 +11,16 @@
 //! reused. The output tiles are read back here; plan step 5b2 feeds them to
 //! stage 4 and the pyramid instead.
 
+use std::collections::VecDeque;
 use std::sync::mpsc;
 
 use bytemuck::{Pod, Zeroable};
 use genzo_model::frame::Rect;
 
 use super::{Gpu, GpuError};
+use crate::camera_color::CameraTransform;
 use crate::raw::RawSource;
+use crate::reference::stages::{DESATURATE_FROM, half, luminance_row};
 use crate::tiles::{TileJob, jobs};
 
 const WG: u32 = 16;
@@ -68,6 +71,132 @@ struct TileUniforms {
 
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
+struct Stage4Uniforms {
+    m: [[f32; 4]; 3],
+    luma: [f32; 4],
+    params: [f32; 4],
+    texels: [u32; 4],
+    level: [u32; 4],
+}
+
+/// Tiles in flight at once while building the pyramid: each holds its
+/// upload staging until the GPU is done with it (6.9 MB for a linear DNG
+/// tile; DEV-01's upload line counts two).
+const IN_FLIGHT: usize = 2;
+
+/// How many pyramid levels a first level of `size` gets: down to the first
+/// whose long edge is 256 px or less.
+pub fn level_count(size: (u32, u32)) -> u32 {
+    let mut n = 1;
+    let mut s = size;
+    while s.0.max(s.1) > 256 {
+        s = half(s);
+        n += 1;
+    }
+    n
+}
+
+/// The bytes of a pyramid whose first level is `size` (RGBA16F).
+pub fn pyramid_bytes(size: (u32, u32)) -> u64 {
+    let mut s = size;
+    let mut total = 0;
+    for _ in 0..level_count(size) {
+        total += u64::from(s.0) * u64::from(s.1) * 8;
+        s = half(s);
+    }
+    total
+}
+
+/// The image-wide mip pyramid (DEV-01, Tiling): level 1 (half size) and up,
+/// RGBA16F, in the working space. Level 0 is never kept.
+#[derive(Debug)]
+pub struct Pyramid {
+    texture: wgpu::Texture,
+    /// Level 1's width and height.
+    pub size: (u32, u32),
+    /// Levels 1 to `levels`.
+    pub levels: u32,
+    /// What stages 2 and 4 used. A white balance drag applies its change on
+    /// these values as the matrix `M_new · diag(r) · M_old⁻¹` (DEV-01).
+    pub transform: CameraTransform,
+}
+
+impl Pyramid {
+    /// The size of `level` (1 is half size).
+    pub fn level_size(&self, level: u32) -> (u32, u32) {
+        let mut s = self.size;
+        for _ in 1..level {
+            s = half(s);
+        }
+        s
+    }
+
+    pub fn bytes(&self) -> u64 {
+        pyramid_bytes(self.size)
+    }
+
+    /// Reads `level` back as RGB, row by row: for tests, and for keeping a
+    /// prefetched photo's pyramid in CPU memory.
+    pub fn read_level(&self, gpu: &Gpu, level: u32) -> Result<Vec<[f32; 3]>, GpuError> {
+        assert!((1..=self.levels).contains(&level), "level {level}");
+        let (w, h) = self.level_size(level);
+        let row = padded_row(w, 8);
+        let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("pyramid readback"),
+            size: u64::from(row) * u64::from(h),
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mut encoder = gpu.device.create_command_encoder(&Default::default());
+        encoder.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.texture,
+                mip_level: level - 1,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &buffer,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(row),
+                    rows_per_image: Some(h),
+                },
+            },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+        );
+        gpu.queue.submit([encoder.finish()]);
+        let (tx, rx) = mpsc::channel();
+        buffer.map_async(wgpu::MapMode::Read, .., move |r| {
+            let _ = tx.send(r);
+        });
+        gpu.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .map_err(|e| GpuError::Readback(e.to_string()))?;
+        rx.recv()
+            .map_err(|e| GpuError::Readback(e.to_string()))?
+            .map_err(|e| GpuError::Readback(e.to_string()))?;
+        let mapped = buffer
+            .get_mapped_range(..)
+            .map_err(|e| GpuError::Readback(e.to_string()))?;
+        let mut out = Vec::with_capacity((w * h) as usize);
+        for y in 0..h as usize {
+            let start = y * row as usize;
+            let line: &[u16] = bytemuck::cast_slice(&mapped[start..start + w as usize * 8]);
+            for px in line.as_chunks::<4>().0 {
+                out.push([0, 1, 2].map(|c| ::half::f16::from_bits(px[c]).to_f32()));
+            }
+        }
+        Ok(out)
+    }
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
 struct MapUniform {
     area: [u32; 4],
     pitch: [u32; 4],
@@ -77,6 +206,7 @@ struct MapUniform {
 
 #[derive(Clone, Copy)]
 enum Slot {
+    Uniform,
     Float,
     Uint,
     Storage,
@@ -90,6 +220,12 @@ struct Pass {
 }
 
 fn pass(device: &wgpu::Device, name: &str, body: &str, slots: &[Slot]) -> Pass {
+    pass_with(device, name, body, slots, true)
+}
+
+/// A pass from `body`, after the tile block (`tile_common.wgsl`) when
+/// `common`; binding 0 is a uniform buffer either way.
+fn pass_with(device: &wgpu::Device, name: &str, body: &str, slots: &[Slot], common: bool) -> Pass {
     let mut entries = vec![wgpu::BindGroupLayoutEntry {
         binding: 0,
         visibility: wgpu::ShaderStages::COMPUTE,
@@ -106,6 +242,11 @@ fn pass(device: &wgpu::Device, name: &str, body: &str, slots: &[Slot]) -> Pass {
                 sample_type: wgpu::TextureSampleType::Float { filterable: false },
                 view_dimension: wgpu::TextureViewDimension::D2,
                 multisampled: false,
+            },
+            Slot::Uniform => wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: None,
             },
             Slot::Uint => wgpu::BindingType::Texture {
                 sample_type: wgpu::TextureSampleType::Uint,
@@ -134,7 +275,11 @@ fn pass(device: &wgpu::Device, name: &str, body: &str, slots: &[Slot]) -> Pass {
         label: Some(name),
         entries: &entries,
     });
-    let source = format!("{}\n{}", include_str!("shaders/tile_common.wgsl"), body);
+    let source = if common {
+        format!("{}\n{}", include_str!("shaders/tile_common.wgsl"), body)
+    } else {
+        body.to_owned()
+    };
     let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
         label: Some(name),
         source: wgpu::ShaderSource::Wgsl(source.into()),
@@ -164,12 +309,14 @@ struct Passes {
     green: Pass,
     rb: Pass,
     rcd_final: Pass,
+    stage4: Pass,
+    downsample: Pass,
 }
 
 impl Passes {
     fn new(device: &wgpu::Device) -> Self {
-        use Slot::{Float, Storage, Store, Uint};
-        use wgpu::TextureFormat::{R32Float, Rg32Float, Rgba32Float};
+        use Slot::{Float, Storage, Store, Uint, Uniform};
+        use wgpu::TextureFormat::{R32Float, Rg32Float, Rgba16Float, Rgba32Float};
         Self {
             stage1: pass(
                 device,
@@ -219,6 +366,19 @@ impl Passes {
                 "tile rcd final",
                 include_str!("shaders/tile_rcd_final.wgsl"),
                 &[Float, Float, Float, Float, Store(Rgba32Float)],
+            ),
+            stage4: pass(
+                device,
+                "tile stage 4",
+                include_str!("shaders/tile_stage4.wgsl"),
+                &[Uniform, Float, Store(Rgba16Float)],
+            ),
+            downsample: pass_with(
+                device,
+                "pyramid downsample",
+                include_str!("shaders/tile_downsample.wgsl"),
+                &[Float, Store(Rgba16Float)],
+                false,
             ),
         }
     }
@@ -273,7 +433,6 @@ struct Tiles {
     green: wgpu::Texture,
     rb: wgpu::Texture,
     rgb: wgpu::Texture,
-    readback: wgpu::Buffer,
 }
 
 impl Tiles {
@@ -304,12 +463,6 @@ impl Tiles {
             green: texture(device, "tile green", size, R32Float),
             rb: texture(device, "tile rb", size, Rg32Float),
             rgb: texture(device, "tile rgb", size, Rgba32Float),
-            readback: device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("tile readback"),
-                size: u64::from(padded_row(size.0, 16)) * u64::from(size.1),
-                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            }),
         }
     }
 }
@@ -328,7 +481,17 @@ pub struct RawStages {
     config: TileConfig,
     passes: Passes,
     uniforms: wgpu::Buffer,
+    stage4_uniforms: wgpu::Buffer,
     tiles: Option<Tiles>,
+    /// For [`RawStages::render`] only, made on first use.
+    readback: Option<wgpu::Buffer>,
+    pyramid: Option<Pyramid>,
+    /// For the memory test: sample the allocator report after each tile's
+    /// submit in [`RawStages::render_pyramid`], keeping the largest total.
+    #[doc(hidden)]
+    pub sample_memory: bool,
+    #[doc(hidden)]
+    pub peak_allocated: Option<u64>,
 }
 
 /// The image-wide inputs of a render, uploaded once.
@@ -351,32 +514,45 @@ impl RawStages {
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             }),
+            stage4_uniforms: gpu.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("stage 4 uniforms"),
+                size: std::mem::size_of::<Stage4Uniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }),
             tiles: None,
+            readback: None,
+            pyramid: None,
+            sample_memory: false,
+            peak_allocated: None,
         }
     }
 
-    /// The bytes the per-tile resources take on the GPU, for the memory
-    /// accounting (DEV-01). Zero before the first render.
-    pub fn tile_bytes(&self) -> u64 {
+    /// The bytes of one tile's working textures (DEV-01's "stage 1 to 4
+    /// scratch"). Zero before the first render.
+    pub fn scratch_bytes(&self) -> u64 {
         self.tiles.as_ref().map_or(0, |t| {
             let px = u64::from(t.size.0) * u64::from(t.size.1);
             // cfa, vh, lpf, pq_dir, green: 4 B; pq, rb: 8 B; rgb: 16 B.
-            let raw = u64::from(t.raw.width()) * u64::from(t.raw.height()) * 2;
-            raw + px * (5 * 4 + 2 * 8 + 16) + t.readback.size()
+            px * (5 * 4 + 2 * 8 + 16)
         })
     }
 
-    /// Renders `src` through stages 1 to `until` with the white balance
-    /// `multipliers` (stage 2; the smallest should be 1, it is the clip
-    /// level). Returns the active area row by row: one value per pixel for a
-    /// Bayer mosaic at [`Until::Stage2`], else RGB.
-    pub fn render(
-        &mut self,
-        gpu: &Gpu,
-        src: &RawSource,
-        multipliers: [f32; 3],
-        until: Until,
-    ) -> Result<Vec<f32>, GpuError> {
+    /// The bytes of the raw tile the upload lands in (DEV-01's "upload
+    /// staging for one tile"), sized for three samples per pixel.
+    pub fn upload_bytes(&self) -> u64 {
+        self.tiles.as_ref().map_or(0, |t| {
+            u64::from(t.raw.width()) * u64::from(t.raw.height()) * 2
+        })
+    }
+
+    /// The pyramid of the last [`RawStages::render_pyramid`].
+    pub fn pyramid(&self) -> Option<&Pyramid> {
+        self.pyramid.as_ref()
+    }
+
+    /// The tiles of `src`, with the per-tile resources allocated to fit.
+    fn prepare(&mut self, gpu: &Gpu, src: &RawSource) -> Vec<TileJob> {
         let (w, h) = src.size();
         let margin = if src.fix_bad_pixels.is_empty() {
             0
@@ -402,11 +578,37 @@ impl RawStages {
         });
         if !fits {
             self.tiles = None;
+            self.readback = None;
             let full = self.config.tile + 2 * self.config.apron;
             // Allocated at the configured size, so every later image fits;
             // smaller only when this image is.
             let size = (full.min(w).max(largest.0), full.min(h).max(largest.1));
             self.tiles = Some(Tiles::new(&gpu.device, size, 3));
+        }
+        jobs
+    }
+
+    /// Renders `src` through stages 1 to `until` with the white balance
+    /// `multipliers` (stage 2; the smallest should be 1, it is the clip
+    /// level). Returns the active area row by row: one value per pixel for a
+    /// Bayer mosaic at [`Until::Stage2`], else RGB.
+    pub fn render(
+        &mut self,
+        gpu: &Gpu,
+        src: &RawSource,
+        multipliers: [f32; 3],
+        until: Until,
+    ) -> Result<Vec<f32>, GpuError> {
+        let (w, h) = src.size();
+        let jobs = self.prepare(gpu, src);
+        if self.readback.is_none() {
+            let size = self.tiles.as_ref().expect("prepared").size;
+            self.readback = Some(gpu.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("tile readback"),
+                size: u64::from(padded_row(size.0, 16)) * u64::from(size.1),
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }));
         }
         let image = self.upload_image(gpu, src);
         let mosaic = src.bayer.is_some() && until == Until::Stage2;
@@ -484,20 +686,18 @@ impl RawStages {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn render_tile(
+    /// Uploads one tile's uniforms and raw rect and encodes stages 1 and 2,
+    /// and the demosaic when `demosaic`.
+    fn encode_tile(
         &self,
         gpu: &Gpu,
         src: &RawSource,
         image: &ImageBuffers,
         job: &TileJob,
         multipliers: [f32; 3],
-        until: Until,
-        channels: usize,
-        out: &mut [f32],
-        width: u32,
-    ) -> Result<(), GpuError> {
-        let t = self.tiles.as_ref().expect("allocated in render");
+        demosaic: bool,
+    ) -> wgpu::CommandEncoder {
+        let t = self.tiles.as_ref().expect("prepared");
         let device = &gpu.device;
         let (w, h) = src.size();
         let lin = &src.linearization;
@@ -594,8 +794,7 @@ impl RawStages {
                 ],
             ),
         )];
-        let demosaic = src.bayer.is_some() && until == Until::Stage3;
-        if demosaic {
+        if demosaic && src.bayer.is_some() {
             let v = &views;
             groups.push((&ps.vh, bind(&ps.vh, vec![v.r(&v.cfa), v.r(&v.vh)])));
             groups.push((
@@ -635,7 +834,7 @@ impl RawStages {
             ));
         }
 
-        let mut encoder = device.create_command_encoder(&Default::default());
+        let mut encoder = gpu.device.create_command_encoder(&Default::default());
         {
             let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("raw stages"),
@@ -647,6 +846,28 @@ impl RawStages {
                 cpass.dispatch_workgroups(p.width.div_ceil(WG), p.height.div_ceil(WG), 1);
             }
         }
+        encoder
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_tile(
+        &self,
+        gpu: &Gpu,
+        src: &RawSource,
+        image: &ImageBuffers,
+        job: &TileJob,
+        multipliers: [f32; 3],
+        until: Until,
+        channels: usize,
+        out: &mut [f32],
+        width: u32,
+    ) -> Result<(), GpuError> {
+        let t = self.tiles.as_ref().expect("prepared");
+        let readback = self.readback.as_ref().expect("made in render");
+        let device = &gpu.device;
+        let p = job.padded;
+        let mut encoder =
+            self.encode_tile(gpu, src, image, job, multipliers, until == Until::Stage3);
         // The output rect within the padded one.
         let keep = Rect {
             x: job.out.x - p.x,
@@ -669,7 +890,7 @@ impl RawStages {
                 aspect: wgpu::TextureAspect::All,
             },
             wgpu::TexelCopyBufferInfo {
-                buffer: &t.readback,
+                buffer: readback,
                 layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
                     bytes_per_row: Some(row),
@@ -684,7 +905,7 @@ impl RawStages {
         );
         gpu.queue.submit([encoder.finish()]);
         let (tx, rx) = mpsc::channel();
-        t.readback.map_async(wgpu::MapMode::Read, .., move |r| {
+        readback.map_async(wgpu::MapMode::Read, .., move |r| {
             let _ = tx.send(r);
         });
         device
@@ -694,8 +915,7 @@ impl RawStages {
             .map_err(|e| GpuError::Readback(e.to_string()))?
             .map_err(|e| GpuError::Readback(e.to_string()))?;
         {
-            let mapped = t
-                .readback
+            let mapped = readback
                 .get_mapped_range(..)
                 .map_err(|e| GpuError::Readback(e.to_string()))?;
             for y in 0..keep.height as usize {
@@ -714,7 +934,7 @@ impl RawStages {
                 }
             }
         }
-        t.readback.unmap();
+        readback.unmap();
         Ok(())
     }
 }
@@ -749,5 +969,184 @@ impl TileViews {
 
     fn r<'a>(&self, v: &'a wgpu::TextureView) -> wgpu::BindingResource<'a> {
         wgpu::BindingResource::TextureView(v)
+    }
+}
+
+impl RawStages {
+    /// Builds the pyramid of `src` with `transform`: stages 1 to 4 tile by
+    /// tile, reduced into level 1, then the levels above. The previous
+    /// pyramid is freed first, so two are never in GPU memory at once.
+    pub fn render_pyramid(
+        &mut self,
+        gpu: &Gpu,
+        src: &RawSource,
+        transform: &CameraTransform,
+    ) -> Result<&Pyramid, GpuError> {
+        if self.pyramid.take().is_some() {
+            // wgpu frees a dropped texture once no submitted work uses it.
+            let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+        }
+        let jobs = self.prepare(gpu, src);
+        let l1 = half(src.size());
+        let levels = level_count(l1);
+        let device = &gpu.device;
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("pyramid"),
+            size: wgpu::Extent3d {
+                width: l1.0,
+                height: l1.1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: levels,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba16Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::STORAGE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let mip = |level: u32| {
+            texture.create_view(&wgpu::TextureViewDescriptor {
+                base_mip_level: level,
+                mip_level_count: Some(1),
+                ..Default::default()
+            })
+        };
+        let image = self.upload_image(gpu, src);
+        let m = transform.matrix;
+        let mm = transform.multipliers;
+        let clip = mm[0].min(mm[1]).min(mm[2]);
+        let luma = luminance_row();
+        let level1 = mip(0);
+        let rgb = view(&self.tiles.as_ref().expect("prepared").rgb);
+        let mut in_flight = VecDeque::new();
+        for job in &jobs {
+            // This tile's upload is staged as soon as it is encoded, so wait
+            // for room first.
+            if in_flight.len() >= IN_FLIGHT {
+                let oldest = in_flight.pop_front();
+                device
+                    .poll(wgpu::PollType::Wait {
+                        submission_index: oldest,
+                        timeout: None,
+                    })
+                    .map_err(|e| GpuError::Request(e.to_string()))?;
+            }
+            let mut encoder = self.encode_tile(gpu, src, &image, job, mm, true);
+            // The level 1 texels whose 2 x 2 block starts in this tile; tiles
+            // start on even pixels, and an odd last pixel folds into the
+            // block before it, in the same tile (tiles::jobs).
+            let first = (job.out.x / 2, job.out.y / 2);
+            let end = (
+                (job.out.x + job.out.width).div_ceil(2).min(l1.0),
+                (job.out.y + job.out.height).div_ceil(2).min(l1.1),
+            );
+            let count = (end.0 - first.0, end.1 - first.1);
+            let u = Stage4Uniforms {
+                m: m.map(|r| [r[0], r[1], r[2], 0.0]),
+                luma: [luma[0], luma[1], luma[2], 0.0],
+                params: [transform.exposure, clip, DESATURATE_FROM, 0.0],
+                texels: [first.0, first.1, count.0, count.1],
+                level: [l1.0, l1.1, 0, 0],
+            };
+            gpu.queue
+                .write_buffer(&self.stage4_uniforms, 0, bytemuck::bytes_of(&u));
+            let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("stage 4"),
+                layout: &self.passes.stage4.layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: self.uniforms.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: self.stage4_uniforms.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::TextureView(&rgb),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::TextureView(&level1),
+                    },
+                ],
+            });
+            {
+                let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("stage 4"),
+                    timestamp_writes: None,
+                });
+                cpass.set_pipeline(&self.passes.stage4.pipeline);
+                cpass.set_bind_group(0, &group, &[]);
+                cpass.dispatch_workgroups(count.0.div_ceil(WG), count.1.div_ceil(WG), 1);
+            }
+            in_flight.push_back(gpu.queue.submit([encoder.finish()]));
+            if self.sample_memory {
+                // The uploads still staged count here: their submissions
+                // have not finished.
+                if let Some(r) = device.generate_allocator_report() {
+                    let peak = self.peak_allocated.get_or_insert(0);
+                    *peak = (*peak).max(r.total_allocated_bytes);
+                }
+            }
+        }
+        // Levels 2 and up.
+        let mut encoder = device.create_command_encoder(&Default::default());
+        let mut sizes = l1;
+        for level in 1..levels {
+            let dst = half(sizes);
+            let uniform = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("level sizes"),
+                size: 16,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            gpu.queue.write_buffer(
+                &uniform,
+                0,
+                bytemuck::cast_slice(&[sizes.0, sizes.1, dst.0, dst.1]),
+            );
+            let (src_view, dst_view) = (mip(level - 1), mip(level));
+            let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("downsample"),
+                layout: &self.passes.downsample.layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: uniform.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(&src_view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::TextureView(&dst_view),
+                    },
+                ],
+            });
+            let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("downsample"),
+                timestamp_writes: None,
+            });
+            cpass.set_pipeline(&self.passes.downsample.pipeline);
+            cpass.set_bind_group(0, &group, &[]);
+            cpass.dispatch_workgroups(dst.0.div_ceil(WG), dst.1.div_ceil(WG), 1);
+            drop(cpass);
+            sizes = dst;
+        }
+        gpu.queue.submit([encoder.finish()]);
+        device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .map_err(|e| GpuError::Request(e.to_string()))?;
+        Ok(self.pyramid.insert(Pyramid {
+            texture,
+            size: l1,
+            levels,
+            transform: transform.clone(),
+        }))
     }
 }

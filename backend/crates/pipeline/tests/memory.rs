@@ -1,0 +1,160 @@
+//! GPU memory of one 48 MP edit (DEV-01, Tiling) against the budget's caps
+//! (`genzo_pipeline::budget`): the pyramid, one tile's scratch and its
+//! upload, computed from the allocations and, where the backend reports
+//! them (`generate_allocator_report`: DX12 and Vulkan), measured.
+//!
+//! A second photo of the same size replaces the first without the total
+//! growing: the old pyramid is freed before the new one is made.
+
+use genzo_imgio::raw::{Levels, Rect};
+use genzo_pipeline::budget;
+use genzo_pipeline::camera_color::camera_transform;
+use genzo_pipeline::gpu::raw_stages::{RawStages, TileConfig, pyramid_bytes};
+use genzo_pipeline::gpu::{AdapterChoice, Gpu, GpuError};
+use genzo_pipeline::raw::{Linearization, RawSource};
+
+fn allocated(gpu: &Gpu) -> Option<u64> {
+    gpu.device
+        .generate_allocator_report()
+        .map(|r| r.total_allocated_bytes)
+}
+
+/// The live allocations per budget item, by the labels raw_stages gives
+/// them: the pyramid, the raw upload tile, the other tile textures.
+fn measured(gpu: &Gpu) -> Option<[u64; 3]> {
+    let report = gpu.device.generate_allocator_report()?;
+    let mut items = [0u64; 3];
+    for a in &report.allocations {
+        match a.name.as_str() {
+            "pyramid" => items[0] += a.size,
+            // The staging of the uploads in flight is freed by now; the
+            // peak below includes it.
+            "tile raw" => items[2] += a.size,
+            "tile uniforms" | "tile readback" => {}
+            n if n.starts_with("tile ") => items[1] += a.size,
+            _ => {}
+        }
+    }
+    Some(items)
+}
+
+const MB: f64 = 1e6;
+
+/// A linear DNG's worth of samples, three per pixel: the largest upload.
+fn linear_source((w, h): (u32, u32)) -> RawSource {
+    let levels = Levels {
+        black: vec![512.0; 3],
+        black_repeat: (1, 1),
+        black_delta_h: Vec::new(),
+        black_delta_v: Vec::new(),
+        white: vec![16383],
+    };
+    let data = (0..w * h * 3).map(|i| 600 + (i % 9000) as u16).collect();
+    RawSource {
+        stored: (w, h),
+        samples: 3,
+        data,
+        bayer: None,
+        active: Rect {
+            top: 0,
+            left: 0,
+            bottom: h,
+            right: w,
+        },
+        linearization: Linearization::new(&levels, 3, (w, h)).unwrap(),
+        fix_bad_pixels: Vec::new(),
+        gain_maps: Vec::new(),
+        color: Default::default(),
+    }
+}
+
+#[test]
+fn a_48mp_edit_stays_within_the_budget() {
+    let gpu = match Gpu::open(AdapterChoice::from_env()) {
+        Ok(gpu) => gpu,
+        Err(GpuError::NoAdapter) if std::env::var("GENZO_REQUIRE_GPU").as_deref() != Ok("1") => {
+            eprintln!("skipped: no GPU adapter");
+            return;
+        }
+        Err(e) => panic!("{e}"),
+    };
+    // The self-test's and wgpu's own allocations are not the edit's.
+    let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+    let before = allocated(&gpu);
+    println!(
+        "adapter: {} ({}); allocator report: {}",
+        gpu.info.name,
+        gpu.info.backend,
+        before.is_some()
+    );
+
+    let size = (8064, 6048);
+    let src = linear_source(size);
+    let t = camera_transform(&src.color, None);
+    let mut stages = RawStages::new(&gpu, TileConfig::default());
+    stages.sample_memory = true;
+    let pyramid = stages.render_pyramid(&gpu, &src, &t).unwrap().bytes();
+    let (scratch, upload) = (stages.scratch_bytes(), stages.upload_bytes());
+    println!(
+        "computed: pyramid {:.1} MB, tile scratch {:.1} MB, upload {:.1} MB",
+        pyramid as f64 / MB,
+        scratch as f64 / MB,
+        upload as f64 / MB
+    );
+    assert_eq!(pyramid, pyramid_bytes((size.0 / 2, size.1 / 2)));
+    assert!(pyramid <= budget::PYRAMID, "pyramid {pyramid}");
+    assert!(scratch <= budget::TILE_SCRATCH, "scratch {scratch}");
+    assert!(upload <= budget::UPLOAD, "upload {upload}");
+    let caps = budget::PYRAMID + budget::TILE_SCRATCH + budget::UPLOAD;
+
+    let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+    let first = allocated(&gpu);
+    if let Some(items) = measured(&gpu) {
+        let names = ["pyramid", "tile scratch", "upload"];
+        let caps_each = [budget::PYRAMID, budget::TILE_SCRATCH, budget::UPLOAD];
+        for ((name, got), cap) in names.iter().zip(items).zip(caps_each) {
+            println!(
+                "measured: {name} {:.1} MB (cap {:.0} MB)",
+                got as f64 / MB,
+                cap as f64 / MB
+            );
+            assert!(got <= cap, "{name}: {got} bytes, cap {cap}");
+        }
+    }
+    // The peak, while tiles are in flight: their uploads' staging on top.
+    if let (Some(before), Some(peak)) = (before, stages.peak_allocated) {
+        let used = peak - before;
+        println!(
+            "measured: peak {:.1} MB during the render (caps {:.0} MB)",
+            used as f64 / MB,
+            caps as f64 / MB
+        );
+        assert!(used <= caps + 2_000_000, "peak {used} bytes for {caps}");
+    }
+    if let (Some(before), Some(after)) = (before, first) {
+        let used = after - before;
+        println!(
+            "measured: {:.1} MB for the edit in all (caps {:.0} MB)",
+            used as f64 / MB,
+            caps as f64 / MB
+        );
+        // Everything else the edit holds is small: uniforms, black levels,
+        // GainMaps.
+        assert!(used <= caps + 2_000_000, "{used} bytes for {caps}");
+    }
+
+    // A second photo replaces the first.
+    let src2 = linear_source(size);
+    stages.render_pyramid(&gpu, &src2, &t).unwrap();
+    let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+    if let (Some(first), Some(second)) = (first, allocated(&gpu)) {
+        println!(
+            "after a second photo: {:+.1} MB",
+            (second as f64 - first as f64) / MB
+        );
+        assert!(
+            second as f64 <= first as f64 + 2.0 * MB,
+            "{first} then {second}"
+        );
+    }
+}

@@ -13,6 +13,7 @@
 //! software adapter.
 
 use criterion::{Criterion, criterion_group, criterion_main};
+use genzo_pipeline::camera_color::camera_transform;
 use genzo_pipeline::gpu::raw_stages::{RawStages, TileConfig, Until};
 use genzo_pipeline::gpu::synthetic::scene_raw;
 use genzo_pipeline::gpu::{AdapterChoice, Gpu};
@@ -40,5 +41,29 @@ fn stages(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, stages);
+/// The settled render's raw part as it runs: stages 1 to 4 into the
+/// pyramid, nothing read back.
+fn pyramid(c: &mut Criterion) {
+    let Ok(gpu) = Gpu::open(AdapterChoice::from_env()) else {
+        eprintln!("skipped: no GPU adapter");
+        return;
+    };
+    let mut group = c.benchmark_group(format!("pyramid on {}", gpu.info.name));
+    group.sample_size(10);
+    for (name, size) in [("12MP", (4032, 3024)), ("48MP", (8064, 6048))] {
+        let src = scene_raw(size.0, size.1);
+        let mut t = camera_transform(&src.color, None);
+        t.multipliers = [2.0, 1.0, 1.5];
+        let mut stages = RawStages::new(&gpu, TileConfig::default());
+        stages.render_pyramid(&gpu, &src, &t).unwrap();
+        group.bench_function(name, |b| {
+            b.iter(|| {
+                stages.render_pyramid(&gpu, &src, &t).unwrap();
+            })
+        });
+    }
+    group.finish();
+}
+
+criterion_group!(benches, stages, pyramid);
 criterion_main!(benches);
