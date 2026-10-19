@@ -15,6 +15,7 @@ use std::collections::VecDeque;
 use std::sync::mpsc;
 
 use bytemuck::{Pod, Zeroable};
+use genzo_color::encoding::InputEncoding;
 use genzo_model::frame::Rect;
 
 use super::{Gpu, GpuError};
@@ -285,6 +286,9 @@ pub struct Pyramid {
     /// What stages 2 and 4 used. A white balance drag applies its change on
     /// these values as the matrix `M_new · diag(r) · M_old⁻¹` (DEV-01).
     pub transform: CameraTransform,
+    /// A non-RAW image's encoding; None for RAW. Its white balance is a
+    /// relative shift in the working space (DEV-01), not a new camera white.
+    pub encoding: Option<InputEncoding>,
 }
 
 impl Pyramid {
@@ -1568,6 +1572,7 @@ impl RawStages {
             size: l1,
             levels,
             transform: transform.clone(),
+            encoding: src.encoding.clone(),
         }))
     }
 }

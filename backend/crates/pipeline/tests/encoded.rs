@@ -199,6 +199,7 @@ fn levels_match_the_cpu_reference() {
                 .flat_map(|c| stage4([c[0], c[1], c[2]], &t))
                 .collect();
             let p = stages.render_pyramid(&gpu, &src, &t).unwrap();
+            assert_eq!(p.encoding.as_ref(), Some(&enc), "{name}");
             let (mut above, mut above_size) = (s4, src.size());
             for level in 1..=p.levels {
                 let (want, want_size) = reduce(&above, above_size, 3);
@@ -345,21 +346,31 @@ fn decoder_fixtures_match_moxcms() {
     let Some((_lock, gpu)) = gpu() else { return };
     let dir =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../imgio/tests/fixtures/images");
-    let mut names: Vec<_> = std::fs::read_dir(&dir)
+    let mut files: Vec<_> = std::fs::read_dir(&dir)
         .unwrap()
         .map(|e| e.unwrap().file_name().into_string().unwrap())
         .filter(|n| n.ends_with(".rgba16"))
-        .map(|n| n.trim_end_matches(".rgba16").to_owned())
+        .map(|n| dir.join(n.trim_end_matches(".rgba16")))
         .collect();
-    names.sort();
-    assert!(names.len() >= 25, "{} fixtures", names.len());
+    files.sort();
+    assert!(files.len() >= 25, "{} fixtures", files.len());
+    // HEIC: a Display P3 one tagged as iPhones tag theirs (make-heic.sh),
+    // and libheif's own test image, which carries GIMP's sRGB profile.
+    files.push(dir.join("heic-p3-nclx.heic"));
+    files.push(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../heif/vendor/libheif/tests/data/rainbow-451x461.heic"),
+    );
+    // Profiles from other color engines than moxcms, which also reads them
+    // here: their result against the sRGB formula is independent of it.
+    let srgb_profiles = ["png-icc-lcms2-srgb.png", "rainbow-451x461.heic"];
+    // Test bytes, not ICC (make-images.py).
+    let junk_profiles = ["jpeg-icc-multi.jpg", "png-iccp.png", "tiff-icc-orient3.tif"];
     let mut stages = RawStages::new(&gpu, SMALL);
     let mut kinds = std::collections::BTreeSet::new();
-    for name in &names {
-        let img = match decode(
-            &std::fs::read(dir.join(name)).unwrap(),
-            DecodeOptions::default(),
-        ) {
+    for path in &files {
+        let name = path.file_name().unwrap().to_str().unwrap();
+        let img = match decode(&std::fs::read(path).unwrap(), DecodeOptions::default()) {
             Ok(img) => img,
             // imgio's own tests expect the refusal (an RGB palette TIFF).
             Err(DecodeError::Unsupported(..)) => continue,
@@ -370,9 +381,8 @@ fn decoder_fixtures_match_moxcms() {
             panic!("{name}: not RGBA")
         };
         let gray = data.chunks(4).all(|p| p[0] == p[1] && p[1] == p[2]);
-        if name.contains("icc") {
-            // Their profiles are test bytes, not ICC (make-images.py): a
-            // profile moxcms cannot read is refused, not guessed at.
+        if junk_profiles.contains(&name) {
+            // A profile moxcms cannot read is refused, not guessed at.
             let e = RawSource::from_decoded(img).unwrap_err();
             assert!(
                 matches!(e, RawError::Encoding(EncodingError::Icc(_))),
@@ -436,8 +446,25 @@ fn decoder_fixtures_match_moxcms() {
             if gray { ", gray" } else { "" }
         );
         assert!(de < 0.5, "{name}: ΔE {de}");
+        if name == "heic-p3-nclx.heic" {
+            assert_eq!(color, ColorEncoding::DisplayP3);
+        }
+        if srgb_profiles.contains(&name) {
+            assert!(matches!(color, ColorEncoding::Icc(_)), "{name}");
+            let formula = InputEncoding::srgb();
+            let mut apart = 0f64;
+            for p in data.chunks(4) {
+                let rgb = [p[0], p[1], p[2]];
+                apart = apart.max(delta_e_2000(lab(enc.decode(rgb)), lab(formula.decode(rgb))));
+            }
+            println!("{name}: its profile against the sRGB formula, ΔE2000 {apart:.3}");
+            assert!(apart < 0.1, "{name}: ΔE {apart} from the sRGB formula");
+        }
     }
     println!("encodings seen: {kinds:?}");
+    for kind in ["sRGB", "Display P3", "Adobe RGB", "ICC"] {
+        assert!(kinds.contains(kind), "no {kind} fixture");
+    }
 }
 
 /// The stored golden of a non-RAW pyramid's first level: the synthetic

@@ -6,9 +6,10 @@
 //! A second photo of the same size replaces the first without the total
 //! growing: the old pyramid is freed before the new one is made.
 
+use genzo_color::encoding::InputEncoding;
 use genzo_imgio::raw::{Levels, Rect};
 use genzo_pipeline::budget;
-use genzo_pipeline::camera_color::camera_transform;
+use genzo_pipeline::camera_color::{camera_transform, encoded_transform};
 use genzo_pipeline::gpu::raw_stages::{RawStages, TileConfig, pyramid_bytes};
 use genzo_pipeline::gpu::{AdapterChoice, Gpu, GpuError};
 use genzo_pipeline::raw::{Cfa, Linearization, RawSource};
@@ -93,6 +94,12 @@ fn linear_source((w, h): (u32, u32)) -> RawSource {
     }
 }
 
+/// A non-RAW image: an sRGB JPEG's codes. Its curves add a 786 KB buffer.
+fn encoded_source((w, h): (u32, u32)) -> RawSource {
+    let rgba: Vec<u16> = (0..w * h * 4).map(|i| (i % 65536) as u16).collect();
+    RawSource::from_encoded((w, h), &rgba, &InputEncoding::srgb()).unwrap()
+}
+
 #[test]
 fn a_48mp_edit_stays_within_the_budget() {
     let gpu = match Gpu::open(AdapterChoice::from_env()) {
@@ -121,6 +128,7 @@ fn a_48mp_edit_stays_within_the_budget() {
             (8064, 6048),
         ),
         ("x-trans", xtrans_source, (1200, 1200)),
+        ("non-RAW", encoded_source, (8064, 6048)),
     ] {
         println!("{name}:");
         // What is already allocated (the self-test's and wgpu's own, the
@@ -138,7 +146,10 @@ fn within_budget(
     size: (u32, u32),
 ) {
     let src = make(size);
-    let t = camera_transform(&src.color, None);
+    let t = match &src.encoding {
+        Some(e) => encoded_transform(e),
+        None => camera_transform(&src.color, None),
+    };
     let mut stages = RawStages::new(gpu, TileConfig::default());
     stages.sample_memory = true;
     let pyramid = stages.render_pyramid(gpu, &src, &t).unwrap().bytes();
@@ -187,7 +198,7 @@ fn within_budget(
             caps as f64 / MB
         );
         // Everything else the edit holds is small: uniforms, black levels,
-        // GainMaps.
+        // GainMaps, a non-RAW image's curves.
         assert!(used <= caps + 2_000_000, "{used} bytes for {caps}");
     }
 

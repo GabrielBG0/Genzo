@@ -214,6 +214,33 @@ impl InputEncoding {
                 }
                 Ok(Curve::Table(t.to_vec().into_boxed_slice()))
             };
+        // moxcms, as ICC says, takes a lookup table over the matrix and
+        // curves when a profile has both; Genzo reads only the latter.
+        let lut = profile.lut_a_to_b_perceptual.is_some()
+            || profile.lut_a_to_b_colorimetric.is_some()
+            || profile.lut_a_to_b_saturation.is_some();
+        if lut
+            && matches!(
+                profile.color_space,
+                DataColorSpace::Rgb | DataColorSpace::Gray
+            )
+        {
+            return Err(EncodingError::Unsupported(
+                "an ICC profile built on lookup tables".into(),
+            ));
+        }
+        // The colorants and a gray curve are in XYZ only with an XYZ PCS.
+        if profile.pcs != DataColorSpace::Xyz
+            && matches!(
+                profile.color_space,
+                DataColorSpace::Rgb | DataColorSpace::Gray
+            )
+        {
+            return Err(EncodingError::Unsupported(format!(
+                "an ICC profile with a {:?} connection space and no lookup table",
+                profile.pcs
+            )));
+        }
         match profile.color_space {
             DataColorSpace::Rgb if profile.is_matrix_shaper() => {
                 let curves = [
@@ -263,8 +290,8 @@ impl InputEncoding {
                     name: "an ICC gray profile".into(),
                 })
             }
-            DataColorSpace::Rgb => Err(EncodingError::Unsupported(
-                "an RGB ICC profile built on lookup tables".into(),
+            DataColorSpace::Rgb => Err(EncodingError::Icc(
+                "an RGB profile with neither a lookup table nor colorants and curves".into(),
             )),
             other => Err(EncodingError::Unsupported(format!(
                 "an ICC profile for {other:?}"
@@ -294,9 +321,7 @@ const P3: [[f64; 2]; 3] = [[0.680, 0.320], [0.265, 0.690], [0.150, 0.060]];
 #[cfg(test)]
 mod tests {
     use super::*;
-    use moxcms::{
-        ColorPrimaries, ColorProfile, DataColorSpace, Layout, ToneReprCurve, TransformOptions, XyY,
-    };
+    use moxcms::{ColorPrimaries, ColorProfile, Layout, ToneReprCurve, TransformOptions, XyY};
 
     /// The working space as a moxcms profile: linear AP1, D65 white.
     fn working_profile() -> ColorProfile {
@@ -503,22 +528,83 @@ mod tests {
         }
     }
 
+    /// `bytes` with the tag `from` renamed `to` (the tag table follows the
+    /// 128-byte header: a count, then signature, offset, size).
+    fn rename_tag(mut bytes: Vec<u8>, from: &[u8; 4], to: &[u8; 4]) -> Vec<u8> {
+        let count = u32::from_be_bytes(bytes[128..132].try_into().unwrap()) as usize;
+        let entry = (0..count)
+            .map(|i| 132 + 12 * i)
+            .find(|&o| &bytes[o..o + 4] == from)
+            .expect("the tag");
+        bytes[entry..entry + 4].copy_from_slice(to);
+        bytes
+    }
+
+    /// A lut16 A2B table: two grid points per input, the identity.
+    fn identity_lut() -> moxcms::LutWarehouse {
+        use moxcms::{LutDataType, LutStore, LutType, Matrix3d};
+        let mut clut = vec![];
+        for r in [0u16, 65535] {
+            for g in [0u16, 65535] {
+                for b in [0u16, 65535] {
+                    clut.extend([r, g, b]);
+                }
+            }
+        }
+        moxcms::LutWarehouse::Lut(LutDataType {
+            num_input_channels: 3,
+            num_output_channels: 3,
+            num_clut_grid_points: 2,
+            matrix: Matrix3d::IDENTITY,
+            num_input_table_entries: 2,
+            num_output_table_entries: 2,
+            input_table: LutStore::Store16(vec![0, 65535, 0, 65535, 0, 65535]),
+            clut_table: LutStore::Store16(clut),
+            output_table: LutStore::Store16(vec![0, 65535, 0, 65535, 0, 65535]),
+            lut_type: LutType::Lut16,
+        })
+    }
+
     #[test]
     fn unsupported_and_broken_profiles_are_errors() {
-        let mut cmyk = ColorProfile::new_srgb();
-        cmyk.color_space = DataColorSpace::Cmyk;
-        if let Ok(bytes) = cmyk.encode() {
-            assert!(InputEncoding::icc(&bytes).is_err());
-        }
-        let mut no_curves = ColorProfile::new_srgb();
-        no_curves.red_trc = None;
-        if let Ok(bytes) = no_curves.encode() {
-            assert!(InputEncoding::icc(&bytes).is_err());
-        }
-        let good = ColorProfile::new_srgb().encode().unwrap();
+        let srgb = ColorProfile::new_srgb().encode().unwrap();
+        let unsupported = |bytes: &[u8]| {
+            matches!(
+                InputEncoding::icc(bytes),
+                Err(EncodingError::Unsupported(_))
+            )
+        };
+        // A CMYK profile: the header's color space (bytes 16 to 20).
+        let mut cmyk = srgb.clone();
+        cmyk[16..20].copy_from_slice(b"CMYK");
+        assert!(unsupported(&cmyk));
+        // A lookup table beside the colorants and curves: moxcms would use
+        // the table, so Genzo refuses rather than disagree with it.
+        let mut with_lut = ColorProfile::new_srgb();
+        with_lut.lut_a_to_b_colorimetric = Some(identity_lut());
+        let bytes = with_lut.encode().unwrap();
+        assert!(
+            ColorProfile::new_from_slice(&bytes)
+                .unwrap()
+                .lut_a_to_b_colorimetric
+                .is_some()
+        );
+        assert!(unsupported(&bytes));
+        // A Lab connection space with no table.
+        let mut lab = srgb.clone();
+        lab[20..24].copy_from_slice(b"Lab ");
+        assert!(unsupported(&lab));
+        // No red curve: neither a matrix-shaper nor a table.
+        let no_curve = rename_tag(srgb.clone(), b"rTRC", b"zzzz");
+        assert!(
+            matches!(InputEncoding::icc(&no_curve), Err(EncodingError::Icc(_))),
+            "{:?}",
+            InputEncoding::icc(&no_curve)
+        );
+        // Not a profile at all.
         assert!(InputEncoding::icc(&[]).is_err());
-        assert!(InputEncoding::icc(&good[..good.len() / 2]).is_err());
-        let mut flipped = good.clone();
+        assert!(InputEncoding::icc(&srgb[..srgb.len() / 2]).is_err());
+        let mut flipped = srgb.clone();
         for i in (0..flipped.len()).step_by(7) {
             flipped[i] ^= 0x5a;
         }

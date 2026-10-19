@@ -188,6 +188,13 @@ const LOSSLESS: &[(&str, bool, u8, Option<&str>, u8)] = &[
     ("png-palette-trns.png", true, 8, None, 1),
     ("png-adam7.png", false, 8, None, 1),
     ("png-iccp.png", false, 8, Some("png-iccp.icc"), 1),
+    (
+        "png-icc-lcms2-srgb.png",
+        false,
+        8,
+        Some("png-icc-lcms2-srgb.icc"),
+        1,
+    ),
     ("png-cicp-p3.png", false, 8, None, 1),
     ("png-exif8.png", false, 8, None, 8),
     ("tiff-rgb8-lzw.tif", false, 8, None, 1),
