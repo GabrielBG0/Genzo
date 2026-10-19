@@ -33,7 +33,8 @@ struct Tile {
     // Offsets of the DeltaH and DeltaV tables in `black`, per plane: the
     // pattern starts at 0.
     deltas: vec4<u32>,
-    // The mosaic: 0 none (linear input), 1 Bayer (`bayer`), 2 X-Trans.
+    // The mosaic: 0 none (linear input), 1 Bayer (`bayer`), 2 X-Trans;
+    // then 1 when `black` holds a non-RAW image's curves.
     cfa: vec4<u32>,
     // The X-Trans pattern from the stored origin, row by row, four colors
     // per vec4.

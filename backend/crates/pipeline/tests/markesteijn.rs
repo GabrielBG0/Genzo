@@ -277,6 +277,7 @@ fn xtrans_sensor() -> RawSource {
         fix_bad_pixels: Vec::new(),
         gain_maps: Vec::new(),
         color: Default::default(),
+        encoding: None,
     }
 }
 

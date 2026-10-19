@@ -78,6 +78,7 @@ fn sensor(
         fix_bad_pixels: Vec::new(),
         gain_maps: Vec::new(),
         color,
+        encoding: None,
     }
 }
 
@@ -90,6 +91,7 @@ fn transform() -> CameraTransform {
         matrix: [[1.4, -0.3, -0.1], [-0.2, 1.3, -0.1], [0.0, -0.4, 1.4]],
         exposure: 1.5,
         fallback: None,
+        highlight_desaturation: true,
     }
 }
 
@@ -149,6 +151,7 @@ fn linear_sensor(size: (u32, u32), samples: u32) -> RawSource {
         fix_bad_pixels: Vec::new(),
         gain_maps: Vec::new(),
         color: CameraColor::default(),
+        encoding: None,
     }
 }
 

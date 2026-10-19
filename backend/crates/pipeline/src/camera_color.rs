@@ -3,6 +3,7 @@
 
 use genzo_color::Mat3;
 use genzo_color::camera::{AsShot, ColorSpec, D55_XY, DngProfile};
+use genzo_color::encoding::InputEncoding;
 use genzo_imgio::raw::{self, CameraColor};
 
 fn mat3(v: &[f64]) -> Option<Mat3> {
@@ -77,6 +78,9 @@ pub struct CameraTransform {
     /// Stage 4: 2^BaselineExposure.
     pub exposure: f32,
     pub fallback: Option<ColorFallback>,
+    /// Stage 4: whether highlights desaturate toward the clip level. A
+    /// camera's do; a non-RAW image's values are final, so theirs do not.
+    pub highlight_desaturation: bool,
 }
 
 const IDENTITY: [[f32; 3]; 3] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
@@ -100,6 +104,7 @@ pub fn camera_transform(c: &CameraColor, white: Option<[f64; 2]>) -> CameraTrans
             matrix: IDENTITY,
             exposure,
             fallback: Some(ColorFallback::NoProfile(why)),
+            highlight_desaturation: true,
         }
     };
     let Some(profile) = dng_profile(c) else {
@@ -127,6 +132,20 @@ pub fn camera_transform(c: &CameraColor, white: Option<[f64; 2]>) -> CameraTrans
         matrix: t.matrix.map(|row| row.map(|v| v as f32)),
         exposure,
         fallback,
+        highlight_desaturation: true,
+    }
+}
+
+/// Stage 4 for a non-RAW image: its encoding's matrix into the working
+/// space, no white balance, no exposure, no highlight desaturation.
+pub fn encoded_transform(e: &InputEncoding) -> CameraTransform {
+    CameraTransform {
+        white: genzo_color::camera::D65_XY,
+        multipliers: [1.0; 3],
+        matrix: e.to_working.map(|row| row.map(|v| v as f32)),
+        exposure: 1.0,
+        fallback: None,
+        highlight_desaturation: false,
     }
 }
 

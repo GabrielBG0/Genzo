@@ -111,8 +111,9 @@ struct TileUniforms {
     wb: [f32; 4],
     scale: [f32; 4],
     deltas: [u32; 4],
-    /// 0: no mosaic (linear), 1: Bayer, 2: X-Trans; the rest unused. Last,
-    /// as in tile_common.wgsl.
+    /// 0: no mosaic (linear), 1: Bayer, 2: X-Trans; then 1 for a non-RAW
+    /// image's curves in `black`; the rest unused. Last, as in
+    /// tile_common.wgsl.
     cfa: [u32; 4],
     xtrans: [[u32; 4]; 9],
 }
@@ -1005,7 +1006,11 @@ impl RawStages {
                 .write_buffer(&self.xt_image, 0, bytemuck::bytes_of(&u));
         }
         let lin = &src.linearization;
-        let mut black = lin.pattern.clone();
+        // A non-RAW image's curves take the levels' place (tile_stage1.wgsl).
+        let mut black = match &src.encoding {
+            Some(e) => e.lut(),
+            None => lin.pattern.clone(),
+        };
         let mut deltas = [0u32; 4];
         if !lin.delta_h.is_empty() {
             deltas[0] = black.len() as u32;
@@ -1110,7 +1115,7 @@ impl RawStages {
                     Some(Cfa::Bayer(_)) => 1,
                     Some(Cfa::XTrans(_)) => 2,
                 },
-                0,
+                u32::from(src.encoding.is_some()),
                 0,
                 0,
             ],
@@ -1453,7 +1458,16 @@ impl RawStages {
             let u = Stage4Uniforms {
                 m: m.map(|r| [r[0], r[1], r[2], 0.0]),
                 luma: [luma[0], luma[1], luma[2], 0.0],
-                params: [transform.exposure, clip, DESATURATE_FROM, 0.0],
+                params: [
+                    transform.exposure,
+                    clip,
+                    DESATURATE_FROM,
+                    if transform.highlight_desaturation {
+                        1.0
+                    } else {
+                        0.0
+                    },
+                ],
                 texels: [first.0, first.1, count.0, count.1],
                 level: [l1.0, l1.1, 0, 0],
             };

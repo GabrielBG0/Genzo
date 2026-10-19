@@ -89,6 +89,7 @@ fn linear_source((w, h): (u32, u32)) -> RawSource {
         fix_bad_pixels: Vec::new(),
         gain_maps: Vec::new(),
         color: Default::default(),
+        encoding: None,
     }
 }
 

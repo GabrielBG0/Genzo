@@ -13,7 +13,7 @@ struct Stage4 {
     // The working space's luminance row.
     luma: vec4<f32>,
     // 2^BaselineExposure, the clip level, where desaturation starts (a
-    // fraction of the clip level).
+    // fraction of the clip level), 1 to desaturate highlights or 0 not to.
     params: vec4<f32>,
     // The first level 1 texel this tile writes, and how many across and down.
     texels: vec4<u32>,
@@ -30,7 +30,7 @@ fn stage4(c: vec3<f32>) -> vec3<f32> {
     let clip = s4.params.y;
     let knee = s4.params.z;
     let top = max(c.x, max(c.y, c.z));
-    let k = clamp((top - knee * clip) / ((1.0 - knee) * clip), 0.0, 1.0);
+    let k = clamp((top - knee * clip) / ((1.0 - knee) * clip), 0.0, 1.0) * s4.params.w;
     let y = dot(s4.luma.xyz, w);
     return (w + (vec3<f32>(y) - w) * k) * s4.params.x;
 }
