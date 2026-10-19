@@ -38,3 +38,7 @@ harness = false
 [[bench]]
 name = "raw_stages"
 harness = false
+
+[[bench]]
+name = "view"
+harness = false

@@ -305,6 +305,20 @@ impl Pyramid {
         pyramid_bytes(self.size)
     }
 
+    /// The sizes of levels 1 to `levels`.
+    pub fn level_sizes(&self) -> Vec<(u32, u32)> {
+        (1..=self.levels).map(|l| self.level_size(l)).collect()
+    }
+
+    /// A view of one level, for sampling it.
+    pub(crate) fn level_view(&self, level: u32) -> wgpu::TextureView {
+        self.texture.create_view(&wgpu::TextureViewDescriptor {
+            base_mip_level: level - 1,
+            mip_level_count: Some(1),
+            ..Default::default()
+        })
+    }
+
     /// Reads `level` back as RGB, row by row: for tests, and for keeping a
     /// prefetched photo's pyramid in CPU memory.
     pub fn read_level(&self, gpu: &Gpu, level: u32) -> Result<Vec<[f32; 3]>, GpuError> {
@@ -375,7 +389,7 @@ struct MapUniform {
 }
 
 #[derive(Clone, Copy)]
-enum Slot {
+pub(crate) enum Slot {
     Uniform,
     StorageRw,
     Float,
@@ -385,9 +399,9 @@ enum Slot {
 }
 
 #[derive(Debug)]
-struct Pass {
-    layout: wgpu::BindGroupLayout,
-    pipeline: wgpu::ComputePipeline,
+pub(crate) struct Pass {
+    pub(crate) layout: wgpu::BindGroupLayout,
+    pub(crate) pipeline: wgpu::ComputePipeline,
 }
 
 fn pass(device: &wgpu::Device, name: &str, body: &str, slots: &[Slot]) -> Pass {
@@ -396,7 +410,13 @@ fn pass(device: &wgpu::Device, name: &str, body: &str, slots: &[Slot]) -> Pass {
 
 /// A pass from `body`, after the tile block (`tile_common.wgsl`) when
 /// `common`; binding 0 is a uniform buffer either way.
-fn pass_with(device: &wgpu::Device, name: &str, body: &str, slots: &[Slot], common: bool) -> Pass {
+pub(crate) fn pass_with(
+    device: &wgpu::Device,
+    name: &str,
+    body: &str,
+    slots: &[Slot],
+    common: bool,
+) -> Pass {
     let layout = layout(device, name, slots);
     let source = if common {
         format!("{}\n{}", include_str!("shaders/tile_common.wgsl"), body)
@@ -754,7 +774,7 @@ impl Tiles {
     }
 }
 
-fn padded_row(width: u32, bytes_per_pixel: u32) -> u32 {
+pub(crate) fn padded_row(width: u32, bytes_per_pixel: u32) -> u32 {
     (width * bytes_per_pixel).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT)
 }
 

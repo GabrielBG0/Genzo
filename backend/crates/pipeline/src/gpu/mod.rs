@@ -9,6 +9,7 @@ pub mod raw_stages;
 pub mod spike;
 pub mod synthetic;
 pub mod thread;
+pub mod view;
 
 use std::fmt;
 

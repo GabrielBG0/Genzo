@@ -283,10 +283,12 @@ impl InputEncoding {
             }
             DataColorSpace::Gray => {
                 let curve = table(profile.build_gray_linearize_table::<u16, CODES, 16>())?;
-                // Gray keeps its neutral: equal channels in, equal out.
+                // Equal channels in, a neutral out: any matrix with a D65
+                // white gives the same one. sRGB's, so a gray photo counts
+                // as inside sRGB and skips gamut compression (DEV-01).
                 Ok(InputEncoding {
                     curves: [curve.clone(), curve.clone(), curve],
-                    to_working: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]],
+                    to_working: Self::srgb().to_working,
                     name: "an ICC gray profile".into(),
                 })
             }

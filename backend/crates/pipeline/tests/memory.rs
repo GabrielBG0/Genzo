@@ -217,3 +217,47 @@ fn within_budget(
         );
     }
 }
+
+/// The view at the largest size DEV-01 budgets (2560 x 1920): its sampled
+/// cache within the viewport caches' line, its frame within the output's.
+#[test]
+fn the_view_stays_within_its_caps() {
+    use genzo_color::output::Target;
+    use genzo_pipeline::gpu::view::ViewStages;
+    let gpu = match Gpu::open(AdapterChoice::from_env()) {
+        Ok(gpu) => gpu,
+        Err(GpuError::NoAdapter) if std::env::var("GENZO_REQUIRE_GPU").as_deref() != Ok("1") => {
+            eprintln!("skipped: no GPU adapter");
+            return;
+        }
+        Err(e) => panic!("{e}"),
+    };
+    let src = encoded_source((1600, 1200));
+    let t = encoded_transform(src.encoding.as_ref().unwrap());
+    let mut stages = RawStages::new(&gpu, TileConfig::default());
+    let p = stages.render_pyramid(&gpu, &src, &t).unwrap();
+    let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+    let before = allocated(&gpu);
+    let mut view = ViewStages::new(&gpu);
+    view.sample(&gpu, p, 1, (2560, 1920));
+    view.output(&gpu, Target::Srgb, false, false);
+    let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+    let (cache, frame) = (view.cache_bytes(), view.frame_bytes());
+    println!(
+        "computed: sampled cache {:.1} MB (cap {:.0}), frame {:.1} MB (cap {:.0})",
+        cache as f64 / MB,
+        budget::VIEWPORT_CACHES as f64 / MB,
+        frame as f64 / MB,
+        budget::OUTPUT as f64 / MB
+    );
+    assert!(cache <= budget::VIEWPORT_CACHES && frame <= budget::OUTPUT);
+    if let (Some(before), Some(after)) = (before, allocated(&gpu)) {
+        let used = after - before;
+        println!("measured: {:.1} MB for the view", used as f64 / MB);
+        // Plus uniforms and the driver's padding; readback is a later step's.
+        assert!(
+            used as f64 <= (cache + frame) as f64 * 1.07 + 2e6,
+            "{used} bytes"
+        );
+    }
+}

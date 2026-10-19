@@ -118,26 +118,10 @@ fn colors(sixteen: bool) -> Vec<[u16; 3]> {
     }
 }
 
-/// An image of 2 x 2 blocks, one per color, `across` blocks per row: RGBA.
-fn blocks(colors: &[[u16; 3]], across: usize) -> ((u32, u32), Vec<u16>) {
-    let down = colors.len().div_ceil(across);
-    let (w, h) = (2 * across, 2 * down);
-    let mut rgba = vec![0u16; w * h * 4];
-    for (i, c) in colors.iter().enumerate() {
-        let (bx, by) = (2 * (i % across), 2 * (i / across));
-        for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
-            let o = ((by + dy) * w + bx + dx) * 4;
-            rgba[o..o + 3].copy_from_slice(c);
-            rgba[o + 3] = 65535;
-        }
-    }
-    ((w as u32, h as u32), rgba)
-}
-
 fn source(enc: &InputEncoding, sixteen: bool) -> (Vec<[u16; 3]>, RawSource) {
     let c = colors(sixteen);
     // 77 blocks across: 154 px, an odd number of 64 px tiles' worth.
-    let (size, rgba) = blocks(&c, 77);
+    let (size, rgba) = genzo_pipeline::gpu::synthetic::blocks(&c, 77);
     (c, RawSource::from_encoded(size, &rgba, enc).unwrap())
 }
 
