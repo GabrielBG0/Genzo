@@ -202,7 +202,7 @@ While a slider is dragged, white balance runs as a ratio after the cached demosa
     - the HDR transfers PQ (16) and HLG (18), and other H.273 code points;
     - ICC profiles with a lookup table (A2B), even beside colorants and curves, since moxcms, as ICC says, would use the table;
     - an ICC connection space other than XYZ without a table, CMYK and other color spaces;
-    - profiles moxcms cannot read. These are refused, not guessed at, pending the owner's call (see the plan's Decided table).
+    - profiles moxcms cannot read. These are refused, not guessed at: unsupported for now (the owner, 2026-10-19). Whether to fall back to sRGB instead is parked in the plan.
   - **Tests:**
     - `color::encoding` against moxcms's own f32 transform into a linear AP1/D65 profile, over a grid of 8-bit codes: within 4.2e-4 linear and ΔE2000 0.10 for sRGB, Display P3 and Adobe RGB. The same encodings read back as ICC agree with the formulas within ΔE2000 0.015. Neutrals stay neutral for every encoding.
     - `pipeline/tests/encoded.rs`: tiled equals one tile, bit for bit; each level matches the CPU reference within one f16 step; stages 1 to 3 equal the CPU's bit for bit.
@@ -284,7 +284,7 @@ Geometry changes which source pixel lands where. It changes no pixel values in M
 - **How** (`reference::sampling`, `gpu::view`): output pixel centers go through one affine into the level's texels: the file's orientation and the scale now, with the edit's turns, flip and crop composed in later. The filter is separable along the level's axes, edges clamped. It takes at most 8 taps per axis while the view is at least half the chosen level on that axis, as at Fit; a view smaller than the smallest level (a thumbnail) or of another aspect ratio takes about 4 per level texel it covers.
 - An integer distance other than 0 weighs exactly 0, so a view the size of a level is an exact copy, in every orientation.
 - The result is the "stage 4 sampled" viewport cache (RGBA16F, the size of the view). Stages 6 and 7 read it, and stage 9 writes the RGBA8 frame from what they leave.
-- **Open:** a Fit view larger than level 1 (a 12 MP photo, level 1 2016 px wide, on a 2560 px view) is upsampled from level 1 for now, which loses detail. Level-0 tiles there, as at 1:1, are the likely answer; it needs the owner's call.
+- **A Fit view larger than level 1** (a 12 MP photo, level 1 2016 px wide, on a 2560 px view) is rendered from level-0 tiles, as at 1:1 (decided 2026-10-19). Until those tiles exist (plan step 6), it is upsampled from level 1, which loses detail.
 
 ### Stage 6 (M1 part): exposure and tone
 
