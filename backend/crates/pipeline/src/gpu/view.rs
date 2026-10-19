@@ -110,15 +110,15 @@ impl ViewStages {
         self.size
     }
 
-    /// The bytes of the view's own buffers: the sampled cache (RGBA16F) and
-    /// the frame (RGBA8).
-    pub fn bytes(&self) -> u64 {
-        let px = u64::from(self.size.0) * u64::from(self.size.1);
-        if self.sampled.is_some() {
-            px * (8 + 4)
-        } else {
-            0
-        }
+    /// The bytes of the stage 4 sampled cache (RGBA16F): one of DEV-01's
+    /// viewport stage caches.
+    pub fn cache_bytes(&self) -> u64 {
+        u64::from(self.size.0) * u64::from(self.size.1) * 8
+    }
+
+    /// The bytes of the frame (RGBA8), DEV-01's output line.
+    pub fn frame_bytes(&self) -> u64 {
+        u64::from(self.size.0) * u64::from(self.size.1) * 4
     }
 
     fn resize(&mut self, gpu: &Gpu, size: (u32, u32)) {

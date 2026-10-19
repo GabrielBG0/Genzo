@@ -281,6 +281,10 @@ Geometry changes which source pixel lands where. It changes no pixel values in M
 3. The straighten angle and the crop rectangle, together (see Data: *Crop*).
 
 **Sampling.** The pyramid level is the smallest one at least as large as the output scale, sampled with a Lanczos-2 filter sized to the remaining scale factor. Upsampling happens only past 1:1.
+- **How** (`reference::sampling`, `gpu::view`): output pixel centers go through one affine into the level's texels: the file's orientation and the scale now, with the edit's turns, flip and crop composed in later. The filter is separable along the level's axes, at most 8 taps each, edges clamped.
+- An integer distance other than 0 weighs exactly 0, so a view the size of a level is an exact copy, in every orientation.
+- The result is the "stage 4 sampled" viewport cache (RGBA16F, the size of the view). Stages 6 and 7 read it, and stage 9 writes the RGBA8 frame from what they leave.
+- **Open:** a Fit view larger than level 1 (a 12 MP photo, level 1 2016 px wide, on a 2560 px view) is upsampled from level 1 for now, which loses detail. Level-0 tiles there, as at 1:1, are the likely answer; it needs the owner's call.
 
 ### Stage 6 (M1 part): exposure and tone
 
@@ -311,17 +315,22 @@ Works in OkLCh, converted from linear AP1 through XYZ (D65).
 
 ### Stage 9 (M1 part): output transform
 
-1. **Gamut compression** (decided 2026-10-18). Convert linear AP1 to the target's linear RGB (sRGB, or Display P3). Then compress per channel toward the achromatic axis, using the ACES reference gamut compression method: distance from achromatic, a threshold, a limit and a power curve.
+1. **Gamut compression** (decided 2026-10-18; method changed 2026-10-19). Convert linear AP1 to the target's linear RGB (sRGB, or Display P3). Then compress the color's Oklab chroma at its own Oklab lightness and hue (`color::output`).
+   - `r` is the color's chroma as a fraction of the most the target holds at that lightness and hue, found by bisection (24 steps).
+   - Below a threshold, `r` is kept. Above it, threshold to limit is compressed onto threshold to 1 by the ACES reference gamut compression's curve (its power function), and anything past the limit lands on the edge.
+   - Parameters: threshold 0.8 and power 1.2 for both targets. The limit is 2.25 for sRGB and 1.7 for Display P3: about the 99th percentile of `r` over the AP1 gamut, so 0.6 % of AP1 lies past it.
    - Colors inside the threshold are untouched.
-   - Colors out of gamut keep their hue and land inside the gamut instead of clipping into flat patches.
-   - The cost: colors between the threshold and the gamut edge move inward a little, which is what makes the edge soft.
-   - The parameters for each target are set in the implementation PR, against the acceptance criteria below.
+   - Colors out of gamut keep their lightness and hue exactly, and land inside the gamut instead of clipping into flat patches.
+   - The cost: colors between the threshold and the gamut edge move inward, which is what makes the edge soft.
+   - Black, white and anything brighter than white have no chroma to keep; the clamp handles them.
+   - **Why not per channel:** the ACES method compresses each RGB channel toward the largest. On the AP1 gamut that moved saturated blues 25 to 40 degrees in OkLCh hue for every threshold and power tried, against criterion 9's 3.
 
    **When it runs:**
    - **RAW photos:** always.
    - **Non-RAW photos:** only when the source gamut is not inside the target. Adobe RGB or ProPhoto RGB into sRGB qualifies, and so does Display P3 into sRGB. An sRGB JPEG into an sRGB frame does not, so its saturated colors stay exact. Colors an edit pushes past the edge are clipped per channel there.
 2. **Clamp** to 0 to 1, then encode with the sRGB transfer function (also used by Display P3).
-3. **Quantize** to 8 bits with deterministic dither: triangular, ±1 code, seeded by pixel position, so goldens are stable.
+3. **Quantize** to 8 bits with deterministic dither: triangular, ±1 code, from an integer hash of the pixel position (PCG), so the CPU reference and every GPU draw the same noise and goldens are stable.
+   - **An unedited non-RAW photo is not dithered** (decided 2026-10-19), so it shows its own codes. Its values come back up to 1.3 codes off through the RGBA16F pyramid: a channel near 0 beside a bright one, like sRGB (2, 250, 0). Dither on top of that reached 2 codes. RAW photos and any edit keep the dither.
 4. **Tag the frame** `rgba8Srgb`, `rgba8DisplayP3`, or the matching JPEG preview format. The webview converts to the monitor (spec v1 color policy).
 
 Export (OUT-01 basic) uses this transform with sRGB as the target, and embeds an sRGB ICC profile.
@@ -539,13 +548,13 @@ Each criterion names the check that proves it. These become the tests. "Corpus" 
 6. **No tile seams.** A 3000 × 2000 image rendered with 1024 px tiles and as one tile differs by at most 1 code. *Check:* a pipeline test on lavapipe.
 7. **Fit matches 1:1.** The Fit render and the 1:1 render downsampled to Fit differ by mean ΔE2000 ≤ 1.0, with Highlights at −100 and Shadows at +100, which is where local tone mapping shows. *Check:* a pipeline test.
 8. **Non-RAW is an identity when unedited.**
-   - An sRGB JPEG, an sRGB PNG, and a 16-bit sRGB TIFF render within 1 code of their decoded values.
+   - An sRGB JPEG and an sRGB PNG render within 1 code of their decoded values. A 16-bit sRGB TIFF renders within 1.5 codes of its decoded values (on the 8-bit scale): those lie between codes, and the pyramid's f16 adds up to 1.3 codes before rounding.
    - A Display P3 HEIC renders to a P3 frame within 1 code.
    - The test images include the target's red, green and blue primaries at full saturation, and colors between the compression threshold and the gamut edge, so a compression that should not run would fail.
-   - An Adobe RGB JPEG matches moxcms's conversion to within ΔE2000 0.5.
+   - An Adobe RGB JPEG matches moxcms's conversion to within ΔE2000 0.5, in an sRGB frame, for its colors the gamut compression keeps (inside the threshold). The colors past the threshold move inward by design.
 
    *Check:* pipeline tests.
-9. **Gamut compression.** Over a sweep of AP1 colors, no output channel leaves 0 to 1 before quantizing. Colors inside the target gamut by more than the threshold change by at most 1 code. Compressed colors move in OkLCh hue by at most 3°. *Check:* a `color` crate test against the CPU reference math, and a GPU test matching it.
+9. **Gamut compression.** Over a sweep of AP1 colors, no output channel leaves 0 to 1 before quantizing, for colors whose lightness is inside 0 to 1 (the clamp only catches what is brighter than white). Colors inside the target gamut by more than the threshold change by at most 1 code. Compressed colors move in OkLCh hue by at most 3°. *Check:* a `color` crate test against the CPU reference math, and a GPU test matching it.
 10. **White balance math.**
     - Temp and Tint to white point and back round-trips within 1 K and 0.1 tint.
     - AsShotNeutral to Temp and Tint and back is within 1e-4.

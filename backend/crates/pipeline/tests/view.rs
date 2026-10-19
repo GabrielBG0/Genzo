@@ -220,11 +220,50 @@ fn criterion_8_unedited_non_raw_is_an_identity() {
     let Some((_lock, gpu)) = gpu() else { return };
     let mut stages = RawStages::new(&gpu, TileConfig::default());
     let mut view = ViewStages::new(&gpu);
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let lcms2 =
+        std::fs::read(dir.join("imgio/tests/fixtures/images/png-icc-lcms2-srgb.icc")).unwrap();
+    // The GIMP sRGB profile in libheif's test HEIC.
+    let heic = genzo_imgio::decode(
+        &std::fs::read(dir.join("heif/vendor/libheif/tests/data/rainbow-451x461.heic")).unwrap(),
+        Default::default(),
+    )
+    .unwrap();
+    let genzo_imgio::Pixels::Rgba16 {
+        color: genzo_imgio::ColorEncoding::Icc(gimp),
+        ..
+    } = heic.pixels
+    else {
+        panic!("the HEIC carries an ICC profile")
+    };
+    let p3_icc = moxcms::ColorProfile::new_display_p3().encode().unwrap();
+    let icc = |bytes: &[u8]| InputEncoding::icc(bytes).unwrap();
     for (name, enc, target, sixteen, bound) in [
         (
             "sRGB JPEG or PNG",
             InputEncoding::srgb(),
             Target::Srgb,
+            false,
+            1.0,
+        ),
+        (
+            "sRGB PNG, lcms2's profile",
+            icc(&lcms2),
+            Target::Srgb,
+            false,
+            1.0,
+        ),
+        (
+            "sRGB HEIC, GIMP's profile",
+            icc(&gimp),
+            Target::Srgb,
+            false,
+            1.0,
+        ),
+        (
+            "Display P3, an ICC profile",
+            icc(&p3_icc),
+            Target::DisplayP3,
             false,
             1.0,
         ),
@@ -409,4 +448,38 @@ fn an_adobe_rgb_jpeg_matches_moxcms_in_an_srgb_frame() {
     );
     assert!(n_kept > 50 && n_moved > 0);
     assert!(kept < 0.5, "ΔE {kept}");
+}
+
+/// The stored golden of a frame: the synthetic RAW scene sampled to a Fit
+/// view between two levels, through stage 9 into sRGB with the gamut
+/// compression and the dither. Written on lavapipe.
+#[test]
+fn golden_fit_frame() {
+    let Some((_lock, gpu)) = gpu() else { return };
+    let src = scene_raw(1536, 1024);
+    let mut stages = RawStages::new(&gpu, TileConfig::default());
+    let p = pyramid(&gpu, &mut stages, &src);
+    let mut view = ViewStages::new(&gpu);
+    let out = (300, 200);
+    view.sample(&gpu, p, 1, out);
+    view.output(
+        &gpu,
+        Target::Srgb,
+        compresses(p, Target::Srgb),
+        dithers(p, false),
+    );
+    let frame = view.read_frame(&gpu).unwrap();
+    let pixels = frame
+        .iter()
+        .map(|f| [0, 1, 2].map(|c| f32::from(f[c]) / 255.0))
+        .collect();
+    let case = genzo_golden::Case::new(
+        env!("CARGO_MANIFEST_DIR"),
+        "view/synthetic-fit-srgb",
+        genzo_golden::Space::DisplaySrgb,
+        genzo_golden::Producer::Gpu {
+            adapter: gpu.info.name.clone(),
+        },
+    );
+    genzo_golden::check(&case, &genzo_golden::Image::new(out.0, out.1, pixels));
 }

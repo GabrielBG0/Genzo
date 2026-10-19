@@ -183,11 +183,20 @@ pub fn pixel(
 
 /// Whether a source with `to_working` (linear source RGB to AP1) fits in
 /// `target`, so a non-RAW photo skips gamut compression (DEV-01): each
-/// source primary lands inside the target's 0 to 1, within `1e-6`.
+/// source primary lands inside the target's 0 to 1, within [`FIT_SLACK`].
 pub fn fits(to_working: &Mat3, target: Target) -> bool {
     let m = mat_mul(&target.from_working(), to_working);
-    m.iter().flatten().all(|v| (-1e-6..=1.0 + 1e-6).contains(v))
+    m.iter()
+        .flatten()
+        .all(|v| (-FIT_SLACK..=1.0 + FIT_SLACK).contains(v))
 }
+
+/// How far outside the target a source primary may land and still fit.
+/// Real sRGB and Display P3 ICC profiles miss the formulas by up to 5e-5
+/// (lcms2's 1.4e-5, moxcms's 5.0e-5: s15Fixed16 colorants and moxcms's
+/// D65 of 0.31272, 0.32903); a wider gamut misses by far more (Adobe RGB
+/// in sRGB: about 0.2).
+pub const FIT_SLACK: f64 = 1e-3;
 
 /// CIE XYZ (D65, Y = 1 white) to Oklab (Ottosson 2020, the XYZ matrices).
 pub fn xyz_to_oklab(xyz: [f64; 3]) -> [f64; 3] {
@@ -389,6 +398,28 @@ mod tests {
             .encode()
             .unwrap();
         assert!(fits_in(InputEncoding::icc(&gray).unwrap(), Target::Srgb));
+        // Real profiles, a little off the formulas, still fit their own
+        // target; a wider one does not.
+        let lcms2 = std::fs::read(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../imgio/tests/fixtures/images/png-icc-lcms2-srgb.icc"),
+        )
+        .unwrap();
+        let icc = |p: moxcms::ColorProfile| InputEncoding::icc(&p.encode().unwrap()).unwrap();
+        assert!(fits_in(InputEncoding::icc(&lcms2).unwrap(), Target::Srgb));
+        assert!(fits_in(icc(moxcms::ColorProfile::new_srgb()), Target::Srgb));
+        assert!(fits_in(
+            icc(moxcms::ColorProfile::new_display_p3()),
+            Target::DisplayP3
+        ));
+        assert!(!fits_in(
+            icc(moxcms::ColorProfile::new_display_p3()),
+            Target::Srgb
+        ));
+        assert!(!fits_in(
+            icc(moxcms::ColorProfile::new_adobe_rgb()),
+            Target::Srgb
+        ));
     }
 
     #[test]
