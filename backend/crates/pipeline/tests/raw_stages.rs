@@ -20,7 +20,7 @@ use genzo_imgio::raw::{Levels, Rect};
 use genzo_pipeline::gpu::raw_stages::{RawStages, TileConfig, Until};
 use genzo_pipeline::gpu::synthetic::scene;
 use genzo_pipeline::gpu::{AdapterChoice, Gpu, GpuError};
-use genzo_pipeline::raw::{Linearization, RawSource};
+use genzo_pipeline::raw::{Cfa, Linearization, RawSource};
 use genzo_pipeline::reference::stages::{stage1, stage2};
 
 static ONE_DEVICE: Mutex<()> = Mutex::new(());
@@ -161,7 +161,7 @@ fn bayer() -> RawSource {
         stored,
         samples: 1,
         data,
-        bayer: Some(colors),
+        cfa: Some(Cfa::Bayer(colors)),
         active: Rect {
             top: TOP,
             left: LEFT,
@@ -203,7 +203,7 @@ fn linear_with(samples: u32) -> RawSource {
         stored,
         samples,
         data,
-        bayer: None,
+        cfa: None,
         active: Rect {
             top: TOP,
             left: LEFT,
@@ -296,7 +296,7 @@ fn stages_1_and_2_match_the_reference() {
         };
         let mut want = stage1(&src);
         stage2(&mut want, &src, WB);
-        if src.bayer.is_some() {
+        if src.cfa.is_some() {
             // The demosaic's input is clamped at 0.
             want.iter_mut().for_each(|v| *v = v.max(0.0));
         }

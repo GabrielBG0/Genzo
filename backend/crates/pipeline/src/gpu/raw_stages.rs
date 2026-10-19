@@ -19,7 +19,7 @@ use genzo_model::frame::Rect;
 
 use super::{Gpu, GpuError};
 use crate::camera_color::CameraTransform;
-use crate::raw::RawSource;
+use crate::raw::{Cfa, RawSource};
 use crate::reference::stages::{DESATURATE_FROM, half, luminance_row};
 use crate::tiles::{TileJob, jobs};
 
@@ -67,6 +67,10 @@ struct TileUniforms {
     wb: [f32; 4],
     scale: [f32; 4],
     deltas: [u32; 4],
+    /// 0: no mosaic (linear), 1: Bayer, 2: X-Trans; the rest unused. Last,
+    /// as in tile_common.wgsl.
+    cfa: [u32; 4],
+    xtrans: [[u32; 4]; 9],
 }
 
 #[repr(C)]
@@ -611,7 +615,7 @@ impl RawStages {
             }));
         }
         let image = self.upload_image(gpu, src);
-        let mosaic = src.bayer.is_some() && until == Until::Stage2;
+        let mosaic = src.cfa.is_some() && until == Until::Stage2;
         let channels = if mosaic { 1 } else { 3 };
         let mut out = vec![0.0f32; w as usize * h as usize * channels];
         for job in &jobs {
@@ -727,7 +731,29 @@ impl RawStages {
                 lin.cols,
                 u32::from(!lin.delta_h.is_empty()) | u32::from(!lin.delta_v.is_empty()) << 1,
             ],
-            bayer: src.bayer.map_or([255; 4], |b| b.map(u32::from)),
+            bayer: match src.cfa {
+                Some(Cfa::Bayer(b)) => b.map(u32::from),
+                _ => [0; 4],
+            },
+            cfa: [
+                match src.cfa {
+                    None => 0,
+                    Some(Cfa::Bayer(_)) => 1,
+                    Some(Cfa::XTrans(_)) => 2,
+                },
+                0,
+                0,
+                0,
+            ],
+            xtrans: {
+                let mut x = [[0u32; 4]; 9];
+                if let Some(Cfa::XTrans(p)) = src.cfa {
+                    for i in 0..36 {
+                        x[i / 4][i % 4] = u32::from(p[i / 6][i % 6]);
+                    }
+                }
+                x
+            },
             wb: [multipliers[0], multipliers[1], multipliers[2], clip],
             scale: [scale(0), scale(1), scale(2), 0.0],
             deltas: image.deltas,
@@ -794,7 +820,7 @@ impl RawStages {
                 ],
             ),
         )];
-        if demosaic && src.bayer.is_some() {
+        if demosaic && matches!(src.cfa, Some(Cfa::Bayer(_))) {
             let v = &views;
             groups.push((&ps.vh, bind(&ps.vh, vec![v.r(&v.cfa), v.r(&v.vh)])));
             groups.push((

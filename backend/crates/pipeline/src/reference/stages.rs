@@ -40,7 +40,7 @@ pub fn stage2(image: &mut [f32], src: &RawSource, multipliers: [f32; 3]) {
     let clip = multipliers[0].min(multipliers[1]).min(multipliers[2]);
     let (w, _) = src.size();
     for (i, v) in image.iter_mut().enumerate() {
-        let gain = match src.bayer {
+        let gain = match src.cfa {
             Some(_) => {
                 let (row, col) = ((i as u32) / w, (i as u32) % w);
                 multipliers[usize::from(src.color_at(row, col).expect("a Bayer image"))]
@@ -49,7 +49,7 @@ pub fn stage2(image: &mut [f32], src: &RawSource, multipliers: [f32; 3]) {
             // A monochrome plane has no white balance.
             None => 1.0,
         };
-        *v = (*v * gain).min(if src.samples == 1 && src.bayer.is_none() {
+        *v = (*v * gain).min(if src.samples == 1 && src.cfa.is_none() {
             1.0
         } else {
             clip

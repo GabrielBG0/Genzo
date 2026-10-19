@@ -99,7 +99,7 @@ pub fn scene_raw(width: u32, height: u32) -> crate::raw::RawSource {
         stored: (width, height),
         samples: 1,
         data: img.data,
-        bayer: Some(img.cfa),
+        cfa: Some(crate::raw::Cfa::Bayer(img.cfa)),
         active: Rect {
             top: 0,
             left: 0,

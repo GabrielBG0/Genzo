@@ -54,7 +54,7 @@ fn linear_source((w, h): (u32, u32)) -> RawSource {
         stored: (w, h),
         samples: 3,
         data,
-        bayer: None,
+        cfa: None,
         active: Rect {
             top: 0,
             left: 0,

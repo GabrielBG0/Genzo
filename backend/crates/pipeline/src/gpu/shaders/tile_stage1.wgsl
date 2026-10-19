@@ -161,7 +161,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     if (tile.info.x == 3u) {
         let rgb = vec3<f32>(linear(p, 0u), linear(p, 1u), linear(p, 2u));
         textureStore(rgb_out, p, vec4<f32>(min(rgb * tile.wb.xyz, vec3<f32>(clip)), 1.0));
-    } else if (tile.bayer.x == 255u) {
+    } else if (tile.cfa.x == 0u) {
         // A monochrome plane: no white balance.
         let v = min(linear(p, 0u), 1.0);
         textureStore(rgb_out, p, vec4<f32>(v, v, v, 1.0));

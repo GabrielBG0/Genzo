@@ -15,7 +15,7 @@ use genzo_pipeline::camera_color::{CameraTransform, camera_transform};
 use genzo_pipeline::gpu::raw_stages::{RawStages, TileConfig, Until, level_count};
 use genzo_pipeline::gpu::synthetic::scene;
 use genzo_pipeline::gpu::{AdapterChoice, Gpu, GpuError};
-use genzo_pipeline::raw::{Linearization, RawSource};
+use genzo_pipeline::raw::{Cfa, Linearization, RawSource};
 use genzo_pipeline::reference::stages::{reduce, stage4};
 
 static ONE_DEVICE: Mutex<()> = Mutex::new(());
@@ -67,7 +67,7 @@ fn sensor(
         stored: (w, h),
         samples: 1,
         data,
-        bayer: Some(colors),
+        cfa: Some(Cfa::Bayer(colors)),
         active: Rect {
             top: 0,
             left: 0,
@@ -138,7 +138,7 @@ fn linear_sensor(size: (u32, u32), samples: u32) -> RawSource {
         stored: size,
         samples,
         data,
-        bayer: None,
+        cfa: None,
         active: Rect {
             top: 0,
             left: 0,

@@ -56,7 +56,7 @@ fn the_cpu_port_reproduces_a_known_scene() {
             }
         }
         println!(
-            "{mode:?}: gradients mean {:.2e}, worst {worst:.2e}",
+            "gradients mean {:.2e}, worst {worst:.2e}",
             sum / f64::from(n)
         );
         assert!(worst < 0.03, "{worst}");
