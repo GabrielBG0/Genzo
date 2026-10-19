@@ -86,6 +86,11 @@ mod tag {
     pub const AS_SHOT_NEUTRAL: u16 = 50728;
     pub const AS_SHOT_WHITE_XY: u16 = 50729;
     pub const BASELINE_EXPOSURE: u16 = 50730;
+    pub const SHADOW_SCALE: u16 = 50739;
+    pub const COLORIMETRIC_REFERENCE: u16 = 50879;
+    pub const PROFILE_TONE_CURVE: u16 = 50940;
+    pub const BASELINE_EXPOSURE_OFFSET: u16 = 51109;
+    pub const DEFAULT_BLACK_RENDER: u16 = 51110;
     pub const CALIBRATION_ILLUMINANT_1: u16 = 50778;
     pub const CALIBRATION_ILLUMINANT_2: u16 = 50779;
     pub const CAMERA_CALIBRATION_SIGNATURE: u16 = 50931;
@@ -339,8 +344,28 @@ fn orientation(tiff: &Tiff, ifd0: &[Entry]) -> u8 {
     }
 }
 
+/// Most ProfileToneCurve points read (DEV-02). The SDK has no cap; past it
+/// the curve counts as unreadable and the base curve falls back to ACR3.
+pub const MAX_TONE_CURVE_POINTS: u32 = 4096;
+
 /// Largest black level pattern side accepted (6 for X-Trans).
 const MAX_BLACK_REPEAT: u32 = 16;
+
+/// ProfileToneCurve's floats, as the SDK accepts them: type FLOAT, an even
+/// count of at least 4, and no more than [`MAX_TONE_CURVE_POINTS`] points.
+/// Anything else is read as no floats, which the base curve treats as an
+/// invalid curve (ACR3, with a note), rather than an unreadable file.
+fn tone_curve(tiff: &Tiff, e: Entry) -> Result<Vec<f32>, DngError> {
+    const FLOAT: u16 = 11;
+    if e.ty != FLOAT
+        || e.count < 4
+        || !e.count.is_multiple_of(2)
+        || e.count > 2 * MAX_TONE_CURVE_POINTS
+    {
+        return Ok(Vec::new());
+    }
+    Ok(tiff.numbers(e)?.into_iter().map(|v| v as f32).collect())
+}
 
 /// The stage 0 metadata. Tags are looked up in the raw IFD first, then in
 /// IFD0, since writers differ on where they put them.
@@ -473,6 +498,20 @@ fn metadata(
             .and_then(|v| v.first().copied())
             .filter(|v| v.is_finite())
             .unwrap_or(0.0),
+        shadow_scale: numbers(tag::SHADOW_SCALE)?
+            .and_then(|v| v.first().copied())
+            .filter(|v| v.is_finite()),
+        baseline_exposure_offset: numbers(tag::BASELINE_EXPOSURE_OFFSET)?
+            .and_then(|v| v.first().copied())
+            .filter(|v| v.is_finite())
+            .unwrap_or(0.0),
+        profile_tone_curve: get(tag::PROFILE_TONE_CURVE)
+            .map(|e| tone_curve(tiff, e))
+            .transpose()?,
+        default_black_render: tiff.first_int(ifd0, tag::DEFAULT_BLACK_RENDER).unwrap_or(0),
+        colorimetric_reference: tiff
+            .first_int(ifd0, tag::COLORIMETRIC_REFERENCE)
+            .unwrap_or(0),
     };
 
     let list = |t| -> Result<Vec<Opcode>, DngError> {
@@ -951,6 +990,7 @@ mod tests {
         SRational(Vec<(i32, i32)>),
         Undefined(Vec<u8>),
         Byte(Vec<u8>),
+        Float(Vec<f32>),
     }
 
     /// A minimal TIFF writer for building test DNGs.
@@ -1014,6 +1054,11 @@ mod tests {
                     ),
                     Val::Undefined(v) => (7, v.len(), v),
                     Val::Byte(v) => (1, v.len(), v),
+                    Val::Float(v) => (
+                        11,
+                        v.len(),
+                        v.iter().flat_map(|&x| self.u32(x.to_bits())).collect(),
+                    ),
                 };
                 let value = if bytes.len() <= 4 {
                     let mut v = bytes.clone();
@@ -1058,6 +1103,8 @@ mod tests {
         strips: Option<u32>,
         /// More tags for the raw IFD.
         extra: Vec<(u16, Val)>,
+        /// Tags for IFD0, where the profile and ColorimetricReference live.
+        extra_ifd0: Vec<(u16, Val)>,
     }
 
     fn spec(tiles: Vec<Vec<u8>>, compression: u16) -> Spec {
@@ -1074,6 +1121,7 @@ mod tests {
             sub_ifd: true,
             strips: None,
             extra: Vec::new(),
+            extra_ifd0: Vec::new(),
         }
     }
 
@@ -1189,6 +1237,8 @@ mod tests {
                 Val::Undefined(vec![1, 2, 3, 4, 5, 6]),
             ),
         ];
+        let mut meta = meta;
+        meta.extend(s.extra_ifd0.iter().cloned());
         let ifd0 = if s.sub_ifd {
             let sub = w.ifd(raw);
             let mut ifd0 = meta;
@@ -1548,6 +1598,64 @@ mod tests {
         assert!(matches!(error(&s), DngError::Corrupt(m) if m.contains("empty")));
     }
 
+    /// The base curve's tags (DEV-02): a ProfileToneCurve with ShadowScale,
+    /// BaselineExposureOffset, DefaultBlackRender and ColorimetricReference.
+    fn tone_curve_spec(curve: Val) -> Spec {
+        let mut s = spec(raw_tiles(true), COMPRESSION_NONE);
+        s.extra_ifd0 = vec![
+            (tag::PROFILE_TONE_CURVE, curve),
+            (tag::SHADOW_SCALE, Val::Rational(vec![(9, 10)])),
+            (
+                tag::BASELINE_EXPOSURE_OFFSET,
+                Val::SRational(vec![(-25, 100)]),
+            ),
+            (tag::DEFAULT_BLACK_RENDER, Val::Long(vec![1])),
+            (tag::COLORIMETRIC_REFERENCE, Val::Short(vec![1])),
+        ];
+        s
+    }
+
+    #[test]
+    fn base_curve_tags_are_read() {
+        let points = vec![0.0, 0.0, 0.25, 0.2, 1.0, 1.0];
+        let img = decode_linear(&build(&tone_curve_spec(Val::Float(points.clone())))).unwrap();
+        let c = &img.meta.color;
+        assert_eq!(c.profile_tone_curve.as_deref(), Some(&points[..]));
+        assert_eq!(c.shadow_scale, Some(0.9));
+        assert_eq!(c.baseline_exposure_offset, -0.25);
+        assert_eq!((c.default_black_render, c.colorimetric_reference), (1, 1));
+
+        let plain = decode_linear(&build(&spec(raw_tiles(true), COMPRESSION_NONE))).unwrap();
+        let c = &plain.meta.color;
+        assert_eq!(c.profile_tone_curve, None);
+        assert_eq!(c.shadow_scale, None);
+        assert_eq!(c.baseline_exposure_offset, 0.0);
+        assert_eq!((c.default_black_render, c.colorimetric_reference), (0, 0));
+    }
+
+    #[test]
+    fn unreadable_tone_curves_read_as_empty() {
+        let too_many: Vec<f32> = (0..=2 * MAX_TONE_CURVE_POINTS)
+            .map(|i| i as f32 / (2 * MAX_TONE_CURVE_POINTS) as f32)
+            .collect();
+        for (why, curve) in [
+            ("odd count", Val::Float(vec![0.0, 0.0, 1.0, 1.0, 0.5])),
+            ("one point", Val::Float(vec![0.5, 0.5])),
+            (
+                "not FLOAT",
+                Val::Rational(vec![(0, 1), (0, 1), (1, 1), (1, 1)]),
+            ),
+            ("past the cap", Val::Float(too_many)),
+        ] {
+            let img = decode_linear(&build(&tone_curve_spec(curve))).unwrap();
+            assert_eq!(
+                img.meta.color.profile_tone_curve.as_deref(),
+                Some(&[][..]),
+                "{why}"
+            );
+        }
+    }
+
     /// Writes the seed inputs of the `dng_linear` and `decode` fuzz targets:
     /// cargo test -p genzo-imgio --features raw write_fuzz_seeds -- --ignored
     #[test]
@@ -1566,6 +1674,8 @@ mod tests {
         let mut strips = spec(raw_strips(16), COMPRESSION_NONE);
         strips.strips = Some(16);
         std::fs::write(format!("{dir}/uncompressed-strips.dng"), build(&strips)).unwrap();
+        let curve = tone_curve_spec(Val::Float(vec![0.0, 0.0, 0.25, 0.2, 1.0, 1.0]));
+        std::fs::write(format!("{dir}/profile-tone-curve.dng"), build(&curve)).unwrap();
         #[cfg(feature = "raw")]
         std::fs::write(
             format!("{dir}/lossless-jpeg-strip-restarts.dng"),

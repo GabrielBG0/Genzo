@@ -75,7 +75,8 @@ pub struct CameraTransform {
     pub multipliers: [f32; 3],
     /// Stage 4: white balanced camera RGB to the working space (AP1, D65).
     pub matrix: [[f32; 3]; 3],
-    /// Stage 4: 2^BaselineExposure.
+    /// Stage 4: 2^BaselineExposure, the SDK's total: rounded to 1/100 stop,
+    /// plus the profile's offset (`color::tone::total_baseline_exposure`).
     pub exposure: f32,
     pub fallback: Option<ColorFallback>,
     /// Stage 4: whether highlights desaturate toward the clip level. A
@@ -88,7 +89,10 @@ const IDENTITY: [[f32; 3]; 3] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.
 /// The transform for `white`, or for the as-shot white when None (D55 when
 /// the file has none, as the SDK renders it).
 pub fn camera_transform(c: &CameraColor, white: Option<[f64; 2]>) -> CameraTransform {
-    let exposure = 2f64.powf(c.baseline_exposure) as f32;
+    let exposure = 2f64.powf(genzo_color::tone::total_baseline_exposure(
+        c.baseline_exposure,
+        c.baseline_exposure_offset,
+    )) as f32;
     let passthrough = |why: String| {
         // Without a matrix, the as-shot neutral still balances the channels.
         let multipliers = match c.as_shot {

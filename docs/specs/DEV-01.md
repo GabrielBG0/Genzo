@@ -213,7 +213,7 @@ While a slider is dragged, white balance runs as a ratio after the cached demosa
     - Round trip: images of 2 × 2 blocks, each one color (primaries, near-black and near-white among them), from 8-bit and 16-bit codes. Each level 1 texel is taken back into the source's own space and compared with its codes. Before the pyramid's f16, every encoding with a linear toe comes back within 0.0003 codes. After it, the worst is 1.3 codes for sRGB. RGBA16F keeps 11 bits, so a channel near 0 beside a bright one (sRGB (2, 250, 0)) moves that much. In whole output codes that is within 1. A pure power curve (Adobe RGB, gamma 2.2) has an infinite slope at black, where any rounding moves the code far (3 codes after f16). Criterion 8 asks a ΔE of those, and every encoding stays within ΔE2000 0.07 after f16.
     - This is criterion 8's stage 1 to 4 half. The criterion itself measures the rendered frame, so it stays open until the output transform (stage 9) exists.
 - **AnalogBalance and CameraCalibration** enter the matrix as the DNG specification describes (chapter 6): XYZ to camera is AnalogBalance × CameraCalibration × ColorMatrix, and with ForwardMatrix tags, camera to XYZ is ForwardMatrix × D × (AnalogBalance × CameraCalibration)⁻¹, where D scales the reference neutral to 1. Both are real in the corpus: the iPhone 16 Pro ProRAW has AnalogBalance (2.35, 1, 1.86) with AsShotNeutral (1, 1, 1), and the Galaxy S23 Ultra has CameraCalibration1 and 2 that are not identity. Absent tags mean identity.
-- **BaselineExposure** is applied here as a gain of 2^BaselineExposure (+2.50 EV on the iPhone 13 Pro Max file, so it decides the default look).
+- **BaselineExposure** is applied here as a gain of 2^BaselineExposure (+2.50 EV on the iPhone 13 Pro Max file, so it decides the default look). It is the SDK's total: the stored value rounded to 1/100 stop, half away from zero, as `SetBaselineExposure` stores it, plus the profile's BaselineExposureOffset. The Halide iPhone 16 Pro DNG stores 0.0275 EV and gets 0.03.
 - **Highlight desaturation.** Pixels whose largest camera channel lies within the top 5 percent below the clip level are blended toward their own luminance, reaching neutral at the clip level. The edge of a clipped area then carries no color fringe. Exactly (`reference::stages::stage4`):
   - the weight is `k = clamp((max(camera) − 0.95 · clip) / (0.05 · clip), 0, 1)`, where `camera` is the white balanced, demosaiced pixel and `clip` the clip level (the smallest multiplier);
   - the pixel goes through the camera matrix first, then becomes `w + (Y − w) · k`, where `w` is its working-space RGB and `Y` its luminance (the Y row of `WORKING_TO_XYZ`, so a neutral stays where it is);
@@ -295,10 +295,10 @@ This stage works on linear AP1 at viewport resolution. User adjustments change l
 
 1. **Exposure:** a gain of 2^EV.
 2. **Highlights and Shadows: local tone mapping** (decided 2026-10-18).
-   - **The base layer** is `B`, an edge-aware smoothing of `t`: a guided filter of `t` guided by itself, with a radius of 2 percent of the cropped image's long edge.
+   - **The base layer** is `B`, an edge-aware smoothing of `t`: a guided filter of `t` guided by itself, with a radius of 2 percent of the cropped image's long edge and `ε = 0.05` stops² (owner, 2026-10-19), so edges of more than about a quarter stop are kept.
    - **Computed once per edit**, on the whole cropped image at a fixed working size (long edge 1536 px), independent of zoom. It is upsampled with the same guided filter at the output resolution. Fit, 1:1 and export therefore use the same base, and a 1:1 tile needs no context beyond it.
    - **Detail** is `D = t − B`, and is kept.
-   - **Highlights** move `B` by `h × w_h(B)`, and **Shadows** by `s × w_s(B)`. The weights are smooth ramps: `w_h` rises from 0 at middle gray to 1 at +2.5 EV, and `w_s` mirrors it toward −4 EV. `h` and `s` scale the slider (−100 to +100) to at most ±2 EV.
+   - **Highlights** move `B` by `h × w_h(B)`, and **Shadows** by `s × w_s(B)`. The weights are smoothstep ramps in `B`: `w_h = smoothstep(0, 2.5, B)` rises from 0 at middle gray to 1 at +2.5 EV, and `w_s = smoothstep(0, 4, −B)` mirrors it toward −4 EV (owner, 2026-10-19). `h` and `s` scale the slider (−100 to +100) to at most ±2 EV.
    - Exposure is a constant shift in `t`, so changing it shifts `B` by the same amount and needs no new base. White balance, the crop, the straighten angle, the quarter turns and the flip recompute it. The profile does not, since both profiles share everything before stage 6.
    - During a crop gesture, the base from the gesture's start is used, and it is recomputed on *end*.
 3. **Whites and Blacks:** global. They move the upper and lower end of the tone range by at most ±1.5 EV, leaving middle gray where it is.
@@ -306,7 +306,10 @@ This stage works on linear AP1 at viewport resolution. User adjustments change l
    - **Whites** (`w` = slider / 100) moves the source point `s_W = t_W − 1.5 w` onto `t_W`. Above middle gray, `t' = t + 1.5 w × r(t / s_W)`.
    - **Blacks** (`k` = slider / 100) moves `s_B = t_B − 1.5 k` onto `t_B`. Below middle gray, `t' = t + 1.5 k × r(t / s_B)`.
    - `r(u) = u²` up to `u = 1`, and `2u − 1` past it. So the change starts flat at middle gray, reaches the full shift at the source point, and continues smoothly beyond it. The curve stays monotonic over the whole range: its slope is at least 0.24 for Whites and 0.55 for Blacks.
-4. **Contrast:** global. An S-curve in `t` around middle gray, which leaves middle gray unchanged.
+4. **Contrast:** global. An S-curve in `t` around middle gray, which leaves middle gray unchanged (owner, 2026-10-19).
+   - With `c` = slider / 100: `t' = t + 0.4 c × t × exp(−t² / 2σ²)`, where `σ` is 1 stop above middle gray (`t > 0`) and 1.6 stops below it.
+   - The slope at middle gray is `1 + 0.4 c`: ×0.6 at −100, ×1.4 at +100. The curve is monotonic at every value, with a slope of at least 0.6.
+   - The change fades before the Whites and Blacks ends: under 0.05 EV at `t_W` and under 0.02 EV at `t_B`, so the two controls do not fight. It is the same on every profile.
 5. **The profile's base tone curve.**
    - Genzo Standard applies Genzo's base tone curve, which maps scene-referred values to display-referred 0 to 1: the Adobe DNG SDK's default rendering (its exposure ramp, then its default tone curve, or the file's own ProfileToneCurve when it has one, keeping hue, in linear ProPhoto RGB). The curve and how it is applied are defined in the DEV-02 spec.
    - Genzo Linear applies none: values are clamped at display white, after the output transform's gamut compression.
@@ -317,7 +320,7 @@ This stage works on linear AP1 at viewport resolution. User adjustments change l
 Works in OkLCh, converted from linear AP1 through XYZ (D65).
 
 - **Saturation** (−100 to +100) scales chroma uniformly: ×0 at −100, ×2 at +100.
-- **Vibrance** (−100 to +100) scales chroma more where it is low: `C × (1 + v × weight)`, with `v` from −1 to +1. The weight is `1 − C / C_ref`, clamped to 0 or more, where `C_ref` is the chroma of the most saturated sRGB primary. So at +100 a nearly gray color doubles its chroma, and a color at `C_ref` is left alone. Skin hues (OkLCh hue 20° to 70°) get half the weight, so faces do not turn orange. At −100 it desaturates evenly, like Saturation.
+- **Vibrance** (−100 to +100) scales chroma more where it is low: `C × (1 + v × weight)`, with `v` from −1 to +1. The weight is `1 − C / C_ref`, clamped to 0 or more, where `C_ref` is the chroma of the most saturated sRGB primary. So at +100 a nearly gray color doubles its chroma, and a color at `C_ref` is left alone. Skin hues get half the weight, so faces do not turn orange: the weight is multiplied by `1 − 0.5 × skin(h)`, where `skin` is 1 from hue 25° to 65°, 0 below 15° and above 75°, and a smoothstep between (owner, 2026-10-19). Its half points are 20° and 70°, and a hue gradient shows no step. At −100 it desaturates evenly, like Saturation.
 - **B&W treatment.** Output is AP1 luminance in all three channels. Vibrance and saturation have no effect, and DEV-02 hides them. The per-color B&W mix is M3.
 
 ### Stage 9 (M1 part): output transform
@@ -587,6 +590,9 @@ Each criterion names the check that proves it. These become the tests. "Corpus" 
     - Highlights at −100 lowers the brightest stop by at least 1 EV while leaving middle gray within 0.05 EV.
     - Shadows mirrors that.
     - Exposure +1 doubles linear values before the base curve.
+    - Contrast is monotonic in `t` at every slider value, with a slope of at least 0.6, and moves `t_W` by under 0.05 EV and `t_B` by under 0.02 EV.
+    - **Halo.** On a 3-stop step edge, Highlights at −100 overshoots the dark side's level by at most 0.15 EV anywhere within twice the filter radius of the edge. The PR that builds it records the measured value here.
+    - Vibrance on a hue sweep through 10° to 80° at constant L and C changes the chroma gain smoothly: no step between neighboring hues 0.1° apart above 0.002.
 
     *Check:* pipeline tests on the synthetic scene.
 13. **GPU memory.** The accounted allocations for a 48 MP image stay under 1 GB, with the breakdown above as the expected values ±10 %. *Check:* the memory-accounting test (every texture and buffer goes through one tracking allocator), plus the bench kit's GPU process counter on the RTX 3060 (peak under 1 GB).

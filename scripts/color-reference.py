@@ -174,4 +174,5 @@ def main():
     (OUT / "dng-sdk-temperature.jsonl").write_text(temps, encoding="utf-8", newline="\n")
 
 
-main()
+if __name__ == "__main__":
+    main()

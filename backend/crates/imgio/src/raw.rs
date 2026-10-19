@@ -101,8 +101,21 @@ pub struct CameraColor {
     /// DNG AnalogBalance, one gain per sample. Absent means 1.
     pub analog_balance: Option<Vec<f64>>,
     pub as_shot: Option<AsShot>,
-    /// In stops; 0 when the file states none.
+    /// In stops, as stored; 0 when the file states none. The SDK rounds it
+    /// to 1/100 stop (DEV-01, stage 4).
     pub baseline_exposure: f64,
+    /// DNG ShadowScale, as stored; None when absent (DEV-02).
+    pub shadow_scale: Option<f64>,
+    /// The profile's BaselineExposureOffset in stops; 0 when absent.
+    pub baseline_exposure_offset: f64,
+    /// The profile's ProfileToneCurve: x, y pairs as stored (DEV-02). Empty
+    /// when the tag is present but not in a form the SDK accepts (wrong
+    /// type, odd count, fewer than 2 or more than 4096 points).
+    pub profile_tone_curve: Option<Vec<f32>>,
+    /// The profile's DefaultBlackRender: 0 Auto, 1 None.
+    pub default_black_render: u32,
+    /// DNG ColorimetricReference: 0 scene-referred.
+    pub colorimetric_reference: u32,
 }
 
 /// An opcode's kind (DNG specification 1.7, chapter 7). The values are the
