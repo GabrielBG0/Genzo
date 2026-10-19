@@ -1,11 +1,14 @@
 //! Criterion benchmark for the view (DEV-01): the pyramid sampled into a
 //! 2560 x 1920 view, then stage 9 into its RGBA8 frame, with the gamut
-//! compression (a RAW photo) and without (an sRGB JPEG). From a 48 MP
+//! compression (a RAW photo) and without (an sRGB JPEG); and stages 6 and 7
+//! (DEV-02's base curve with Genzo Standard). From a 48 MP
 //! pyramid: level 2 (2016 x 1512) is too small, so sampling reads level 1
 //! (4032 x 3024).
 //!
 //! Measured on the RTX 3060 (2026-10-19): sampling 2.8 ms, stage 9 1.3 ms
-//! with the gamut compression, 0.33 ms without.
+//! with the gamut compression, 0.33 ms without. Stage 6 0.39 ms with
+//! Genzo Standard and 0.31 ms with Genzo Linear, so the base curve costs
+//! about 0.07 ms (DEV-02 criterion 10 allows 1 ms); stage 7 0.39 ms.
 //!
 //! Skipped without a GPU adapter. `GENZO_ADAPTER=software` benchmarks the
 //! software adapter.
@@ -17,6 +20,7 @@ use genzo_pipeline::gpu::raw_stages::{RawStages, TileConfig};
 use genzo_pipeline::gpu::synthetic::scene_raw;
 use genzo_pipeline::gpu::view::ViewStages;
 use genzo_pipeline::gpu::{AdapterChoice, Gpu};
+use genzo_pipeline::look::{BaseCurve, Look, Profile};
 
 fn view(c: &mut Criterion) {
     let Ok(gpu) = Gpu::open(AdapterChoice::from_env()) else {
@@ -51,6 +55,40 @@ fn view(c: &mut Criterion) {
             })
         });
     }
+    let base = BaseCurve::new(&src.color);
+    let standard = Look {
+        exposure: 0.3,
+        contrast: 25.0,
+        whites: -20.0,
+        blacks: 15.0,
+        vibrance: 30.0,
+        saturation: 10.0,
+        ..Look::with_profile(Profile::GenzoStandard)
+    };
+    let linear = Look::with_profile(Profile::GenzoLinear);
+    for (name, look) in [
+        ("stage 6, Genzo Standard", standard),
+        (
+            "stage 6, Genzo Linear",
+            Look {
+                contrast: 25.0,
+                ..linear
+            },
+        ),
+    ] {
+        group.bench_function(name, |b| {
+            b.iter(|| {
+                view.tone(&gpu, &look, Some(&base));
+                wait(&gpu);
+            })
+        });
+    }
+    group.bench_function("stage 7", |b| {
+        b.iter(|| {
+            view.color(&gpu, &standard);
+            wait(&gpu);
+        })
+    });
     group.finish();
 }
 

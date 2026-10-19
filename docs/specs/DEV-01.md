@@ -291,7 +291,7 @@ Geometry changes which source pixel lands where. It changes no pixel values in M
 
 ### Stage 6 (M1 part): exposure and tone
 
-This stage works on linear AP1 at viewport resolution. User adjustments change luminance only, and RGB is scaled by the luminance ratio, so hue and saturation hold. The base curve (step 5) is the exception: it works per channel, keeping hue (DEV-02). Luminance `Y` is AP1's Y row. Tone math works in log2 relative to middle gray: `t = log2(Y / 0.18)`.
+This stage works on linear AP1 at viewport resolution. User adjustments change luminance only, and RGB is scaled by the luminance ratio, so hue and saturation hold. The base curve (step 5) is the exception: it works per channel, keeping hue (DEV-02). Luminance `Y` is AP1's Y row. Tone math works in log2 relative to middle gray: `t = log2(Y / 0.18)`. A pixel whose `Y` is 1e-10 or less (noise around black, negative values) has no meaningful `t`, so only exposure's gain applies to it.
 
 1. **Exposure:** a gain of 2^EV.
 2. **Highlights and Shadows: local tone mapping** (decided 2026-10-18).
@@ -320,7 +320,8 @@ This stage works on linear AP1 at viewport resolution. User adjustments change l
 Works in OkLCh, converted from linear AP1 through XYZ (D65).
 
 - **Saturation** (−100 to +100) scales chroma uniformly: ×0 at −100, ×2 at +100.
-- **Vibrance** (−100 to +100) scales chroma more where it is low: `C × (1 + v × weight)`, with `v` from −1 to +1. The weight is `1 − C / C_ref`, clamped to 0 or more, where `C_ref` is the chroma of the most saturated sRGB primary. So at +100 a nearly gray color doubles its chroma, and a color at `C_ref` is left alone. Skin hues get half the weight, so faces do not turn orange: the weight is multiplied by `1 − 0.5 × skin(h)`, where `skin` is 1 from hue 25° to 65°, 0 below 15° and above 75°, and a smoothstep between (owner, 2026-10-19). Its half points are 20° and 70°, and a hue gradient shows no step. At −100 it desaturates evenly, like Saturation.
+- **Vibrance** (−100 to +100) scales chroma more where it is low: `C × (1 + v × weight)`, with `v` from −1 to +1. The weight is `1 − C / C_ref`, clamped to 0 or more, where `C_ref` is the chroma of the most saturated sRGB primary. So at +100 a nearly gray color doubles its chroma, and a color at `C_ref` is left alone. Skin hues get half the weight, so faces do not turn orange: the weight is multiplied by `1 − 0.5 × skin(h)`, where `skin` is 1 from hue 25° to 65°, 0 below 15° and above 75°, and a smoothstep between (owner, 2026-10-19). Its half points are 20° and 70°, and a hue gradient shows no step. Below 0 the weight is 1, so it desaturates evenly, like Saturation: ×0 at −100.
+- **Order:** Vibrance's gain, then Saturation's, both on the chroma of the same pixel (`a` and `b` scaled together, so lightness and hue hold).
 - **B&W treatment.** Output is AP1 luminance in all three channels. Vibrance and saturation have no effect, and DEV-02 hides them. The per-color B&W mix is M3.
 
 ### Stage 9 (M1 part): output transform

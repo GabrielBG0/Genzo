@@ -9,3 +9,7 @@ target_link_libraries( stage2_probe dng_sdk xmp_core md5_lib expat_lib common )
 add_executable( tone_probe tone_probe.cpp )
 target_include_directories( tone_probe PRIVATE "../../lib/dng_sdk" "../../lib/common/public" "../../lib/xmp_core/public/include" )
 target_link_libraries( tone_probe dng_sdk xmp_core md5_lib expat_lib common )
+
+add_executable( render_probe render_probe.cpp )
+target_include_directories( render_probe PRIVATE "../../lib/dng_sdk" "../../lib/common/public" "../../lib/xmp_core/public/include" )
+target_link_libraries( render_probe dng_sdk xmp_core md5_lib expat_lib common )

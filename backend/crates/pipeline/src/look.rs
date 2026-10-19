@@ -106,3 +106,62 @@ impl BaseCurve {
         ExposureRamp::new(1.0, black, black)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use genzo_color::tone::{CurveTable, ToneCurve};
+
+    use super::*;
+
+    #[test]
+    fn the_base_curve_follows_the_file() {
+        let plain = BaseCurve::new(&CameraColor::default());
+        assert_eq!(plain.table, CurveTable::new(&ToneCurve::Acr3));
+        assert_eq!((plain.curve_error, plain.note()), (None, None));
+
+        // An unreadable curve: ACR3, with the note.
+        let damaged = BaseCurve::new(&CameraColor {
+            profile_tone_curve: Some(Vec::new()),
+            ..CameraColor::default()
+        });
+        assert_eq!(damaged.table, plain.table);
+        assert_eq!(damaged.curve_error, Some(CurveError::Unreadable));
+        assert!(damaged.note().is_some());
+
+        // A valid one replaces ACR3.
+        let own = BaseCurve::new(&CameraColor {
+            profile_tone_curve: Some(vec![0.0, 0.0, 0.5, 0.3, 1.0, 1.0]),
+            ..CameraColor::default()
+        });
+        assert_ne!(own.table, plain.table);
+        assert_eq!(own.note(), None);
+    }
+
+    #[test]
+    fn the_black_follows_the_total_exposure() {
+        // 0.0275 EV is rounded to 0.03 as the SDK does; the offset adds.
+        let c = CameraColor {
+            baseline_exposure: 0.0275,
+            baseline_exposure_offset: 0.47,
+            shadow_scale: Some(0.5),
+            ..CameraColor::default()
+        };
+        let b = BaseCurve::new(&c);
+        assert_eq!(b.baseline_exposure, 0.5);
+        let ramp = b.ramp(1.0);
+        let want = 5.0 * 0.5 * 0.001 * 2f64.powf(1.5);
+        assert!((ramp.black() - want).abs() < 1e-15, "{}", ramp.black());
+        // Output-referred, or no default black: 0.
+        let none = BaseCurve::new(&CameraColor {
+            default_black_render: 1,
+            ..c.clone()
+        });
+        assert_eq!(none.ramp(0.0).black(), 0.0);
+        let output = BaseCurve::new(&CameraColor {
+            colorimetric_reference: 1,
+            ..c
+        });
+        assert_eq!(output.ramp(0.0).black(), 0.0);
+        assert_eq!(output.table, CurveTable::new(&ToneCurve::Identity));
+    }
+}

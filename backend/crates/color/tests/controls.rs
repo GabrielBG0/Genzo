@@ -13,7 +13,9 @@ fn grid() -> impl Iterator<Item = f64> {
 
 fn min_slope(f: impl Fn(f64) -> f64) -> f64 {
     let h = 1e-3;
-    grid().map(|t| (f(t + h) - f(t)) / h).fold(f64::MAX, f64::min)
+    grid()
+        .map(|t| (f(t + h) - f(t)) / h)
+        .fold(f64::MAX, f64::min)
 }
 
 #[test]
@@ -22,8 +24,14 @@ fn contrast_is_monotonic_and_keeps_middle_gray() {
         assert_eq!(contrast(0.0, c), 0.0, "middle gray at contrast {c}");
         let slope = min_slope(|t| contrast(t, c));
         assert!(slope >= 0.6 - 1e-3, "contrast {c}: slope {slope}");
-        assert!((contrast(white_end(), c) - white_end()).abs() < 0.05, "fades at the Whites end");
-        assert!((contrast(black_end(), c) - black_end()).abs() < 0.02, "fades at the Blacks end");
+        assert!(
+            (contrast(white_end(), c) - white_end()).abs() < 0.05,
+            "fades at the Whites end"
+        );
+        assert!(
+            (contrast(black_end(), c) - black_end()).abs() < 0.02,
+            "fades at the Blacks end"
+        );
     }
     // The slope at middle gray is 1 + 0.4c.
     let h = 1e-6;
@@ -66,7 +74,10 @@ fn exposure_one_doubles() {
 #[test]
 fn vibrance_has_no_step_on_a_hue_sweep() {
     let c_ref = reference_chroma();
-    assert!((c_ref - 0.3132).abs() < 1e-3, "sRGB blue's Oklab chroma: {c_ref}");
+    assert!(
+        (c_ref - 0.3132).abs() < 1e-3,
+        "sRGB blue's Oklab chroma: {c_ref}"
+    );
     for c in [0.02, 0.1, 0.2] {
         let mut last = vibrance_gain(c, 10.0, 1.0, c_ref);
         let mut steepest: f64 = 0.0;
