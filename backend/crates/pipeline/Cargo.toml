@@ -19,6 +19,7 @@ thiserror.workspace = true
 wgpu.workspace = true
 pollster.workspace = true
 bytemuck.workspace = true
+half.workspace = true
 
 [dev-dependencies]
 criterion.workspace = true

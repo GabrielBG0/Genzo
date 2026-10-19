@@ -110,5 +110,6 @@ pub fn scene_raw(width: u32, height: u32) -> crate::raw::RawSource {
             .expect("valid levels"),
         fix_bad_pixels: Vec::new(),
         gain_maps: Vec::new(),
+        color: Default::default(),
     }
 }

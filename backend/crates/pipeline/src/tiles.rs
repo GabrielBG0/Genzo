@@ -56,9 +56,22 @@ pub struct TileJob {
     pub raw: Rect,
 }
 
+/// The starts of a row of `tile` px tiles over `len` px. A last tile 1 px
+/// wide joins the one before, so every 2 × 2 block of the pyramid's first
+/// level, the odd last pixel folded in included, lies in one tile.
+fn starts(len: u32, tile: u32) -> Vec<u32> {
+    let mut s: Vec<u32> = (0..len).step_by(tile as usize).collect();
+    if s.len() > 1 && len - s[s.len() - 1] == 1 {
+        s.pop();
+    }
+    s
+}
+
 /// The tiles of a `size` active area that starts at `offset` in a `stored`
-/// image, with `tile` px output tiles, an `apron` on each side and a raw
-/// `margin` past the apron (FixBadPixelsConstant reads 2 px around).
+/// image, with `tile` px output tiles (even, so tiles start on 2 × 2
+/// blocks), an `apron` on each side and a raw `margin` past the apron
+/// (FixBadPixelsConstant reads 2 px around). A last row or column of tiles
+/// 1 px wide joins the one before.
 pub fn jobs(
     size: (u32, u32),
     offset: (u32, u32),
@@ -91,8 +104,24 @@ pub fn jobs(
         width: stored.0,
         height: stored.1,
     };
-    grid(size.0, size.1, tile)
-        .into_iter()
+    assert!(
+        tile >= 2 && tile.is_multiple_of(2),
+        "tile size {tile} must be even"
+    );
+    let (xs, ys) = (starts(size.0, tile), starts(size.1, tile));
+    let end = |s: &[u32], i: usize, len: u32| s.get(i + 1).copied().unwrap_or(len);
+    let mut outs = Vec::with_capacity(xs.len() * ys.len());
+    for (j, &y) in ys.iter().enumerate() {
+        for (i, &x) in xs.iter().enumerate() {
+            outs.push(Rect {
+                x,
+                y,
+                width: end(&xs, i, size.0) - x,
+                height: end(&ys, j, size.1) - y,
+            });
+        }
+    }
+    outs.into_iter()
         .map(|out| {
             let padded = grow(out, apron, image);
             let in_stored = Rect {
@@ -112,6 +141,15 @@ pub fn jobs(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_one_pixel_last_tile_joins_the_one_before() {
+        let j = jobs((129, 64), (0, 0), (129, 64), 64, 8, 0);
+        assert_eq!(j.len(), 2);
+        assert_eq!((j[1].out.x, j[1].out.width), (64, 65));
+        // Two pixels left over stay a tile of their own.
+        assert_eq!(jobs((130, 64), (0, 0), (130, 64), 64, 8, 0).len(), 3);
+    }
 
     #[test]
     fn jobs_pad_and_clamp() {

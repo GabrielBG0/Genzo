@@ -174,6 +174,7 @@ fn bayer() -> RawSource {
             bayer_phase: 1,
         }],
         gain_maps: gain_maps(1),
+        color: Default::default(),
     }
 }
 
@@ -212,6 +213,7 @@ fn linear_with(samples: u32) -> RawSource {
         linearization: lin,
         fix_bad_pixels: Vec::new(),
         gain_maps: gain_maps(samples),
+        color: Default::default(),
     }
 }
 
