@@ -8,6 +8,7 @@
 
 pub mod camera;
 pub mod encoding;
+pub mod output;
 
 /// A 3×3 matrix in row-major order.
 pub type Mat3 = [[f64; 3]; 3];
