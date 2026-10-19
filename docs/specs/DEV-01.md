@@ -281,7 +281,7 @@ Geometry changes which source pixel lands where. It changes no pixel values in M
 3. The straighten angle and the crop rectangle, together (see Data: *Crop*).
 
 **Sampling.** The pyramid level is the smallest one at least as large as the output scale, sampled with a Lanczos-2 filter sized to the remaining scale factor. Upsampling happens only past 1:1.
-- **How** (`reference::sampling`, `gpu::view`): output pixel centers go through one affine into the level's texels: the file's orientation and the scale now, with the edit's turns, flip and crop composed in later. The filter is separable along the level's axes, at most 8 taps each, edges clamped.
+- **How** (`reference::sampling`, `gpu::view`): output pixel centers go through one affine into the level's texels: the file's orientation and the scale now, with the edit's turns, flip and crop composed in later. The filter is separable along the level's axes, edges clamped. It takes at most 8 taps per axis while the view is at least half the chosen level on that axis, as at Fit; a view smaller than the smallest level (a thumbnail) or of another aspect ratio takes about 4 per level texel it covers.
 - An integer distance other than 0 weighs exactly 0, so a view the size of a level is an exact copy, in every orientation.
 - The result is the "stage 4 sampled" viewport cache (RGBA16F, the size of the view). Stages 6 and 7 read it, and stage 9 writes the RGBA8 frame from what they leave.
 - **Open:** a Fit view larger than level 1 (a 12 MP photo, level 1 2016 px wide, on a 2560 px view) is upsampled from level 1 for now, which loses detail. Level-0 tiles there, as at 1:1, are the likely answer; it needs the owner's call.
