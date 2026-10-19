@@ -102,6 +102,66 @@ fn scene_sensor(size: (u32, u32)) -> RawSource {
     })
 }
 
+/// The same scene as a linear DNG (3 samples per pixel) or a monochrome
+/// plane (1, the scene's green), with noise reaching below black, so stage 4
+/// and the pyramid see negative values.
+fn linear_sensor(size: (u32, u32), samples: u32) -> RawSource {
+    let t = transform();
+    let (w, h) = size;
+    let n = samples as usize;
+    let levels = Levels {
+        black: vec![BLACK; n],
+        black_repeat: (1, 1),
+        black_delta_h: Vec::new(),
+        black_delta_v: Vec::new(),
+        white: vec![WHITE],
+    };
+    let range = f64::from(WHITE) - BLACK;
+    let mut data = Vec::with_capacity((w * h) as usize * n);
+    for y in 0..h {
+        for x in 0..w {
+            let rgb = scene(x, y, w, h);
+            for p in 0..n {
+                let c = if n == 1 { 1 } else { p };
+                let noise = f64::from((x * 7 + y * 13 + p as u32 * 5) % 11) - 5.0;
+                let gain = if n == 1 {
+                    1.0
+                } else {
+                    f64::from(t.multipliers[c])
+                };
+                let v = f64::from(rgb[c]) * 1.9 / gain - 0.06;
+                data.push((v * range + BLACK + noise).round().clamp(0.0, 65535.0) as u16);
+            }
+        }
+    }
+    RawSource {
+        stored: size,
+        samples,
+        data,
+        bayer: None,
+        active: Rect {
+            top: 0,
+            left: 0,
+            bottom: h,
+            right: w,
+        },
+        linearization: Linearization::new(&levels, samples, size).unwrap(),
+        fix_bad_pixels: Vec::new(),
+        gain_maps: Vec::new(),
+        color: CameraColor::default(),
+    }
+}
+
+/// Every kind of input stage 4 takes: a Bayer mosaic after RCD, linear RGB,
+/// a monochrome plane.
+fn sources(size: (u32, u32)) -> [(&'static str, RawSource); 3] {
+    [
+        ("bayer", scene_sensor(size)),
+        ("linear", linear_sensor(size, 3)),
+        ("mono", linear_sensor(size, 1)),
+    ]
+}
+
 fn pyramid_levels(gpu: &Gpu, config: TileConfig, src: &RawSource) -> Vec<Vec<[f32; 3]>> {
     let mut stages = RawStages::new(gpu, config);
     let p = stages.render_pyramid(gpu, src, &transform()).unwrap();
@@ -126,33 +186,36 @@ const SIZES: [(u32, u32); 2] = [(1030, 777), (1025, 641)];
 #[test]
 fn pyramid_tiles_equal_one_tile_bit_for_bit() {
     let Some((_lock, gpu)) = gpu() else { return };
-    for size in SIZES {
-        let src = scene_sensor(size);
+    for (name, src) in SIZES.into_iter().flat_map(sources) {
+        let size = src.size();
         let whole = pyramid_levels(&gpu, ONE_TILE, &src);
         let tiled = pyramid_levels(&gpu, SMALL, &src);
-        assert!(whole.len() >= 2, "{size:?}: {} levels", whole.len());
+        assert!(whole.len() >= 2, "{name} {size:?}: {} levels", whole.len());
         for (l, (a, b)) in whole.iter().zip(&tiled).enumerate() {
             let first = a
                 .iter()
                 .zip(b)
                 .position(|(x, y)| x.map(f32::to_bits) != y.map(f32::to_bits));
-            assert_eq!(first, None, "{size:?} level {}", l + 1);
+            assert_eq!(first, None, "{name} {size:?} level {}", l + 1);
         }
     }
 }
 
-/// Within one f16 step of `want` (the GPU rounds to f16 however it does).
+/// Within one f16 step of `want` (the GPU rounds to f16 however it does),
+/// plus 1e-8: near zero, where linear input's noise sums positive and
+/// negative values of about 0.03, the two sides' f32 sums differ by a few
+/// 1e-9 before rounding (measured: one value in a million, 3e-9 over).
 fn f16_close(got: f32, want: f32) -> bool {
     let step = want.abs().max(6.2e-5) / 1024.0;
-    (got - want).abs() <= step * 1.01
+    (got - want).abs() <= step * 1.01 + 1e-8
 }
 
 #[test]
 fn levels_match_the_cpu_reference() {
     let Some((_lock, gpu)) = gpu() else { return };
     let t = transform();
-    for size in SIZES {
-        let src = scene_sensor(size);
+    for (name, src) in SIZES.into_iter().flat_map(sources) {
+        let size = src.size();
         let mut stages = RawStages::new(&gpu, SMALL);
         let rgb3 = stages
             .render(&gpu, &src, t.multipliers, Until::Stage3)
@@ -177,7 +240,7 @@ fn levels_match_the_cpu_reference() {
                 .zip(&want)
                 .filter(|(g, w)| !f16_close(**g, **w))
                 .count();
-            assert_eq!(bad, 0, "{size:?} level {level}");
+            assert_eq!(bad, 0, "{name} {size:?} level {level}");
             if level == 1 {
                 desaturated = rgb3
                     .chunks(3)
@@ -189,8 +252,11 @@ fn levels_match_the_cpu_reference() {
         }
         assert!(
             desaturated > 1000,
-            "{size:?}: {desaturated} pixels desaturate"
+            "{name} {size:?}: {desaturated} pixels desaturate"
         );
+        if name != "bayer" {
+            assert!(rgb3.iter().any(|v| *v < 0.0), "{name}: no negative values");
+        }
     }
 }
 

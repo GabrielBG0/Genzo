@@ -6,11 +6,12 @@
 //! A second photo of the same size replaces the first without the total
 //! growing: the old pyramid is freed before the new one is made.
 
+use genzo_imgio::raw::{Levels, Rect};
 use genzo_pipeline::budget;
 use genzo_pipeline::camera_color::camera_transform;
 use genzo_pipeline::gpu::raw_stages::{RawStages, TileConfig, pyramid_bytes};
-use genzo_pipeline::gpu::synthetic::scene_raw;
 use genzo_pipeline::gpu::{AdapterChoice, Gpu, GpuError};
+use genzo_pipeline::raw::{Linearization, RawSource};
 
 fn allocated(gpu: &Gpu) -> Option<u64> {
     gpu.device
@@ -26,6 +27,8 @@ fn measured(gpu: &Gpu) -> Option<[u64; 3]> {
     for a in &report.allocations {
         match a.name.as_str() {
             "pyramid" => items[0] += a.size,
+            // The staging of the uploads in flight is freed by now; the
+            // peak below includes it.
             "tile raw" => items[2] += a.size,
             "tile uniforms" | "tile readback" => {}
             n if n.starts_with("tile ") => items[1] += a.size,
@@ -36,6 +39,34 @@ fn measured(gpu: &Gpu) -> Option<[u64; 3]> {
 }
 
 const MB: f64 = 1e6;
+
+/// A linear DNG's worth of samples, three per pixel: the largest upload.
+fn linear_source((w, h): (u32, u32)) -> RawSource {
+    let levels = Levels {
+        black: vec![512.0; 3],
+        black_repeat: (1, 1),
+        black_delta_h: Vec::new(),
+        black_delta_v: Vec::new(),
+        white: vec![16383],
+    };
+    let data = (0..w * h * 3).map(|i| 600 + (i % 9000) as u16).collect();
+    RawSource {
+        stored: (w, h),
+        samples: 3,
+        data,
+        bayer: None,
+        active: Rect {
+            top: 0,
+            left: 0,
+            bottom: h,
+            right: w,
+        },
+        linearization: Linearization::new(&levels, 3, (w, h)).unwrap(),
+        fix_bad_pixels: Vec::new(),
+        gain_maps: Vec::new(),
+        color: Default::default(),
+    }
+}
 
 #[test]
 fn a_48mp_edit_stays_within_the_budget() {
@@ -58,9 +89,10 @@ fn a_48mp_edit_stays_within_the_budget() {
     );
 
     let size = (8064, 6048);
-    let src = scene_raw(size.0, size.1);
+    let src = linear_source(size);
     let t = camera_transform(&src.color, None);
     let mut stages = RawStages::new(&gpu, TileConfig::default());
+    stages.sample_memory = true;
     let pyramid = stages.render_pyramid(&gpu, &src, &t).unwrap().bytes();
     let (scratch, upload) = (stages.scratch_bytes(), stages.upload_bytes());
     println!(
@@ -89,6 +121,16 @@ fn a_48mp_edit_stays_within_the_budget() {
             assert!(got <= cap, "{name}: {got} bytes, cap {cap}");
         }
     }
+    // The peak, while tiles are in flight: their uploads' staging on top.
+    if let (Some(before), Some(peak)) = (before, stages.peak_allocated) {
+        let used = peak - before;
+        println!(
+            "measured: peak {:.1} MB during the render (caps {:.0} MB)",
+            used as f64 / MB,
+            caps as f64 / MB
+        );
+        assert!(used <= caps + 2_000_000, "peak {used} bytes for {caps}");
+    }
     if let (Some(before), Some(after)) = (before, first) {
         let used = after - before;
         println!(
@@ -102,7 +144,7 @@ fn a_48mp_edit_stays_within_the_budget() {
     }
 
     // A second photo replaces the first.
-    let src2 = scene_raw(size.0, size.1);
+    let src2 = linear_source(size);
     stages.render_pyramid(&gpu, &src2, &t).unwrap();
     let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
     if let (Some(first), Some(second)) = (first, allocated(&gpu)) {

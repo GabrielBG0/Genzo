@@ -11,9 +11,10 @@ const MB: u64 = 1_000_000;
 pub const PYRAMID: u64 = 133 * MB;
 /// Stages 1 to 4 scratch for one tile (60 MB for Bayer; 64.2 MB on NVIDIA).
 pub const TILE_SCRATCH: u64 = 65 * MB;
-/// Upload staging for one tile (linear DNG, 3 × u16: 6.9 MB; 7.5 MB on
-/// NVIDIA).
-pub const UPLOAD: u64 = 8 * MB;
+/// Uploads: the raw tile texture (linear DNG, 3 × u16: 6.9 MB; 7.4 MB on
+/// NVIDIA) and the staging of the two tiles in flight (2 × 6.9 MB), 21.2 MB
+/// at the measured peak.
+pub const UPLOAD: u64 = 22 * MB;
 /// The level-0 tile cache at 1:1 (plan step 6).
 pub const LEVEL0_CACHE: u64 = 256 * MB;
 /// The viewport stage caches (steps 6 and 7).
@@ -44,7 +45,7 @@ mod tests {
     #[test]
     fn the_items_add_up_to_the_spec_total() {
         let total: u64 = ITEMS.iter().sum();
-        assert_eq!(total, 660 * MB);
+        assert_eq!(total, 674 * MB);
         assert!(total < LIMIT);
     }
 }

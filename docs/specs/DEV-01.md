@@ -323,18 +323,18 @@ Stages 1 to 4 run per tile, so full-resolution intermediates exist only for one 
   - At 1:1 they are cached in an LRU with a fixed byte cap.
   - Order: visible tiles first, then a ring of one tile around them.
   - Export streams tiles through the whole pipeline and keeps none.
-- **GPU memory for one 48 MP edit** (8064 × 6048) has the following worst case. The memory-accounting test asserts the total. Each cap is a fixed constant that the test checks (`pipeline::budget`, `pipeline/tests/memory.rs`). The caps hold the sizes as drivers allocate them: NVIDIA's Vulkan driver pads textures by up to 7 % (measured 2026-10-18), and WARP allocates the exact sizes. The test measures what is allocated where the backend reports it (Vulkan and DX12 do).
+- **GPU memory for one 48 MP edit** (8064 × 6048) has the following worst case. The memory-accounting test asserts the total. Each cap is a fixed constant that the test checks (`pipeline::budget`, `pipeline/tests/memory.rs`). The caps hold the sizes as drivers allocate them: NVIDIA's Vulkan driver pads textures by up to 7 % (measured 2026-10-18), and WARP allocates the exact sizes. The test measures what is allocated where the backend reports it (Vulkan and DX12 do), after the render and at its peak, sampled after each tile's submit while uploads are still staged.
 
 | Item | Size |
 |---|---|
 | Pyramid, levels 1 and up, RGBA16F (98 MB for level 1, plus a third: 130 MB; 132.3 MB as NVIDIA allocates it) | 133 MB |
 | Stage 1 to 4 scratch for one tile, intermediates included: Bayer 52 B/px × 1072² = 60 MB (the mosaic, seven RCD buffers, RGBA32F output; 64.2 MB on NVIDIA); X-Trans about 200 B/px × 560² = 63 MB | 65 MB |
-| Upload staging for one tile (linear DNG, 3 × u16: 6.9 MB; 7.4 MB on NVIDIA) | 8 MB |
+| Uploads: the raw tile texture (linear DNG, 3 × u16: 6.9 MB; 7.4 MB on NVIDIA) and the staging of the two tiles in flight (2 × 6.9 MB); 21.2 MB at the measured peak | 22 MB |
 | Level-0 tile cache at 1:1 (fixed cap; about 480 tiles of 256², five 2560 × 1440 views with their rings) | 256 MB |
 | Viewport stage caches (fixed cap; stage 4 sampled, stage 6, stage 7 at 2560 × 1920 RGBA16F, plus the base layer) | 128 MB |
 | Output frame and two persistent readback buffers, RGBA8 | 60 MB |
 | Histogram and clipping masks | 10 MB |
-| **Total** | **660 MB**, under the 1 GB budget with 340 MB to spare |
+| **Total** | **674 MB**, under the 1 GB budget with 326 MB to spare |
 
 A software adapter uses the same sizes.
 

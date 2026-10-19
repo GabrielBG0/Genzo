@@ -80,7 +80,8 @@ struct Stage4Uniforms {
 }
 
 /// Tiles in flight at once while building the pyramid: each holds its
-/// upload staging until the GPU is done with it (DEV-01: 7 MB per tile).
+/// upload staging until the GPU is done with it (6.9 MB for a linear DNG
+/// tile; DEV-01's upload line counts two).
 const IN_FLIGHT: usize = 2;
 
 /// How many pyramid levels a first level of `size` gets: down to the first
@@ -485,6 +486,12 @@ pub struct RawStages {
     /// For [`RawStages::render`] only, made on first use.
     readback: Option<wgpu::Buffer>,
     pyramid: Option<Pyramid>,
+    /// For the memory test: sample the allocator report after each tile's
+    /// submit in [`RawStages::render_pyramid`], keeping the largest total.
+    #[doc(hidden)]
+    pub sample_memory: bool,
+    #[doc(hidden)]
+    pub peak_allocated: Option<u64>,
 }
 
 /// The image-wide inputs of a render, uploaded once.
@@ -516,6 +523,8 @@ impl RawStages {
             tiles: None,
             readback: None,
             pyramid: None,
+            sample_memory: false,
+            peak_allocated: None,
         }
     }
 
@@ -1013,6 +1022,17 @@ impl RawStages {
         let rgb = view(&self.tiles.as_ref().expect("prepared").rgb);
         let mut in_flight = VecDeque::new();
         for job in &jobs {
+            // This tile's upload is staged as soon as it is encoded, so wait
+            // for room first.
+            if in_flight.len() >= IN_FLIGHT {
+                let oldest = in_flight.pop_front();
+                device
+                    .poll(wgpu::PollType::Wait {
+                        submission_index: oldest,
+                        timeout: None,
+                    })
+                    .map_err(|e| GpuError::Request(e.to_string()))?;
+            }
             let mut encoder = self.encode_tile(gpu, src, &image, job, mm, true);
             // The level 1 texels whose 2 x 2 block starts in this tile; tiles
             // start on even pixels, and an odd last pixel folds into the
@@ -1064,14 +1084,13 @@ impl RawStages {
                 cpass.dispatch_workgroups(count.0.div_ceil(WG), count.1.div_ceil(WG), 1);
             }
             in_flight.push_back(gpu.queue.submit([encoder.finish()]));
-            if in_flight.len() > IN_FLIGHT {
-                let oldest = in_flight.pop_front();
-                device
-                    .poll(wgpu::PollType::Wait {
-                        submission_index: oldest,
-                        timeout: None,
-                    })
-                    .map_err(|e| GpuError::Request(e.to_string()))?;
+            if self.sample_memory {
+                // The uploads still staged count here: their submissions
+                // have not finished.
+                if let Some(r) = device.generate_allocator_report() {
+                    let peak = self.peak_allocated.get_or_insert(0);
+                    *peak = (*peak).max(r.total_allocated_bytes);
+                }
             }
         }
         // Levels 2 and up.
