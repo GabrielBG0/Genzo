@@ -3,9 +3,11 @@
 //! This is the CPU reference for the color math only. The GPU shaders are
 //! checked against it; no other stage has a CPU version. It also holds the
 //! metrics the golden-image tests use (CIELAB and ΔE2000).
-//! ICC handling (moxcms, cleared in docs/licenses.md) arrives in M1.
+//! [`encoding`] reads non-RAW encodings, ICC profiles through moxcms
+//! (cleared in docs/licenses.md).
 
 pub mod camera;
+pub mod encoding;
 
 /// A 3×3 matrix in row-major order.
 pub type Mat3 = [[f64; 3]; 3];

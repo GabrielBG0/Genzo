@@ -111,6 +111,7 @@ pub fn scene_raw(width: u32, height: u32) -> crate::raw::RawSource {
         fix_bad_pixels: Vec::new(),
         gain_maps: Vec::new(),
         color: Default::default(),
+        encoding: None,
     }
 }
 

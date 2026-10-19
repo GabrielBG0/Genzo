@@ -175,6 +175,7 @@ fn bayer() -> RawSource {
         }],
         gain_maps: gain_maps(1),
         color: Default::default(),
+        encoding: None,
     }
 }
 
@@ -214,6 +215,7 @@ fn linear_with(samples: u32) -> RawSource {
         fix_bad_pixels: Vec::new(),
         gain_maps: gain_maps(samples),
         color: Default::default(),
+        encoding: None,
     }
 }
 

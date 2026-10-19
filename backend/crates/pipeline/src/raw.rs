@@ -3,15 +3,16 @@
 //! linearization, computed as the Adobe DNG SDK 1.4 computes them
 //! (`dng_linearization_info.cpp`).
 
+use genzo_color::encoding::{EncodingError, InputEncoding};
 use genzo_imgio::opcodes::{FixBadPixelsConstant, GainMap, OpcodePlan, StageOpcode};
 use genzo_imgio::raw::{CameraColor, Levels, Rect};
-use genzo_imgio::{DecodedImage, Pixels};
+use genzo_imgio::{ColorEncoding, DecodedImage, Pixels};
 
 /// What stages 1 to 3 cannot take.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum RawError {
-    #[error("not a RAW image")]
-    NotRaw,
+    #[error(transparent)]
+    Encoding(#[from] EncodingError),
     #[error("unsupported: {0}")]
     Unsupported(String),
     #[error("corrupt levels: {0}")]
@@ -38,7 +39,8 @@ impl Cfa {
     }
 }
 
-/// A RAW image ready for stage 1.
+/// An image ready for stage 1: a RAW one, or a non-RAW one whose
+/// `encoding` replaces the levels.
 #[derive(Debug, Clone)]
 pub struct RawSource {
     /// The stored image: every sample the file holds, masked borders included.
@@ -58,6 +60,10 @@ pub struct RawSource {
     pub gain_maps: Vec<GainMap>,
     /// The camera's color data, for stages 2 and 4 ([`crate::camera_color`]).
     pub color: CameraColor,
+    /// A non-RAW image's encoding (DEV-01, stage 4): stage 1 looks each
+    /// code up in its curves in place of the levels, white balance is 1,
+    /// and stage 4 takes its matrix ([`crate::camera_color::encoded_transform`]).
+    pub encoding: Option<InputEncoding>,
 }
 
 /// Stage 1's levels, per plane, already multiplied by the scale: a sample
@@ -184,8 +190,7 @@ impl Linearization {
 }
 
 impl RawSource {
-    /// The decoder's output for stages 1 to 3. X-Trans waits for the
-    /// Markesteijn demosaic (plan step 5c).
+    /// The decoder's output for stages 1 to 3.
     pub fn from_decoded(img: DecodedImage) -> Result<Self, RawError> {
         let stored = (img.width, img.height);
         let (samples, data, pattern, raw) = match img.pixels {
@@ -195,7 +200,9 @@ impl RawSource {
                 data,
                 raw,
             } => (u32::from(samples_per_pixel), data, None, raw),
-            Pixels::Rgba16 { .. } => return Err(RawError::NotRaw),
+            Pixels::Rgba16 { data, color } => {
+                return Self::from_encoded(stored, &data, &input_encoding(&color)?);
+            }
         };
         if samples != 1 && samples != 3 {
             return Err(RawError::Unsupported(format!(
@@ -272,6 +279,55 @@ impl RawSource {
             fix_bad_pixels,
             gain_maps,
             color,
+            encoding: None,
+        })
+    }
+
+    /// A non-RAW image: RGBA16 codes row by row, `encoding` their meaning.
+    /// Alpha is dropped (DEV-01), so a tile uploads three samples per
+    /// pixel, as a linear DNG's does.
+    pub fn from_encoded(
+        (width, height): (u32, u32),
+        rgba: &[u16],
+        encoding: &InputEncoding,
+    ) -> Result<Self, RawError> {
+        let pixels = width as usize * height as usize;
+        if width == 0 || height == 0 || rgba.len() != pixels * 4 {
+            return Err(RawError::Unsupported(format!(
+                "{} RGBA samples for {width}x{height}",
+                rgba.len()
+            )));
+        }
+        let data = rgba
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .flat_map(|p| [p[0], p[1], p[2]])
+            .collect();
+        Ok(RawSource {
+            stored: (width, height),
+            samples: 3,
+            data,
+            cfa: None,
+            active: Rect {
+                top: 0,
+                left: 0,
+                bottom: height,
+                right: width,
+            },
+            // Unused: the curves replace the levels.
+            linearization: Linearization {
+                scale: vec![1.0; 3],
+                pattern: vec![0.0; 3],
+                rows: 1,
+                cols: 1,
+                delta_h: Vec::new(),
+                delta_v: Vec::new(),
+            },
+            fix_bad_pixels: Vec::new(),
+            gain_maps: Vec::new(),
+            color: CameraColor::default(),
+            encoding: Some(encoding.clone()),
         })
     }
 
@@ -289,5 +345,21 @@ impl RawSource {
             self.cfa?
                 .color(row + self.active.top, col + self.active.left),
         )
+    }
+}
+
+/// What a decoder's color encoding means for stage 1 and 4.
+pub fn input_encoding(color: &ColorEncoding) -> Result<InputEncoding, EncodingError> {
+    match color {
+        ColorEncoding::Srgb => Ok(InputEncoding::srgb()),
+        ColorEncoding::DisplayP3 => Ok(InputEncoding::display_p3()),
+        ColorEncoding::AdobeRgb => Ok(InputEncoding::adobe_rgb()),
+        ColorEncoding::Icc(bytes) => InputEncoding::icc(bytes),
+        // The matrix and range are libheif's to undo; it already has.
+        ColorEncoding::Nclx {
+            primaries,
+            transfer,
+            ..
+        } => InputEncoding::nclx(*primaries, *transfer),
     }
 }

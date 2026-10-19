@@ -12,6 +12,7 @@ repository = "https://github.com/GabrielBG0/Genzo"
 publish = false
 
 [workspace.dependencies]
+moxcms = "=0.9.1"
 rawler = { version = "=0.8.0", default-features = false }
 jpeg-encoder = { version = "=0.7.1", features = ["simd"] }
 rayon = "1.12"

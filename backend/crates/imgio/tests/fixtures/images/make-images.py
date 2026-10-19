@@ -210,6 +210,15 @@ png_write("png-cicp-p3.png", rgb8.reshape(H, -1), [(b"cICP", bytes([12, 13, 0, 1
 write_expect("png-cicp-p3.png", to16(rgb8, 8))
 png_write("png-exif8.png", rgb8.reshape(H, -1), [(b"eXIf", tiff_ifd([(274, 8)]))], greyscale=False, bitdepth=8)
 write_expect("png-exif8.png", to16(rgb8, 8))
+# A real ICC profile from another color engine: lcms2's own sRGB (through
+# Pillow), so the pipeline's ICC path is checked on bytes moxcms did not
+# write. lcms2 stamps the profile with the time, so this file changes each
+# time the script runs.
+from PIL import ImageCms
+lcms_srgb = ImageCms.ImageCmsProfile(ImageCms.createProfile("sRGB")).tobytes()
+(HERE / "png-icc-lcms2-srgb.icc").write_bytes(lcms_srgb)
+png_write("png-icc-lcms2-srgb.png", rgb8.reshape(H, -1), [(b"iCCP", b"lcms2 sRGB\0\0" + zlib.compress(lcms_srgb))], greyscale=False, bitdepth=8)
+write_expect("png-icc-lcms2-srgb.png", to16(rgb8, 8))
 
 
 # ---------------------------------------------------------------- TIFF ----

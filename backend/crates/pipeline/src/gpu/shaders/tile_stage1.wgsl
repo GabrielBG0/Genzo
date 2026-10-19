@@ -1,6 +1,7 @@
 // Stages 1 and 2 for one tile (DEV-01), as reference::stages computes them:
 // FixBadPixelsConstant on the stored values, the levels, the GainMaps of
-// OpcodeList2, then white balance and the highlight clip. A Bayer tile goes
+// OpcodeList2, then white balance and the highlight clip; for a non-RAW
+// image, its curves (multipliers 1, clip 1). A Bayer tile goes
 // to `cfa_out`, clamped at 0 for the demosaic; a linear tile to `rgb_out`,
 // negatives kept, a monochrome plane copied to all three channels.
 
@@ -139,10 +140,14 @@ fn scale_of(plane: u32) -> f32 {
     return select(select(tile.scale.x, tile.scale.y, plane == 1u), tile.scale.z, plane == 2u);
 }
 
-// Stage 1 for one plane.
+// Stage 1 for one plane. A non-RAW image's `black` holds its curves
+// instead: linear light for every 16-bit code, channel after channel.
 fn linear(p: vec2<i32>, plane: u32) -> f32 {
     let s = stored(p);
     var v = raw_at(s, plane);
+    if (tile.cfa.y == 1u) {
+        return black[plane * 65536u + v];
+    }
     if (plane == 0u && tile.info.x == 1u) {
         v = fixed(s, v);
     }

@@ -7,7 +7,8 @@ use crate::raw::RawSource;
 /// Stage 1 over the active area: FixBadPixelsConstant (OpcodeList1) on the
 /// stored values, the SDK's linearization, then the GainMaps (OpcodeList2).
 /// Row by row, `samples` planes interleaved, white at 1. Negative values
-/// are kept (DEV-01); the SDK clips them to 0.
+/// are kept (DEV-01); the SDK clips them to 0. A non-RAW image's codes go
+/// through its encoding's curves instead.
 pub fn stage1(src: &RawSource) -> Vec<f32> {
     let (sw, sh) = src.stored;
     let mut stored = src.data.clone();
@@ -23,8 +24,11 @@ pub fn stage1(src: &RawSource) -> Vec<f32> {
         for col in 0..w {
             let x = (col + src.active.left) as usize;
             for p in 0..n {
-                let v = f32::from(stored[(y * sw as usize + x) * n + p]);
-                out.push(v * lin.scale[p] - lin.black(row, col, p));
+                let code = stored[(y * sw as usize + x) * n + p];
+                out.push(match &src.encoding {
+                    Some(e) => e.curves[p].code(code),
+                    None => f32::from(code) * lin.scale[p] - lin.black(row, col, p),
+                });
             }
         }
     }
@@ -70,13 +74,18 @@ pub fn luminance_row() -> [f32; 3] {
 /// matrix into the working space; then highlight desaturation, a blend
 /// toward the pixel's own luminance whose weight rises linearly from 0, where
 /// the largest camera channel is at [`DESATURATE_FROM`] of the clip level,
-/// to 1 at the clip level; then 2^BaselineExposure.
+/// to 1 at the clip level (when the transform has it); then
+/// 2^BaselineExposure.
 pub fn stage4(rgb: [f32; 3], t: &crate::camera_color::CameraTransform) -> [f32; 3] {
     let m = &t.matrix;
     let w = [0, 1, 2].map(|r| m[r][0] * rgb[0] + m[r][1] * rgb[1] + m[r][2] * rgb[2]);
     let clip = t.multipliers[0].min(t.multipliers[1]).min(t.multipliers[2]);
     let top = rgb[0].max(rgb[1]).max(rgb[2]);
-    let k = ((top - DESATURATE_FROM * clip) / ((1.0 - DESATURATE_FROM) * clip)).clamp(0.0, 1.0);
+    let k = if t.highlight_desaturation {
+        ((top - DESATURATE_FROM * clip) / ((1.0 - DESATURATE_FROM) * clip)).clamp(0.0, 1.0)
+    } else {
+        0.0
+    };
     let l = luminance_row();
     let y = l[0] * w[0] + l[1] * w[1] + l[2] * w[2];
     w.map(|c| (c + (y - c) * k) * t.exposure)
@@ -137,6 +146,7 @@ mod tests {
             matrix: [[1.4, -0.3, -0.1], [-0.2, 1.3, -0.1], [0.0, -0.4, 1.4]],
             exposure: 2.0,
             fallback: None,
+            highlight_desaturation: true,
         }
     }
 
