@@ -242,7 +242,7 @@ Spec template for each feature: **Behavior** (what it does, step by step), **Inp
 ### DEV-02 · Basic panel
 - Priority: P0 · Screens: D1
 - Scope: Profile, Color / B&W treatment (V), white balance presets and picker (W), Temp, Tint, Exposure, Contrast, Highlights, Shadows, Whites, Blacks, Texture, Clarity, Dehaze, Vibrance, Saturation. Auto tone Ctrl U, auto white balance Ctrl Shift U. Changed sliders shown bright, unchanged dim.
-- Spec: _to be written_
+- Spec: [DEV-02](../specs/DEV-02.md) (the M1 part: the panel, the Genzo Standard base tone curve, white balance presets and picker)
 
 ### DEV-03 · Histogram and clipping warnings
 - Priority: P0 · Screens: D1

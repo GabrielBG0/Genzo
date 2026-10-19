@@ -2,7 +2,7 @@
 
 Built from these sources:
 
-- **Spec:** *Genzo: Technical Spec (draft 2)*, revision 89 (revision 57, plus the M0 results recorded on 2026-10-15 and 2026-10-17, plus the M1 decisions of 2026-10-17 to 2026-10-19). The artifact is still listed as "Photo Editor: Technical Spec (draft 1)".
+- **Spec:** *Genzo: Technical Spec (draft 2)*, revision 90 (revision 57, plus the M0 results recorded on 2026-10-15 and 2026-10-17, plus the M1 decisions of 2026-10-17 to 2026-10-19). The artifact is still listed as "Photo Editor: Technical Spec (draft 1)".
 - **UI handoff:** [`docs/UI/fixer-ui-handoff.html`](UI/fixer-ui-handoff.html). It holds the approved Carbon Glass direction, every mockup screen, the design system and the component list. "Fixer" was the working name before Genzo.
 - **Feature list:** [`docs/UI/FEATURES.md`](UI/FEATURES.md). It gives every UI feature an ID, a priority (P0, P1, P2) and its screens.
 
@@ -129,6 +129,7 @@ Parked decisions that have been settled, with the date and what follows from eac
 | X-Trans demosaic | A Markesteijn-class demosaic in M1 | 2026-10-17 | Fujifilm is in the first priority tier. Checked against a literal CPU port of darktable's code, as RCD was in M0 |
 | ProRAW gain table map | Read and kept, not applied by default | 2026-10-17 | Lightroom renders ProRAW without it (a ΔE00 of 19 with it applied, measured by LightCraft). Applying it can come later as an opt-in |
 | Camera profiles in M1 | Genzo's own, since Adobe's are proprietary: Genzo Standard (the camera matrix plus Genzo's base tone curve) and Genzo Linear (the matrix only). B&W starts from Genzo Standard | 2026-10-17 | DCP files and the profile tables embedded in DNG are not read in M1. The base tone curve is defined in the DEV-02 spec |
+| Genzo Standard's base tone curve | The Adobe DNG SDK 1.4's default rendering: its exposure ramp (default black, Shadows 5) and its default tone curve (ACR3), applied per channel keeping hue (`RefBaselineRGBTone`) in linear ProPhoto RGB, as the SDK does. Not Genzo's own filmic curve | 2026-10-19 | It has ground truth: the probe renders through `dng_render` and the whole result is compared, as stages 1 to 4 are. Highlights clip at display white, as in Adobe's renderer; the Highlights slider recovers them. Negative exposure stays a gain, so the SDK comparison holds from 0 EV up. A file's own ProfileToneCurve (ProRAW has one) is ignored. Defined in `docs/specs/DEV-02.md` |
 | Highlights and Shadows | Local tone mapping: an edge-aware base layer of the luminance, computed once per edit on the cropped image at a fixed working size. Whites, Blacks and Contrast stay global | 2026-10-18 | Fit, 1:1 and export use the same base, so they match. A crop or white balance change recomputes it. Defined in `docs/specs/DEV-01.md` |
 | Clipped highlights in M1 | Clip every channel where the first one saturates after white balance, and desaturate the edge. No reconstruction of clipped color yet | 2026-10-18 | Clipped areas come out neutral, not magenta. A reconstruction (darktable's inpaint-opposed class) can come later with its own reference test |
 | Non-RAW encodings in M1 | sRGB, Display P3, Adobe RGB (EXIF), the H.273 SDR code points HEIC uses, and ICC matrix-shaper and gray profiles (moxcms). HDR transfers (PQ, HLG), ICC profiles built on lookup tables, and CMYK are unsupported | 2026-10-19 | Such files show as *unsupported* with the reason, like a CMYK JPEG. Phone HDR HEICs carry an SDR base image with a gain map, which imgio already uses, so PQ and HLG come from video-style stills only. LUT-based RGB profiles are rare in photos; moxcms can evaluate them, so they can follow once there is a test file. A profile moxcms cannot read makes the file unsupported too (the owner, 2026-10-19: for now; see Parked, "Unreadable ICC profiles") |
@@ -357,7 +358,8 @@ These come from `docs/m0-results.md` and decide how the steps below are built:
 11. `cli`: `open`, `render`, `export`, `bench open` (first pixels, fit render, neighbor switch) and the golden-image tests.
 
 ### Contract
-- Commands: `OpenFolder`, `SelectPhoto`, `SetView`, `ApplyEditDelta`, `ResetParam`, `Undo`, `Redo`, `ExportJpeg`.
+- Commands: `OpenFolder`, `SelectPhoto`, `SetView`, `ApplyEditDelta`, `ResetParam`, `PickWhiteBalance`, `Undo`, `Redo`, `ExportJpeg`.
+  - `PickWhiteBalance` carries a point on the shown image. The engine samples there, applies the white balance and records the step (DEV-02).
   - `SetView` carries the viewport size, the zoom (Fit or 1:1) and the visible rectangle, so the engine renders only what is seen.
   - `ApplyEditDelta` carries the gesture phase (start, update, end). The engine picks the drag preview from it, replacing the spike's `proxy` flag, and records one history step per finished gesture.
 - Queries: `ListFolderPhotos`, `GetEdit`, `GetHistogram`.

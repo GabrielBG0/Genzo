@@ -63,7 +63,8 @@ The order is fixed, as the spec sets it. The table shows which stages M1 builds 
   - ColorMatrix1 and 2 with their calibration illuminants;
   - ForwardMatrix1 and 2 when present;
   - the as-shot neutral or white balance coefficients (only the first three; the fourth is NaN on every body tested);
-  - BaselineExposure.
+  - BaselineExposure;
+  - ShadowScale (DNG tag 50739, default 1), for the base curve's black (DEV-02).
 - **The opcode lists** (1, 2 and 3), parsed into a typed list. Each opcode keeps its optional flag.
 - **Orientation**, the EXIF or DNG value 1 to 8, *not* applied to the pixels (see Geometry).
 - **The embedded preview**, through `imgio::decode_preview`, as RGBA8 with its orientation (not applied, as for the image) and color encoding.
@@ -289,7 +290,7 @@ Geometry changes which source pixel lands where. It changes no pixel values in M
 
 ### Stage 6 (M1 part): exposure and tone
 
-This stage works on linear AP1 at viewport resolution. User adjustments change luminance only, and RGB is scaled by the luminance ratio, so hue and saturation hold. Luminance `Y` is AP1's Y row. Tone math works in log2 relative to middle gray: `t = log2(Y / 0.18)`.
+This stage works on linear AP1 at viewport resolution. User adjustments change luminance only, and RGB is scaled by the luminance ratio, so hue and saturation hold. The base curve (step 5) is the exception: it works per channel, keeping hue (DEV-02). Luminance `Y` is AP1's Y row. Tone math works in log2 relative to middle gray: `t = log2(Y / 0.18)`.
 
 1. **Exposure:** a gain of 2^EV.
 2. **Highlights and Shadows: local tone mapping** (decided 2026-10-18).
@@ -299,10 +300,14 @@ This stage works on linear AP1 at viewport resolution. User adjustments change l
    - **Highlights** move `B` by `h × w_h(B)`, and **Shadows** by `s × w_s(B)`. The weights are smooth ramps: `w_h` rises from 0 at middle gray to 1 at +2.5 EV, and `w_s` mirrors it toward −4 EV. `h` and `s` scale the slider (−100 to +100) to at most ±2 EV.
    - Exposure is a constant shift in `t`, so changing it shifts `B` by the same amount and needs no new base. White balance, the crop, the straighten angle, the quarter turns and the flip recompute it. The profile does not, since both profiles share everything before stage 6.
    - During a crop gesture, the base from the gesture's start is used, and it is recomputed on *end*.
-3. **Whites and Blacks:** global. They move the upper and lower end of the tone range, the points that map to display white and black after the base curve, by at most ±1.5 EV.
+3. **Whites and Blacks:** global. They move the upper and lower end of the tone range by at most ±1.5 EV, leaving middle gray where it is.
+   - **The ends** are fixed points in `t`: white `t_W = log2(1 / 0.18)`, the value the base curve maps to display white, and black `t_B = log2(0.005 / 0.18)`, the base curve's default black at 0 EV (DEV-02). They are the same for every profile, so Blacks works on Genzo Linear too, whose black is 0.
+   - **Whites** (`w` = slider / 100) moves the source point `s_W = t_W − 1.5 w` onto `t_W`. Above middle gray, `t' = t + 1.5 w × r(t / s_W)`.
+   - **Blacks** (`k` = slider / 100) moves `s_B = t_B − 1.5 k` onto `t_B`. Below middle gray, `t' = t + 1.5 k × r(t / s_B)`.
+   - `r(u) = u²` up to `u = 1`, and `2u − 1` past it. So the change starts flat at middle gray, reaches the full shift at the source point, and continues smoothly beyond it. The curve stays monotonic over the whole range: its slope is at least 0.24 for Whites and 0.55 for Blacks.
 4. **Contrast:** global. An S-curve in `t` around middle gray, which leaves middle gray unchanged.
 5. **The profile's base tone curve.**
-   - Genzo Standard applies Genzo's base tone curve, which maps scene-referred values to display-referred 0 to 1. The curve and how it is applied are defined in the DEV-02 spec.
+   - Genzo Standard applies Genzo's base tone curve, which maps scene-referred values to display-referred 0 to 1: the Adobe DNG SDK's default rendering (its exposure ramp, then its default tone curve, keeping hue, in linear ProPhoto RGB). The curve and how it is applied are defined in the DEV-02 spec.
    - Genzo Linear applies none: values are clamped at display white, after the output transform's gamut compression.
    - Non-RAW files use "Embedded": no base curve, since they are display-referred already.
 
