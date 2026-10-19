@@ -56,12 +56,12 @@ pub struct TileJob {
     pub raw: Rect,
 }
 
-/// The starts of a row of `tile` px tiles over `len` px. A last tile 1 px
+/// The starts of a row of `tile` px tiles over `from..to`. A last tile 1 px
 /// wide joins the one before, so every 2 × 2 block of the pyramid's first
 /// level, the odd last pixel folded in included, lies in one tile.
-fn starts(len: u32, tile: u32) -> Vec<u32> {
-    let mut s: Vec<u32> = (0..len).step_by(tile as usize).collect();
-    if s.len() > 1 && len - s[s.len() - 1] == 1 {
+fn starts(from: u32, to: u32, tile: u32) -> Vec<u32> {
+    let mut s: Vec<u32> = (from..to).step_by(tile as usize).collect();
+    if s.len() > 1 && to - s[s.len() - 1] == 1 {
         s.pop();
     }
     s
@@ -73,6 +73,27 @@ fn starts(len: u32, tile: u32) -> Vec<u32> {
 /// (FixBadPixelsConstant reads 2 px around). A last row or column of tiles
 /// 1 px wide joins the one before.
 pub fn jobs(
+    size: (u32, u32),
+    offset: (u32, u32),
+    stored: (u32, u32),
+    tile: u32,
+    apron: u32,
+    margin: u32,
+) -> Vec<TileJob> {
+    let all = Rect {
+        x: 0,
+        y: 0,
+        width: size.0,
+        height: size.1,
+    };
+    jobs_in(all, size, offset, stored, tile, apron, margin)
+}
+
+/// As [`jobs`], for the tiles of `region` (active-area coordinates, even
+/// origin) only: what the level-0 tiles of a view need. A tile's pixels do
+/// not depend on where its tile starts, so these equal the whole image's.
+pub fn jobs_in(
+    region: Rect,
     size: (u32, u32),
     offset: (u32, u32),
     stored: (u32, u32),
@@ -108,7 +129,18 @@ pub fn jobs(
         tile >= 2 && tile.is_multiple_of(2),
         "tile size {tile} must be even"
     );
-    let (xs, ys) = (starts(size.0, tile), starts(size.1, tile));
+    assert!(
+        region.x.is_multiple_of(2)
+            && region.y.is_multiple_of(2)
+            && region.x + region.width <= size.0
+            && region.y + region.height <= size.1,
+        "region {region:?} in {size:?}"
+    );
+    let (right, bottom) = (region.x + region.width, region.y + region.height);
+    let (xs, ys) = (
+        starts(region.x, right, tile),
+        starts(region.y, bottom, tile),
+    );
     let end = |s: &[u32], i: usize, len: u32| s.get(i + 1).copied().unwrap_or(len);
     let mut outs = Vec::with_capacity(xs.len() * ys.len());
     for (j, &y) in ys.iter().enumerate() {
@@ -116,8 +148,8 @@ pub fn jobs(
             outs.push(Rect {
                 x,
                 y,
-                width: end(&xs, i, size.0) - x,
-                height: end(&ys, j, size.1) - y,
+                width: end(&xs, i, right) - x,
+                height: end(&ys, j, bottom) - y,
             });
         }
     }
@@ -174,6 +206,53 @@ mod tests {
         // Clamped to the stored image: 3 + 300 + 2 > 310 does not happen
         // here, 5 + 200 + 2 = 207 fits.
         assert_eq!(j[5].raw, r(233, 107, 72, 100));
+    }
+
+    #[test]
+    fn a_region_has_the_tiles_inside_it() {
+        let j = jobs_in(
+            Rect {
+                x: 256,
+                y: 512,
+                width: 300,
+                height: 100,
+            },
+            (1000, 700),
+            (4, 4),
+            (1010, 710),
+            256,
+            24,
+            2,
+        );
+        assert_eq!(j.len(), 2);
+        assert_eq!(
+            j[0].out,
+            Rect {
+                x: 256,
+                y: 512,
+                width: 256,
+                height: 100
+            }
+        );
+        assert_eq!(
+            j[1].out,
+            Rect {
+                x: 512,
+                y: 512,
+                width: 44,
+                height: 100
+            }
+        );
+        // The apron reaches outside the region, into the image.
+        assert_eq!(
+            j[0].padded,
+            Rect {
+                x: 232,
+                y: 488,
+                width: 304,
+                height: 148
+            }
+        );
     }
 
     #[test]

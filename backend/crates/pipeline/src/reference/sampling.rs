@@ -9,7 +9,8 @@
 /// that needs.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Sampling {
-    /// The pyramid level, 1 (half size) and up.
+    /// The level: 0 is full resolution (the level-0 tiles), 1 (half size)
+    /// and up the pyramid's.
     pub level: u32,
     pub level_size: (u32, u32),
     /// Level coordinates of output pixel (x, y)'s center:
@@ -79,6 +80,151 @@ pub fn plan(levels: &[(u32, u32)], o: u8, out: (u32, u32)) -> Sampling {
         level_size: (lw, lh),
         affine,
         footprint,
+    }
+}
+
+/// What a view shows.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ViewSpec {
+    /// The whole image in an `out`-sized view.
+    Fit((u32, u32)),
+    /// An `out`-sized view of the shown image at `zoom` (view pixels per
+    /// image pixel; 1 is 1:1) whose top left is at `origin` (shown image
+    /// pixels).
+    Region {
+        out: (u32, u32),
+        zoom: f64,
+        origin: (f64, f64),
+    },
+}
+
+impl ViewSpec {
+    pub fn out(&self) -> (u32, u32) {
+        match *self {
+            ViewSpec::Fit(out) | ViewSpec::Region { out, .. } => out,
+        }
+    }
+}
+
+/// The sampling for `view` of an image whose level 0 (full resolution, the
+/// active area) is `level0` and whose pyramid levels are `levels` (level 1
+/// first), shown in orientation `o`: the smallest level at least as large
+/// as the view needs, level 0 when no pyramid level is (decided
+/// 2026-10-19), and level 0 past 1:1.
+pub fn plan_view(level0: (u32, u32), levels: &[(u32, u32)], o: u8, view: ViewSpec) -> Sampling {
+    plan_levels(level0, levels, o, view, true)
+}
+
+/// As [`plan_view`], from the pyramid's levels only: what a view falls back
+/// to when the level-0 tiles it needs do not fit the cache. Level 1 is
+/// upsampled where level 0 would have been read.
+pub fn plan_view_without_level0(
+    level0: (u32, u32),
+    levels: &[(u32, u32)],
+    o: u8,
+    view: ViewSpec,
+) -> Sampling {
+    plan_levels(level0, levels, o, view, false)
+}
+
+fn plan_levels(
+    level0: (u32, u32),
+    levels: &[(u32, u32)],
+    o: u8,
+    view: ViewSpec,
+    with_level0: bool,
+) -> Sampling {
+    match view {
+        ViewSpec::Fit(out) => {
+            let fits = |l: (u32, u32)| {
+                let s = shown(l, o);
+                s.0 >= out.0 && s.1 >= out.1
+            };
+            if !levels.is_empty() && (fits(levels[0]) || !with_level0) {
+                return plan(levels, o, out);
+            }
+            let mut s = plan(&[level0], o, out);
+            s.level = 0;
+            s
+        }
+        ViewSpec::Region { out, zoom, origin } => {
+            assert!(out.0 > 0 && out.1 > 0 && zoom > 0.0);
+            // Level texels per image pixel on each shown axis must reach the
+            // zoom.
+            let full = shown(level0, o);
+            let all: Vec<(u32, u32)> = std::iter::once(level0)
+                .chain(levels.iter().copied())
+                .collect();
+            let index = (0..all.len())
+                .rev()
+                .find(|&i| {
+                    let s = shown(all[i], o);
+                    f64::from(s.0) >= f64::from(full.0) * zoom
+                        && f64::from(s.1) >= f64::from(full.1) * zoom
+                })
+                .unwrap_or(0);
+            let index = if with_level0 { index } else { index.max(1) };
+            let (lw, lh) = all[index];
+            let r = orientation(o);
+            let dims = [f64::from(lw), f64::from(lh)];
+            let shown_dims = [f64::from(full.0), f64::from(full.1)];
+            let origin = [origin.0, origin.1];
+            // Level_i = Σ_j R_ij · (dims_i / shown_j) · (origin_j + p_j / zoom)
+            //   + t_i · dims_i; level 0 at 1:1 has every scale exactly 1.
+            let affine = [0, 1].map(|i| {
+                let scale = [0, 1].map(|j| dims[i] / shown_dims[j]);
+                [
+                    r[i][0] * scale[0] / zoom,
+                    r[i][1] * scale[1] / zoom,
+                    r[i][0] * scale[0] * origin[0]
+                        + r[i][1] * scale[1] * origin[1]
+                        + r[i][2] * dims[i],
+                ]
+            });
+            let footprint = [0, 1].map(|i| affine[i][0].abs().max(affine[i][1].abs()).max(1.0));
+            Sampling {
+                level: index as u32,
+                level_size: (lw, lh),
+                affine,
+                footprint,
+            }
+        }
+    }
+}
+
+impl Sampling {
+    /// The level texels an `out`-sized view reads, filter reach included,
+    /// clamped to the level.
+    pub fn source_rect(&self, out: (u32, u32)) -> genzo_model::frame::Rect {
+        let a = &self.affine;
+        let (mut lo, mut hi) = ([f64::MAX; 2], [f64::MIN; 2]);
+        for (x, y) in [
+            (0.0, 0.0),
+            (f64::from(out.0), 0.0),
+            (0.0, f64::from(out.1)),
+            (f64::from(out.0), f64::from(out.1)),
+        ] {
+            for i in 0..2 {
+                let v = a[i][0] * x + a[i][1] * y + a[i][2];
+                lo[i] = lo[i].min(v);
+                hi[i] = hi[i].max(v);
+            }
+        }
+        let size = [self.level_size.0, self.level_size.1];
+        let [x0, y0] = [0, 1].map(|i| {
+            let reach = 2.0 * self.footprint[i] + 1.0;
+            (lo[i] - reach).floor().max(0.0).min(f64::from(size[i])) as u32
+        });
+        let [x1, y1] = [0, 1].map(|i| {
+            let reach = 2.0 * self.footprint[i] + 1.0;
+            (hi[i] + reach).ceil().max(0.0).min(f64::from(size[i])) as u32
+        });
+        genzo_model::frame::Rect {
+            x: x0,
+            y: y0,
+            width: x1 - x0,
+            height: y1 - y0,
+        }
     }
 }
 
@@ -243,6 +389,88 @@ mod tests {
         // Larger than level 1: level 1, upsampled.
         let s = plan(&levels, 1, (2560, 1920));
         assert_eq!((s.level, s.footprint), (1, [1.0, 1.0]));
+    }
+
+    /// At 1:1 from level 0, a view is an exact copy of its region, in every
+    /// orientation, at any integer origin.
+    #[test]
+    fn one_to_one_is_a_copy_of_level_0() {
+        let size = (40, 30);
+        let level: Vec<[f32; 3]> = (0..size.0 * size.1).map(|i| [i as f32, 0.0, 1.0]).collect();
+        for o in 1..=8 {
+            let full = shown(size, o);
+            let (out, origin) = ((13, 9), (7.0, 5.0));
+            let s = plan_view(
+                size,
+                &[(20, 15)],
+                o,
+                ViewSpec::Region {
+                    out,
+                    zoom: 1.0,
+                    origin,
+                },
+            );
+            assert_eq!((s.level, s.footprint), (0, [1.0, 1.0]), "{o}");
+            let view = sample(&level, size, &s, out);
+            for py in 0..out.1 {
+                for px in 0..out.0 {
+                    // The shown pixel, then the stored one by the corner map.
+                    let (u, v) = (7 + px, 5 + py);
+                    let r = orientation(o);
+                    let (a, b) = (
+                        (f64::from(u) + 0.5) / f64::from(full.0),
+                        (f64::from(v) + 0.5) / f64::from(full.1),
+                    );
+                    let x = ((r[0][0] * a + r[0][1] * b + r[0][2]) * f64::from(size.0)) as u32;
+                    let y = ((r[1][0] * a + r[1][1] * b + r[1][2]) * f64::from(size.1)) as u32;
+                    assert_eq!(
+                        view[(py * out.0 + px) as usize],
+                        level[(y * size.0 + x) as usize],
+                        "orientation {o} at {px}, {py}"
+                    );
+                }
+            }
+            let rect = s.source_rect(out);
+            assert!(
+                rect.width >= 13.min(full.0) && rect.width <= size.0,
+                "{rect:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn fit_reads_level_0_when_level_1_is_too_small() {
+        let level0 = (4032, 3024);
+        let levels = [(2016, 1512), (1008, 756)];
+        assert_eq!(
+            plan_view(level0, &levels, 1, ViewSpec::Fit((2000, 1500))).level,
+            1
+        );
+        let s = plan_view(level0, &levels, 1, ViewSpec::Fit((2560, 1920)));
+        assert_eq!(s.level, 0);
+        assert!(s.footprint[0] > 1.5 && s.footprint[0] < 1.6);
+        assert_eq!(
+            plan_view(level0, &levels, 1, ViewSpec::Fit((5000, 4000))).footprint,
+            [1.0, 1.0]
+        );
+        // A region at half zoom reads level 1; at 1:1 and past, level 0.
+        let at = |zoom| {
+            plan_view(
+                level0,
+                &levels,
+                1,
+                ViewSpec::Region {
+                    out: (800, 600),
+                    zoom,
+                    origin: (0.0, 0.0),
+                },
+            )
+            .level
+        };
+        assert_eq!(
+            (at(0.5), at(0.6), at(1.0), at(2.0), at(0.25)),
+            (1, 0, 0, 0, 2)
+        );
     }
 
     #[test]

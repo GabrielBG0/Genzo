@@ -3,37 +3,10 @@
 // camera matrix into the working space, highlight desaturation and
 // 2^BaselineExposure; each level 1 texel is the mean of its 2 x 2 block, an
 // odd last row or column folded into the last texel, as reference::stages
-// computes it. Level 0 is never stored.
+// computes it. Level 0 is never stored whole (tile_stage4_full.wgsl keeps
+// tiles of it).
 
-struct Stage4 {
-    // The camera to working space matrix, one row per vec4.
-    m0: vec4<f32>,
-    m1: vec4<f32>,
-    m2: vec4<f32>,
-    // The working space's luminance row.
-    luma: vec4<f32>,
-    // 2^BaselineExposure, the clip level, where desaturation starts (a
-    // fraction of the clip level), 1 to desaturate highlights or 0 not to.
-    params: vec4<f32>,
-    // The first level 1 texel this tile writes, and how many across and down.
-    texels: vec4<u32>,
-    // The level 1 size.
-    level: vec4<u32>,
-}
-
-@group(0) @binding(1) var<uniform> s4: Stage4;
-@group(0) @binding(2) var rgb: texture_2d<f32>;
 @group(0) @binding(3) var level1: texture_storage_2d<rgba16float, write>;
-
-fn stage4(c: vec3<f32>) -> vec3<f32> {
-    let w = vec3<f32>(dot(s4.m0.xyz, c), dot(s4.m1.xyz, c), dot(s4.m2.xyz, c));
-    let clip = s4.params.y;
-    let knee = s4.params.z;
-    let top = max(c.x, max(c.y, c.z));
-    let k = clamp((top - knee * clip) / ((1.0 - knee) * clip), 0.0, 1.0) * s4.params.w;
-    let y = dot(s4.luma.xyz, w);
-    return (w + (vec3<f32>(y) - w) * k) * s4.params.x;
-}
 
 // The source pixels texel `i` of `n` averages over `src`.
 fn span(i: u32, n: u32, src: u32) -> vec2<u32> {

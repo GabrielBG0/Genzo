@@ -10,9 +10,11 @@ use bytemuck::{Pod, Zeroable};
 use genzo_color::Mat3;
 use genzo_color::output::{EDGE_STEPS, Target};
 
-use super::raw_stages::{Pass, Pyramid, Slot, padded_row, pass_with};
+use super::level0::{Level0Cache, Level0Error};
+use super::raw_stages::{Pass, Pyramid, RawStages, Slot, padded_row, pass_with};
 use super::{Gpu, GpuError};
-use crate::reference::sampling::{Sampling, plan};
+use crate::raw::RawSource;
+use crate::reference::sampling::{Sampling, ViewSpec, plan, plan_view, plan_view_without_level0};
 
 const WG: u32 = 16;
 
@@ -23,6 +25,7 @@ struct SampleUniforms {
     down: [f32; 4],
     footprint: [f32; 4],
     sizes: [u32; 4],
+    grid: [u32; 4],
 }
 
 #[repr(C)]
@@ -61,6 +64,7 @@ pub fn dithers(pyramid: &Pyramid, edited: bool) -> bool {
 #[derive(Debug)]
 pub struct ViewStages {
     sample: Pass,
+    sample_level0: Pass,
     output: Pass,
     sample_uniforms: wgpu::Buffer,
     output_uniforms: wgpu::Buffer,
@@ -86,8 +90,21 @@ impl ViewStages {
             sample: pass_with(
                 device,
                 "view sample",
-                include_str!("shaders/view_sample.wgsl"),
+                concat!(
+                    include_str!("shaders/view_sample.wgsl"),
+                    include_str!("shaders/view_fetch_pyramid.wgsl")
+                ),
                 &[Slot::Float, Slot::Store(Rgba16Float)],
+                false,
+            ),
+            sample_level0: pass_with(
+                device,
+                "view sample, level 0",
+                concat!(
+                    include_str!("shaders/view_sample.wgsl"),
+                    include_str!("shaders/view_fetch_level0.wgsl")
+                ),
+                &[Slot::Float, Slot::Store(Rgba16Float), Slot::Storage],
                 false,
             ),
             output: pass_with(
@@ -151,45 +168,111 @@ impl ViewStages {
     }
 
     /// Samples `pyramid`, shown in orientation `o`, into an `out`-sized
-    /// view: the stage 4 sampled cache.
+    /// Fit view from its own levels only (no level 0): the stage 4 sampled
+    /// cache.
     pub fn sample(&mut self, gpu: &Gpu, pyramid: &Pyramid, o: u8, out: (u32, u32)) -> Sampling {
-        self.resize(gpu, out);
         let s = plan(&pyramid.level_sizes(), o, out);
+        self.sample_with(gpu, pyramid, None, &s, out);
+        s
+    }
+
+    /// Shows `view` of `src` (its pyramid built, shown in orientation `o`):
+    /// renders the level-0 tiles it needs into `cache` when it reads level
+    /// 0 (`key` as for [`Level0Cache::ensure`]), then samples. When the
+    /// cache cannot hold them all, it falls back to the pyramid's level 1.
+    #[allow(clippy::too_many_arguments)]
+    pub fn show(
+        &mut self,
+        gpu: &Gpu,
+        stages: &mut RawStages,
+        cache: &mut Level0Cache,
+        src: &RawSource,
+        key: u64,
+        o: u8,
+        view: ViewSpec,
+    ) -> Result<Sampling, GpuError> {
+        let pyramid = stages.pyramid().expect("render_pyramid first");
+        let transform = pyramid.transform.clone();
+        let mut s = plan_view(src.size(), &pyramid.level_sizes(), o, view);
+        let out = view.out();
+        if s.level == 0 {
+            let tiles = Level0Cache::tiles_for(s.source_rect(out), src.size());
+            match cache.ensure(gpu, stages, src, &transform, key, &tiles) {
+                Ok(()) => {}
+                Err(Level0Error::Full { .. }) => {
+                    let pyramid = stages.pyramid().expect("built");
+                    s = plan_view_without_level0(src.size(), &pyramid.level_sizes(), o, view);
+                }
+                Err(Level0Error::Gpu(e)) => return Err(e),
+            }
+        }
+        let pyramid = stages.pyramid().expect("built");
+        self.sample_with(gpu, pyramid, (s.level == 0).then_some(&*cache), &s, out);
+        Ok(s)
+    }
+
+    /// Samples per `s` into an `out`-sized view: from `pyramid` for levels 1
+    /// and up, from `level0` (which must hold the tiles `s` reads) for 0.
+    pub fn sample_with(
+        &mut self,
+        gpu: &Gpu,
+        pyramid: &Pyramid,
+        level0: Option<&Level0Cache>,
+        s: &Sampling,
+        out: (u32, u32),
+    ) {
+        self.resize(gpu, out);
         let a = &s.affine;
+        let grid = level0.map_or((0, 0), |c| c.grid());
         let u = SampleUniforms {
             across: [a[0][0] as f32, a[0][1] as f32, a[0][2] as f32, 0.0],
             down: [a[1][0] as f32, a[1][1] as f32, a[1][2] as f32, 0.0],
             footprint: [s.footprint[0] as f32, s.footprint[1] as f32, 0.0, 0.0],
             sizes: [s.level_size.0, s.level_size.1, out.0, out.1],
+            grid: [grid.0, grid.1, 0, 0],
         };
         gpu.queue
             .write_buffer(&self.sample_uniforms, 0, bytemuck::bytes_of(&u));
-        let level = pyramid.level_view(s.level);
         let sampled = self
             .sampled
             .as_ref()
             .expect("resized")
             .create_view(&Default::default());
+        let level;
+        let (pass, source, table) = match (s.level, level0) {
+            (0, Some(cache)) => (&self.sample_level0, cache.atlas_view(), Some(cache.table())),
+            (0, None) => panic!("level 0 needs the tile cache"),
+            (l, _) => {
+                level = pyramid.level_view(l);
+                (&self.sample, &level, None)
+            }
+        };
+        let mut entries = vec![
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: self.sample_uniforms.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(source),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::TextureView(&sampled),
+            },
+        ];
+        if let Some(t) = table {
+            entries.push(wgpu::BindGroupEntry {
+                binding: 3,
+                resource: t.as_entire_binding(),
+            });
+        }
         let group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("view sample"),
-            layout: &self.sample.layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: self.sample_uniforms.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(&level),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::TextureView(&sampled),
-                },
-            ],
+            layout: &pass.layout,
+            entries: &entries,
         });
-        self.dispatch(gpu, &self.sample, &group, out);
-        s
+        self.dispatch(gpu, pass, &group, out);
     }
 
     /// Stage 9 from the sampled cache into the frame.
@@ -253,41 +336,12 @@ impl ViewStages {
 
     /// The sampled cache, RGB row by row: for tests.
     pub fn read_sampled(&self, gpu: &Gpu) -> Result<Vec<[f32; 3]>, GpuError> {
-        let (w, h) = self.size;
-        let row = padded_row(w, 8);
-        let buffer = readback(gpu, u64::from(row) * u64::from(h));
-        let mut encoder = gpu.device.create_command_encoder(&Default::default());
-        encoder.copy_texture_to_buffer(
-            wgpu::TexelCopyTextureInfo {
-                texture: self.sampled.as_ref().expect("sampled"),
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            wgpu::TexelCopyBufferInfo {
-                buffer: &buffer,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(row),
-                    rows_per_image: Some(h),
-                },
-            },
-            wgpu::Extent3d {
-                width: w,
-                height: h,
-                depth_or_array_layers: 1,
-            },
-        );
-        let bytes = map(gpu, encoder, &buffer)?;
-        let mut out = Vec::with_capacity((w * h) as usize);
-        for y in 0..h as usize {
-            let start = y * row as usize;
-            let line: &[u16] = bytemuck::cast_slice(&bytes[start..start + w as usize * 8]);
-            for px in line.as_chunks::<4>().0 {
-                out.push([0, 1, 2].map(|c| ::half::f16::from_bits(px[c]).to_f32()));
-            }
-        }
-        Ok(out)
+        read_rgba16f(
+            gpu,
+            self.sampled.as_ref().expect("sampled"),
+            (0, 0),
+            self.size,
+        )
     }
 
     /// The frame, RGBA8 row by row.
@@ -299,6 +353,53 @@ impl ViewStages {
         let bytes = map(gpu, encoder, &buffer)?;
         Ok(bytes.as_chunks::<4>().0.to_vec())
     }
+}
+
+/// A rectangle of an RGBA16F texture as RGB, row by row.
+pub(crate) fn read_rgba16f(
+    gpu: &Gpu,
+    texture: &wgpu::Texture,
+    origin: (u32, u32),
+    (w, h): (u32, u32),
+) -> Result<Vec<[f32; 3]>, GpuError> {
+    let row = padded_row(w, 8);
+    let buffer = readback(gpu, u64::from(row) * u64::from(h));
+    let mut encoder = gpu.device.create_command_encoder(&Default::default());
+    encoder.copy_texture_to_buffer(
+        wgpu::TexelCopyTextureInfo {
+            texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d {
+                x: origin.0,
+                y: origin.1,
+                z: 0,
+            },
+            aspect: wgpu::TextureAspect::All,
+        },
+        wgpu::TexelCopyBufferInfo {
+            buffer: &buffer,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(row),
+                rows_per_image: Some(h),
+            },
+        },
+        wgpu::Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 1,
+        },
+    );
+    let bytes = map(gpu, encoder, &buffer)?;
+    let mut out = Vec::with_capacity((w * h) as usize);
+    for y in 0..h as usize {
+        let start = y * row as usize;
+        let line: &[u16] = bytemuck::cast_slice(&bytes[start..start + w as usize * 8]);
+        for px in line.as_chunks::<4>().0 {
+            out.push([0, 1, 2].map(|c| ::half::f16::from_bits(px[c]).to_f32()));
+        }
+    }
+    Ok(out)
 }
 
 fn readback(gpu: &Gpu, size: u64) -> wgpu::Buffer {

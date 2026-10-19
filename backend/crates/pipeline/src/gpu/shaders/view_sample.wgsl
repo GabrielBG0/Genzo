@@ -2,6 +2,8 @@
 // reference::sampling computes it: each output pixel's center goes through
 // one affine into the chosen level, then a Lanczos-2 filter sized to the
 // remaining scale factor, separable along the level's axes, edges clamped.
+// `fetch` reads a texel: a pyramid level (view_fetch_pyramid.wgsl) or level
+// 0 through the tile cache (view_fetch_level0.wgsl).
 
 struct View {
     // Level coordinates of an output pixel's center: dot(row, (x, y, 1)).
@@ -12,10 +14,11 @@ struct View {
     footprint: vec4<f32>,
     // The level's width and height, the output's width and height.
     sizes: vec4<u32>,
+    // Level 0: cache tiles across the image, atlas slots across.
+    grid: vec4<u32>,
 }
 
 @group(0) @binding(0) var<uniform> view: View;
-@group(0) @binding(1) var level: texture_2d<f32>;
 @group(0) @binding(2) var sampled: texture_storage_2d<rgba16float, write>;
 
 const PI: f32 = 3.14159265358979;
@@ -67,7 +70,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         for (var i = 0; i < sx.y; i++) {
             let kx = lanczos2((f32(sx.x + i) + 0.5 - c.x) / f.x) / wx;
             let col = clamp(sx.x + i, 0, edge.x);
-            sum += ky * kx * textureLoad(level, vec2<i32>(col, row), 0).rgb;
+            sum += ky * kx * fetch(vec2<i32>(col, row));
         }
     }
     textureStore(sampled, vec2<i32>(id.xy), vec4<f32>(sum, 1.0));

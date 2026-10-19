@@ -5,6 +5,7 @@
 //! read back and leave through the tile protocol, so no surface (and no
 //! unsafe code) is needed.
 
+pub mod level0;
 pub mod raw_stages;
 pub mod spike;
 pub mod synthetic;
