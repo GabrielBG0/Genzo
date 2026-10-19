@@ -167,7 +167,18 @@ While a slider is dragged, white balance runs as a ratio after the cached demosa
 ### Stage 3: demosaic
 
 - **Bayer: RCD,** the M0 port of darktable's `demosaic_rcd.cl`, with the one documented change. It is checked against the CPU port of `rcd.c`.
-- **X-Trans: Markesteijn, 3 passes,** a WGSL port of darktable's `xtrans_markesteijn_interpolate`. It gets a literal CPU port as its test reference, like RCD. Interactive drags never re-demosaic, so the slower 3-pass variant only costs time on the settled render.
+- **X-Trans: Markesteijn, 3 passes,** a WGSL port of darktable's `xtrans_markesteijn_interpolate`. It gets a literal CPU port as its test reference, like RCD. Interactive drags never re-demosaic, so the slower 3-pass variant only costs time on the settled render (40 MP: 388 ms to the pyramid on the RTX 3060, against 43 ms for 48 MP of Bayer).
+  - **What is ported** (`tile_xtrans.wgsl`): darktable's OpenCL kernels (`demosaic_markesteijn.cl`), per pixel, in its host's order: 52 dispatches per tile. The steps after the multipass loop are fused.
+  - **Two semantic points:**
+    - The green min/max: the C code gives both pixels of a red/blue pair the first one's hexagon of greens, and the OpenCL kernel each pixel the union of both. They agree because a pair's pixels share their hexagon (tested).
+    - The border: darktable's C linear fill (`_vng_lininterpolate`) for the outer 17 px, where its OpenCL path uses VNG. The 1 px frame is an unweighted 3 × 3 same-color mean; the rest weights neighbors 2 across and 1 diagonally.
+  - **No pass reads what it writes,** so they run in place. An audit of every kernel's reads against its writes on the X-Trans pattern found none, and its control case is flagged.
+  - **Working set:** 188 B/px (59.2 MB at 560², measured). That is eight directional images and one scratch buffer reused in turn: the green min/max and the solitary-green state, then the derivatives, then the homogeneity sums. The homogeneity maps come on top. A tile set carries only its own demosaic's working set.
+  - **Checked:**
+    - The CPU port reproduces a synthetic scene (gradients mean 4e-4).
+    - It tracks LibRaw's own 3-pass Markesteijn (dcraw's, CIELab homogeneity) on Fujifilm X-T5 crops: median 0.03 %, 90th percentile 0.7 %, against 0.5 % and 4.5 % for a plain linear demosaic. The GPU's full render matches LibRaw as closely.
+    - The GPU equals itself tiled and untiled, bit for bit; a 12 px apron fails.
+    - Against the CPU port, the median difference is 0. The few values that move (29 on WARP, 94 on the RTX 3060) are values where the port itself moves when its input is nudged by 1e-7 to 3e-6: 100 % and 87 %.
 - **Linear DNG, monochrome planes and non-RAW** skip this stage. A monochrome plane is copied to R, G and B.
 - OpcodeList3 runs after the demosaic, on camera RGB, before the matrix.
 
@@ -328,7 +339,7 @@ Stages 1 to 4 run per tile, so full-resolution intermediates exist only for one 
 | Item | Size |
 |---|---|
 | Pyramid, levels 1 and up, RGBA16F (98 MB for level 1, plus a third: 130 MB; 132.3 MB as NVIDIA allocates it) | 133 MB |
-| Stage 1 to 4 scratch for one tile, intermediates included: Bayer 52 B/px × 1072² = 60 MB (the mosaic, seven RCD buffers, RGBA32F output; 64.2 MB on NVIDIA); X-Trans about 200 B/px × 560² = 63 MB | 65 MB |
+| Stage 1 to 4 scratch for one tile, intermediates included: Bayer 52 B/px × 1072² = 60 MB (the mosaic, seven RCD buffers, RGBA32F output; 64.2 MB on NVIDIA); X-Trans 188 B/px × 560² = 59 MB (59.2 MB measured; only one demosaic's set is allocated) | 65 MB |
 | Uploads: the raw tile texture (linear DNG, 3 × u16: 6.9 MB; 7.4 MB on NVIDIA) and the staging of the two tiles in flight (2 × 6.9 MB); 21.2 MB at the measured peak | 22 MB |
 | Level-0 tile cache at 1:1 (fixed cap; about 480 tiles of 256², five 2560 × 1440 views with their rings) | 256 MB |
 | Viewport stage caches (fixed cap; stage 4 sampled, stage 6, stage 7 at 2560 × 1920 RGBA16F, plus the base layer) | 128 MB |

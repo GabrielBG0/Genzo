@@ -18,6 +18,26 @@ pub enum RawError {
     Levels(String),
 }
 
+/// A color filter pattern from the stored image's first sample: the colors
+/// 0 red, 1 green, 2 blue.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Cfa {
+    /// At (row, col) (0, 0), (0, 1), (1, 0), (1, 1).
+    Bayer([u8; 4]),
+    /// Fujifilm's 6 x 6, row by row.
+    XTrans([[u8; 6]; 6]),
+}
+
+impl Cfa {
+    /// The color at stored (row, col).
+    pub fn color(&self, row: u32, col: u32) -> u8 {
+        match self {
+            Cfa::Bayer(b) => b[((row & 1) * 2 + (col & 1)) as usize],
+            Cfa::XTrans(x) => x[(row % 6) as usize][(col % 6) as usize],
+        }
+    }
+}
+
 /// A RAW image ready for stage 1.
 #[derive(Debug, Clone)]
 pub struct RawSource {
@@ -27,10 +47,8 @@ pub struct RawSource {
     pub samples: u32,
     /// Row by row, `samples` interleaved per pixel.
     pub data: Vec<u16>,
-    /// The Bayer pattern from the stored image's first sample, as the colors
-    /// (0 red, 1 green, 2 blue) at (row, col) (0, 0), (0, 1), (1, 0), (1, 1).
-    /// None for linear input.
-    pub bayer: Option<[u8; 4]>,
+    /// The color filter pattern; None for linear input.
+    pub cfa: Option<Cfa>,
     /// The ActiveArea, in stored coordinates. Stages 1 to 3 cover it.
     pub active: Rect,
     pub linearization: Linearization,
@@ -184,13 +202,23 @@ impl RawSource {
                 "{samples} samples per pixel"
             )));
         }
-        let bayer = match pattern {
-            Some(p) if p.width == 2 && p.height == 2 => {
-                Some([p.colors[0], p.colors[1], p.colors[2], p.colors[3]])
+        let cfa = match pattern {
+            Some(p) if p.width == 2 && p.height == 2 => Some(Cfa::Bayer([
+                p.colors[0],
+                p.colors[1],
+                p.colors[2],
+                p.colors[3],
+            ])),
+            Some(p) if p.width == 6 && p.height == 6 => {
+                let mut x = [[0u8; 6]; 6];
+                for (r, row) in x.iter_mut().enumerate() {
+                    row.copy_from_slice(&p.colors[r * 6..r * 6 + 6]);
+                }
+                Some(Cfa::XTrans(x))
             }
             Some(p) => {
                 return Err(RawError::Unsupported(format!(
-                    "a {}x{} color filter pattern (X-Trans comes with the Markesteijn demosaic)",
+                    "a {}x{} color filter pattern",
                     p.width, p.height
                 )));
             }
@@ -206,7 +234,7 @@ impl RawSource {
         let linearization = Linearization::new(&raw.levels, samples, size)?;
         let color = raw.color.clone();
         let OpcodePlan { list1, list2, .. } = raw.opcode_plan;
-        if bayer.is_none() && !list1.is_empty() {
+        if !matches!(cfa, Some(Cfa::Bayer(_))) && !list1.is_empty() {
             return Err(RawError::Unsupported(
                 "FixBadPixelsConstant on an image without a Bayer pattern".into(),
             ));
@@ -238,7 +266,7 @@ impl RawSource {
             stored,
             samples,
             data,
-            bayer,
+            cfa,
             active,
             linearization,
             fix_bad_pixels,
@@ -255,10 +283,11 @@ impl RawSource {
         )
     }
 
-    /// The color at active-area (row, col) of a Bayer image.
+    /// The color at active-area (row, col) of a mosaic.
     pub fn color_at(&self, row: u32, col: u32) -> Option<u8> {
-        let b = self.bayer?;
-        let (r, c) = (row + self.active.top, col + self.active.left);
-        Some(b[((r & 1) * 2 + (c & 1)) as usize])
+        Some(
+            self.cfa?
+                .color(row + self.active.top, col + self.active.left),
+        )
     }
 }

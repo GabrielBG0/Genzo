@@ -55,7 +55,7 @@ fn gpu_stage1_matches_the_sdk() {
         let got = stages.render(&gpu, &src, [1.0; 3], Until::Stage2).unwrap();
         // A monochrome or linear plane comes back as RGB; the SDK has the
         // file's planes.
-        let got: Vec<f32> = if src.bayer.is_none() && src.samples == 1 {
+        let got: Vec<f32> = if src.cfa.is_none() && src.samples == 1 {
             got.chunks(3).map(|c| c[0]).collect()
         } else {
             got

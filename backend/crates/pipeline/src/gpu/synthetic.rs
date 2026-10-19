@@ -99,7 +99,7 @@ pub fn scene_raw(width: u32, height: u32) -> crate::raw::RawSource {
         stored: (width, height),
         samples: 1,
         data: img.data,
-        bayer: Some(img.cfa),
+        cfa: Some(crate::raw::Cfa::Bayer(img.cfa)),
         active: Rect {
             top: 0,
             left: 0,
@@ -112,4 +112,36 @@ pub fn scene_raw(width: u32, height: u32) -> crate::raw::RawSource {
         gain_maps: Vec::new(),
         color: Default::default(),
     }
+}
+
+/// The Fujifilm X-T5's X-Trans pattern from its sensor origin (0 red,
+/// 1 green, 2 blue).
+pub const XTRANS: [[u8; 6]; 6] = [
+    [1, 1, 0, 1, 1, 2],
+    [1, 1, 2, 1, 1, 0],
+    [2, 0, 1, 0, 2, 1],
+    [1, 1, 2, 1, 1, 0],
+    [1, 1, 0, 1, 1, 2],
+    [0, 2, 1, 2, 0, 1],
+];
+
+/// [`scene_raw`] on an X-Trans sensor.
+pub fn scene_xtrans_raw(width: u32, height: u32) -> crate::raw::RawSource {
+    let mut src = scene_raw(width, height);
+    let to_working = genzo_color::mat_mul(
+        &genzo_color::invert(&genzo_color::WORKING_TO_XYZ).expect("invertible"),
+        &genzo_color::SRGB_TO_XYZ,
+    );
+    let range = f32::from(WHITE - BLACK);
+    for y in 0..height {
+        for x in 0..width {
+            let s = scene(x, y, width, height).map(f64::from);
+            let w = genzo_color::mul(&to_working, s);
+            let c = XTRANS[(y % 6) as usize][(x % 6) as usize];
+            let v = (w[usize::from(c)] as f32).clamp(0.0, 1.0);
+            src.data[(y * width + x) as usize] = BLACK + (v * range).round() as u16;
+        }
+    }
+    src.cfa = Some(crate::raw::Cfa::XTrans(XTRANS));
+    src
 }

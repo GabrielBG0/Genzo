@@ -3,7 +3,7 @@
 //! and every level 1 value is finite. The DNGs bring AnalogBalance (iPhone 16
 //! Pro), CameraCalibration (Galaxy S23 Ultra), GainMaps (Pixel 4a) and
 //! FixBadPixelsConstant (Leica Q2); the camera RAWs rawler's matrices and its
-//! white balance coefficients.
+//! white balance coefficients, the X-T5 the X-Trans demosaic.
 
 #[allow(dead_code)]
 mod sdk_stage2;
@@ -27,6 +27,8 @@ const KEYS: &[&str] = &[
     "raw/OM Digital Solutions/OM-3/P5048182.ORF",
     "raw/Nikon/D850/Nikon-D850-12bit-compressed.NEF",
     "raw/Kodak/DCS760C/86L57188.DCR",
+    // X-Trans, through Markesteijn.
+    "raw/Fujifilm/X-T5/DSCF0021.RAF",
 ];
 
 #[test]

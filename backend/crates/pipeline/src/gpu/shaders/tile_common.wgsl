@@ -33,6 +33,11 @@ struct Tile {
     // Offsets of the DeltaH and DeltaV tables in `black`, per plane: the
     // pattern starts at 0.
     deltas: vec4<u32>,
+    // The mosaic: 0 none (linear input), 1 Bayer (`bayer`), 2 X-Trans.
+    cfa: vec4<u32>,
+    // The X-Trans pattern from the stored origin, row by row, four colors
+    // per vec4.
+    xtrans: array<vec4<u32>, 9>,
 }
 
 @group(0) @binding(0) var<uniform> tile: Tile;
@@ -85,6 +90,10 @@ fn in_image(p: vec2<i32>) -> bool {
 // The CFA color at local `p`, from the stored image's phase.
 fn fc(p: vec2<i32>) -> u32 {
     let s = stored(p);
+    if (tile.cfa.x == 2u) {
+        let i = u32((s.y % 6) * 6 + s.x % 6);
+        return pick4u(tile.xtrans[i / 4u], i % 4u);
+    }
     return pick4u(tile.bayer, u32((s.y & 1) * 2 + (s.x & 1)));
 }
 
