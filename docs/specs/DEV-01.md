@@ -63,7 +63,7 @@ The order is fixed, as the spec sets it. The table shows which stages M1 builds 
   - ColorMatrix1 and 2 with their calibration illuminants;
   - ForwardMatrix1 and 2 when present;
   - the as-shot neutral or white balance coefficients (only the first three; the fourth is NaN on every body tested);
-  - BaselineExposure;
+  - BaselineExposure, plus the profile's BaselineExposureOffset (DNG tag 51109, default 0) when present, as the SDK's `TotalBaselineExposure` adds them. "BaselineExposure" below means this total. No corpus file carries the offset;
   - ShadowScale (DNG tag 50739, default 1), for the base curve's black (DEV-02);
   - the profile's ProfileToneCurve (50940), DefaultBlackRender (51110) and ColorimetricReference (50879), when present, for the base curve (DEV-02).
 - **The opcode lists** (1, 2 and 3), parsed into a typed list. Each opcode keeps its optional flag.
