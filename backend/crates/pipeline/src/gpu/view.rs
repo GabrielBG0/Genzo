@@ -114,6 +114,8 @@ pub struct ViewStages {
     toned: Option<wgpu::Texture>,
     colored: Option<wgpu::Texture>,
     latest: Latest,
+    /// Whether the stage 6 cache holds stage 6 of the current sampling.
+    toned_current: bool,
     frame: Option<wgpu::Buffer>,
     size: (u32, u32),
 }
@@ -186,6 +188,7 @@ impl ViewStages {
             toned: None,
             colored: None,
             latest: Latest::Sampled,
+            toned_current: false,
             frame: None,
             size: (0, 0),
         }
@@ -305,6 +308,7 @@ impl ViewStages {
     ) {
         self.resize(gpu, out);
         self.latest = Latest::Sampled;
+        self.toned_current = false;
         let a = &s.affine;
         let grid = level0.map_or((0, 0), |c| c.grid());
         let u = SampleUniforms {
@@ -447,14 +451,16 @@ impl ViewStages {
         });
         self.dispatch(gpu, &self.tone, &group, self.size);
         self.latest = Latest::Tone;
+        self.toned_current = true;
     }
 
     /// Stage 7 from the tone cache (the sampled cache when stage 6 did not
     /// run since the last sampling) into the color cache.
     pub fn color(&mut self, gpu: &Gpu, look: &Look) {
-        let input = match self.latest {
-            Latest::Sampled => self.sampled.as_ref(),
-            Latest::Tone | Latest::Color => self.toned.as_ref(),
+        let input = if self.toned_current {
+            self.toned.as_ref()
+        } else {
+            self.sampled.as_ref()
         }
         .expect("sample first")
         .create_view(&Default::default());

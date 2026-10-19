@@ -208,9 +208,23 @@ fn stages_run_from_the_latest_cache() {
         let want = stage7(s.map(f64::from), &mono);
         assert!(close(c[0], want[0]) && c[0] == c[1] && c[1] == c[2]);
     }
+    // Stage 7 again, still with no stage 6: from the sampled cache.
+    view.color(&gpu, &mono);
+    assert_eq!(view.read_latest(&gpu).unwrap(), colored);
     // A new sampling starts over from the sampled cache.
     view.sample(&gpu, p, 1, (100, 75));
     assert_eq!(view.read_latest(&gpu).unwrap(), sampled);
+    // Stage 6 of an earlier sampling is not reused: after tone, a new
+    // sampling, then stage 7 twice reads the new sampling.
+    let bright = Look {
+        exposure: 2.0,
+        ..Look::with_profile(Profile::GenzoLinear)
+    };
+    view.tone(&gpu, &bright, None);
+    view.sample(&gpu, p, 1, (100, 75));
+    view.color(&gpu, &mono);
+    view.color(&gpu, &mono);
+    assert_eq!(view.read_latest(&gpu).unwrap(), colored);
 }
 
 /// The comparison can fail: the test scene spans the tone range, and the
