@@ -11,7 +11,7 @@ use genzo_pipeline::budget;
 use genzo_pipeline::camera_color::camera_transform;
 use genzo_pipeline::gpu::raw_stages::{RawStages, TileConfig, pyramid_bytes};
 use genzo_pipeline::gpu::{AdapterChoice, Gpu, GpuError};
-use genzo_pipeline::raw::{Linearization, RawSource};
+use genzo_pipeline::raw::{Cfa, Linearization, RawSource};
 
 fn allocated(gpu: &Gpu) -> Option<u64> {
     gpu.device
@@ -39,6 +39,30 @@ fn measured(gpu: &Gpu) -> Option<[u64; 3]> {
 }
 
 const MB: f64 = 1e6;
+
+/// An X-Trans sensor's worth of samples (the X-T5's pattern).
+fn xtrans_source((w, h): (u32, u32)) -> RawSource {
+    let mut src = linear_source((w, h));
+    src.samples = 1;
+    src.data.truncate((w * h) as usize);
+    src.cfa = Some(Cfa::XTrans([
+        [1, 1, 0, 1, 1, 2],
+        [1, 1, 2, 1, 1, 0],
+        [2, 0, 1, 0, 2, 1],
+        [1, 1, 2, 1, 1, 0],
+        [1, 1, 0, 1, 1, 2],
+        [0, 2, 1, 2, 0, 1],
+    ]));
+    let levels = Levels {
+        black: vec![512.0],
+        black_repeat: (1, 1),
+        black_delta_h: Vec::new(),
+        black_delta_v: Vec::new(),
+        white: vec![16383],
+    };
+    src.linearization = Linearization::new(&levels, 1, (w, h)).unwrap();
+    src
+}
 
 /// A linear DNG's worth of samples, three per pixel: the largest upload.
 fn linear_source((w, h): (u32, u32)) -> RawSource {
@@ -78,22 +102,45 @@ fn a_48mp_edit_stays_within_the_budget() {
         }
         Err(e) => panic!("{e}"),
     };
-    // The self-test's and wgpu's own allocations are not the edit's.
-    let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
-    let before = allocated(&gpu);
     println!(
         "adapter: {} ({}); allocator report: {}",
         gpu.info.name,
         gpu.info.backend,
-        before.is_some()
+        allocated(&gpu).is_some()
     );
 
-    let size = (8064, 6048);
-    let src = linear_source(size);
+    // The largest upload (linear, three samples per pixel, 48 MP), then the
+    // largest working set (X-Trans, Markesteijn's 8 directional images). One
+    // full X-Trans tile shows that; 48 MP of it would take minutes on a
+    // software adapter.
+    for (name, make, size) in [
+        (
+            "linear",
+            linear_source as fn((u32, u32)) -> RawSource,
+            (8064, 6048),
+        ),
+        ("x-trans", xtrans_source, (1200, 1200)),
+    ] {
+        println!("{name}:");
+        // What is already allocated (the self-test's and wgpu's own, the
+        // previous case's freed memory) is not this edit's.
+        let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+        let before = allocated(&gpu);
+        within_budget(&gpu, before, make, size);
+    }
+}
+
+fn within_budget(
+    gpu: &Gpu,
+    before: Option<u64>,
+    make: fn((u32, u32)) -> RawSource,
+    size: (u32, u32),
+) {
+    let src = make(size);
     let t = camera_transform(&src.color, None);
-    let mut stages = RawStages::new(&gpu, TileConfig::default());
+    let mut stages = RawStages::new(gpu, TileConfig::default());
     stages.sample_memory = true;
-    let pyramid = stages.render_pyramid(&gpu, &src, &t).unwrap().bytes();
+    let pyramid = stages.render_pyramid(gpu, &src, &t).unwrap().bytes();
     let (scratch, upload) = (stages.scratch_bytes(), stages.upload_bytes());
     println!(
         "computed: pyramid {:.1} MB, tile scratch {:.1} MB, upload {:.1} MB",
@@ -108,8 +155,8 @@ fn a_48mp_edit_stays_within_the_budget() {
     let caps = budget::PYRAMID + budget::TILE_SCRATCH + budget::UPLOAD;
 
     let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
-    let first = allocated(&gpu);
-    if let Some(items) = measured(&gpu) {
+    let first = allocated(gpu);
+    if let Some(items) = measured(gpu) {
         let names = ["pyramid", "tile scratch", "upload"];
         let caps_each = [budget::PYRAMID, budget::TILE_SCRATCH, budget::UPLOAD];
         for ((name, got), cap) in names.iter().zip(items).zip(caps_each) {
@@ -144,10 +191,10 @@ fn a_48mp_edit_stays_within_the_budget() {
     }
 
     // A second photo replaces the first.
-    let src2 = linear_source(size);
-    stages.render_pyramid(&gpu, &src2, &t).unwrap();
+    let src2 = make(size);
+    stages.render_pyramid(gpu, &src2, &t).unwrap();
     let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
-    if let (Some(first), Some(second)) = (first, allocated(&gpu)) {
+    if let (Some(first), Some(second)) = (first, allocated(gpu)) {
         println!(
             "after a second photo: {:+.1} MB",
             (second as f64 - first as f64) / MB

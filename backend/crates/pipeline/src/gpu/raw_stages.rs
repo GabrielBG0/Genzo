@@ -44,10 +44,13 @@ impl Default for TileConfig {
     }
 }
 
+/// Per pixel of a 3 x 3 cell, its 8 hexagon offsets (x, y).
+pub type Hexagons = [[[(i32, i32); 8]; 3]; 3];
+
 /// The green hexagon around each pixel of a 3 x 3 cell of an X-Trans
 /// pattern (from its origin) as (x, y) offsets, and the solitary green's
 /// (x, y) in the cell: darktable's `allhex` and `sgrow`/`sgcol`.
-pub fn xtrans_hexagons(x: &[[u8; 6]; 6]) -> ([[[(i32, i32); 8]; 3]; 3], (i32, i32)) {
+pub fn xtrans_hexagons(x: &[[u8; 6]; 6]) -> (Hexagons, (i32, i32)) {
     const ORTH: [i32; 12] = [1, 0, 0, 1, -1, 0, 0, -1, 1, 0, 0, 1];
     const PATT: [[i32; 16]; 2] = [
         [0, 1, 0, -1, 2, 0, -1, 0, 1, 1, 1, -1, 0, 0, 0, 0],
@@ -73,7 +76,7 @@ pub fn xtrans_hexagons(x: &[[u8; 6]; 6]) -> ([[[(i32, i32); 8]; 3]; 3], (i32, i3
                     for c in 0..8 {
                         let v = ORTH[d] * PATT[g][c * 2] + ORTH[d + 1] * PATT[g][c * 2 + 1];
                         let h = ORTH[d + 2] * PATT[g][c * 2] + ORTH[d + 3] * PATT[g][c * 2 + 1];
-                        hex[row as usize][col as usize][c ^ (g * 2 & d)] = (h, v);
+                        hex[row as usize][col as usize][c ^ ((g * 2) & d)] = (h, v);
                     }
                 }
             }

@@ -364,7 +364,9 @@ fn gpu_matches_the_cpu_port() {
     // values above 1 %, 29 of 29 on WARP and 82 of 94 on the RTX 3060 are
     // such values (208 of them); 80 % must be.
     let mut sensitive = vec![false; want.len() * 3];
-    for nudge in [1e-7f32, -1e-7, 3e-7, -3e-7, 5e-7, -5e-7, 1e-6, -1e-6, 2e-6, -2e-6, 3e-6, -3e-6] {
+    for nudge in [
+        1e-7f32, -1e-7, 3e-7, -3e-7, 5e-7, -5e-7, 1e-6, -1e-6, 2e-6, -2e-6, 3e-6, -3e-6,
+    ] {
         let nudged: Vec<f32> = cfa.iter().map(|v| v * (1.0 + nudge)).collect();
         let again = markesteijn(&nudged, W as usize, H as usize, &active);
         for (i, (p, q)) in want.iter().zip(&again).enumerate() {
@@ -388,4 +390,107 @@ fn gpu_matches_the_cpu_port() {
         "{explained} of {}",
         gpu_flips.len()
     );
+}
+
+/// One of LibRaw's crops: sensor (x, y), size and RGB, white at 1.
+type Crop = ((usize, usize), (usize, usize), Vec<[f32; 3]>);
+
+fn libraw_crops() -> Vec<Crop> {
+    let bytes = std::fs::read(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/libraw-xt5-markesteijn.bin"
+    ))
+    .unwrap();
+    assert_eq!(&bytes[..4], b"GZX1");
+    let u32_at = |i: usize| u32::from_le_bytes(bytes[i..i + 4].try_into().unwrap()) as usize;
+    let mut at = 8;
+    let mut crops = Vec::new();
+    for _ in 0..u32_at(4) {
+        let (x, y, w, h) = (u32_at(at), u32_at(at + 4), u32_at(at + 8), u32_at(at + 12));
+        at += 16;
+        let rgb = (0..w * h)
+            .map(|i| {
+                [0, 1, 2].map(|c| {
+                    let j = at + (i * 3 + c) * 2;
+                    f32::from(u16::from_le_bytes([bytes[j], bytes[j + 1]])) / 65535.0
+                })
+            })
+            .collect();
+        at += w * h * 6;
+        crops.push(((x, y), (w, h), rgb));
+    }
+    crops
+}
+
+/// The GPU's own render of the X-T5 (stages 1 to 3, no white balance)
+/// against LibRaw, with the CPU port's bounds (the_cpu_port_tracks_libraw).
+#[test]
+fn gpu_tracks_libraw_on_the_xt5() {
+    use genzo_imgio::{DecodeOptions, decode};
+    let Some((_lock, gpu)) = gpu() else { return };
+    let Some(path) = genzo_golden::corpus("raw/Fujifilm/X-T5/DSCF0021.RAF") else {
+        return;
+    };
+    let img = decode(&std::fs::read(path).unwrap(), DecodeOptions::default()).unwrap();
+    let src = RawSource::from_decoded(img).unwrap();
+    assert_eq!(src.cfa, Some(Cfa::XTrans(XT5)));
+    let rgb = RawStages::new(&gpu, TileConfig::default())
+        .render(&gpu, &src, [1.0; 3], Until::Stage3)
+        .unwrap();
+    let width = src.size().0 as usize;
+    let (left, top) = (src.active.left as usize, src.active.top as usize);
+    let mut d = Vec::new();
+    for ((x0, y0), (w, h), theirs) in libraw_crops() {
+        for y in 0..h {
+            for x in 0..w {
+                let i = (y0 + y - top) * width + (x0 + x - left);
+                let q = theirs[y * w + x];
+                for c in 0..3 {
+                    if q[c] > 0.02 && q[c] < 0.98 {
+                        d.push((rgb[i * 3 + c] - q[c]).abs() / q[c]);
+                    }
+                }
+            }
+        }
+    }
+    d.sort_by(f32::total_cmp);
+    let q = |f: f64| d[((d.len() - 1) as f64 * f) as usize];
+    println!(
+        "GPU vs LibRaw: median {:.4}, 90 % {:.4}, 99 % {:.4} ({} values)",
+        q(0.5),
+        q(0.9),
+        q(0.99),
+        d.len()
+    );
+    assert!(q(0.5) < 0.002 && q(0.9) < 0.0112, "{} {}", q(0.5), q(0.9));
+}
+
+/// The stored golden of the X-Trans path, stages 1 to 3 (camera RGB after
+/// Markesteijn), tiled, on the synthetic sensor. Written on lavapipe.
+#[test]
+fn golden_xtrans_stages() {
+    let Some((_lock, gpu)) = gpu() else { return };
+    let rgb = render(&gpu, SMALL, &xtrans_sensor());
+    let case = genzo_golden::Case::new(
+        env!("CARGO_MANIFEST_DIR"),
+        "raw-stages/synthetic-xtrans",
+        genzo_golden::Space::Linear(genzo_golden::View::IDENTITY),
+        genzo_golden::Producer::Gpu {
+            adapter: gpu.info.name.clone(),
+        },
+    )
+    // As for RCD: direction choices that flip between adapters with and
+    // without fused multiply-adds move a few pixels a lot (see
+    // gpu_matches_the_cpu_port), so only the maximum is loosened. Measured,
+    // WARP against the RTX 3060: PSNR 70.0 dB, ΔE mean 0.004, p99 0.032,
+    // 0.05 % of pixels above ΔE 1, and a max of 15.2 where a flip lands in
+    // a dark saturated pixel (0.048 in linear terms).
+    .with_tolerance(genzo_golden::Tolerance {
+        mean_de: 0.05,
+        max_de: 20.0,
+        min_psnr_db: 65.0,
+        max_abs: None,
+    });
+    let pixels = rgb.chunks(3).map(|c| [c[0], c[1], c[2]]).collect();
+    genzo_golden::check(&case, &genzo_golden::Image::new(W, H, pixels));
 }

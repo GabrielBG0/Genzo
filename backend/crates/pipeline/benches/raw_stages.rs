@@ -15,7 +15,7 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use genzo_pipeline::camera_color::camera_transform;
 use genzo_pipeline::gpu::raw_stages::{RawStages, TileConfig, Until};
-use genzo_pipeline::gpu::synthetic::scene_raw;
+use genzo_pipeline::gpu::synthetic::{scene_raw, scene_xtrans_raw};
 use genzo_pipeline::gpu::{AdapterChoice, Gpu};
 
 fn stages(c: &mut Criterion) {
@@ -50,8 +50,17 @@ fn pyramid(c: &mut Criterion) {
     };
     let mut group = c.benchmark_group(format!("pyramid on {}", gpu.info.name));
     group.sample_size(10);
-    for (name, size) in [("12MP", (4032, 3024)), ("48MP", (8064, 6048))] {
-        let src = scene_raw(size.0, size.1);
+    for (name, size, xtrans) in [
+        ("12MP", (4032, 3024), false),
+        ("48MP", (8064, 6048), false),
+        // The X-T5's 40 MP, through Markesteijn.
+        ("X-Trans 40MP", (7872, 5196), true),
+    ] {
+        let src = if xtrans {
+            scene_xtrans_raw(size.0, size.1)
+        } else {
+            scene_raw(size.0, size.1)
+        };
         let mut t = camera_transform(&src.color, None);
         t.multipliers = [2.0, 1.0, 1.5];
         let mut stages = RawStages::new(&gpu, TileConfig::default());

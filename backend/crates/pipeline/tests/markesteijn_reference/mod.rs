@@ -12,6 +12,12 @@
 //! included, followed by the linear border fill of `_vng_lininterpolate`.
 //! Test-only: it checks the WGSL port.
 
+// The loops follow the C code's index by index, on purpose.
+#![allow(clippy::needless_range_loop)]
+
+/// Per pixel of a 3 x 3 cell, its 8 hexagon offsets (h + v * TS).
+pub type Hexagons = [[[i64; 8]; 3]; 3];
+
 const TS: i64 = 122;
 const PAD_G1_G3: i64 = 3;
 const PAD_G_INTERP: i64 = 3;
@@ -27,7 +33,7 @@ fn fc(row: i64, col: i64, xtrans: &[[u8; 6]; 6]) -> usize {
 
 /// The green hexagon around each pixel of a 3 x 3 cell, as tile offsets
 /// (h + v * TS), and the solitary green's position.
-pub fn hexagons(xtrans: &[[u8; 6]; 6]) -> ([[[i64; 8]; 3]; 3], (i64, i64)) {
+pub fn hexagons(xtrans: &[[u8; 6]; 6]) -> (Hexagons, (i64, i64)) {
     const ORTH: [i64; 12] = [1, 0, 0, 1, -1, 0, 0, -1, 1, 0, 0, 1];
     const PATT: [[i64; 16]; 2] = [
         [0, 1, 0, -1, 2, 0, -1, 0, 1, 1, 1, -1, 0, 0, 0, 0],
@@ -54,7 +60,7 @@ pub fn hexagons(xtrans: &[[u8; 6]; 6]) -> ([[[i64; 8]; 3]; 3], (i64, i64)) {
                     for c in 0..8 {
                         let v = ORTH[d] * PATT[g][c * 2] + ORTH[d + 1] * PATT[g][c * 2 + 1];
                         let h = ORTH[d + 2] * PATT[g][c * 2] + ORTH[d + 3] * PATT[g][c * 2 + 1];
-                        let k = c ^ (g * 2 & d);
+                        let k = c ^ ((g * 2) & d);
                         allhex[row as usize][col as usize][k] = h + v * TS;
                     }
                 }
