@@ -42,3 +42,7 @@ harness = false
 [[bench]]
 name = "view"
 harness = false
+
+[[bench]]
+name = "level0"
+harness = false

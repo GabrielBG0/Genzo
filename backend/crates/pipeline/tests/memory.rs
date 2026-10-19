@@ -261,3 +261,50 @@ fn the_view_stays_within_its_caps() {
         );
     }
 }
+
+/// The level-0 tile cache: its atlas within DEV-01's 256 MB line as the
+/// driver allocates it, and nothing more while tiles render into it.
+#[test]
+fn the_level0_cache_stays_within_its_cap() {
+    use genzo_pipeline::gpu::level0::Level0Cache;
+    let gpu = match Gpu::open(AdapterChoice::from_env()) {
+        Ok(gpu) => gpu,
+        Err(GpuError::NoAdapter) if std::env::var("GENZO_REQUIRE_GPU").as_deref() != Ok("1") => {
+            eprintln!("skipped: no GPU adapter");
+            return;
+        }
+        Err(e) => panic!("{e}"),
+    };
+    let src = encoded_source((2048, 1536));
+    let t = encoded_transform(src.encoding.as_ref().unwrap());
+    let mut stages = RawStages::new(&gpu, TileConfig::default());
+    // The tile set exists before the cache, so what is measured is the
+    // atlas and its table.
+    stages.render_pyramid(&gpu, &src, &t).unwrap();
+    let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+    let before = allocated(&gpu);
+    let mut cache = Level0Cache::new(&gpu);
+    let whole = genzo_model::frame::Rect {
+        x: 0,
+        y: 0,
+        width: 2048,
+        height: 1536,
+    };
+    let tiles = Level0Cache::tiles_for(whole, (2048, 1536));
+    cache
+        .ensure(&gpu, &mut stages, &src, &t, 1, &tiles)
+        .unwrap();
+    let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+    println!(
+        "computed: atlas {:.1} MB, {} slots (cap {:.0} MB)",
+        cache.bytes() as f64 / MB,
+        cache.slots(),
+        budget::LEVEL0_CACHE as f64 / MB
+    );
+    assert!(cache.bytes() <= budget::LEVEL0_CACHE);
+    if let (Some(before), Some(after)) = (before, allocated(&gpu)) {
+        let used = after - before;
+        println!("measured: {:.1} MB for the cache", used as f64 / MB);
+        assert!(used <= budget::LEVEL0_CACHE, "{used} bytes");
+    }
+}

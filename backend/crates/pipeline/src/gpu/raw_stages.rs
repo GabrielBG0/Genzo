@@ -22,7 +22,7 @@ use super::{Gpu, GpuError};
 use crate::camera_color::CameraTransform;
 use crate::raw::{Cfa, RawSource};
 use crate::reference::stages::{DESATURATE_FROM, half, luminance_row};
-use crate::tiles::{TileJob, jobs};
+use crate::tiles::{TileJob, jobs_in};
 
 const WG: u32 = 16;
 
@@ -521,6 +521,7 @@ struct Passes {
     rb: Pass,
     rcd_final: Pass,
     stage4: Pass,
+    stage4_full: Pass,
     downsample: Pass,
     /// Markesteijn: one layout, one pipeline per entry point (XSTEPS).
     xtrans_layout: wgpu::BindGroupLayout,
@@ -606,8 +607,20 @@ impl Passes {
             stage4: pass(
                 device,
                 "tile stage 4",
-                include_str!("shaders/tile_stage4.wgsl"),
+                concat!(
+                    include_str!("shaders/tile_stage4_fn.wgsl"),
+                    include_str!("shaders/tile_stage4.wgsl")
+                ),
                 &[Uniform, Float, Store(Rgba16Float)],
+            ),
+            stage4_full: pass(
+                device,
+                "tile stage 4, full resolution",
+                concat!(
+                    include_str!("shaders/tile_stage4_fn.wgsl"),
+                    include_str!("shaders/tile_stage4_full.wgsl")
+                ),
+                &[Uniform, Float, Store(Rgba16Float), Storage],
             ),
             downsample: pass_with(
                 device,
@@ -923,6 +936,19 @@ impl RawStages {
     /// The tiles of `src`, with the per-tile resources allocated to fit.
     fn prepare(&mut self, gpu: &Gpu, src: &RawSource) -> Vec<TileJob> {
         let (w, h) = src.size();
+        let all = Rect {
+            x: 0,
+            y: 0,
+            width: w,
+            height: h,
+        };
+        self.prepare_in(gpu, src, all)
+    }
+
+    /// The tiles of `region` (active-area coordinates, even origin), with
+    /// the per-tile resources allocated to fit.
+    fn prepare_in(&mut self, gpu: &Gpu, src: &RawSource, region: Rect) -> Vec<TileJob> {
+        let (w, h) = src.size();
         let margin = if src.fix_bad_pixels.is_empty() {
             0
         } else {
@@ -934,7 +960,8 @@ impl RawStages {
         } else {
             self.config.tile
         };
-        let jobs = jobs(
+        let jobs = jobs_in(
+            region,
             (w, h),
             (src.active.left, src.active.top),
             src.stored,
@@ -1594,5 +1621,117 @@ impl RawStages {
             transform: transform.clone(),
             encoding: src.encoding.clone(),
         }))
+    }
+}
+
+/// Where level-0 tiles go: an RGBA16F atlas of 256 px slots and the table
+/// from each cache tile of the image to its slot (`gpu::level0`).
+pub(crate) struct Level0Target<'a> {
+    pub atlas: &'a wgpu::TextureView,
+    pub slots: &'a wgpu::Buffer,
+    /// Cache tiles across the image, slots across the atlas.
+    pub tiles_across: u32,
+    pub slots_across: u32,
+}
+
+impl RawStages {
+    /// Stages 1 to 4 at full resolution over `region` (active-area
+    /// coordinates, on the 256 px cache grid), each pixel written to its
+    /// cache tile's slot when it has one (DEV-01, At 1:1). The tiles are the
+    /// configured ones, so a region renders as the whole image would.
+    pub(crate) fn render_level0(
+        &mut self,
+        gpu: &Gpu,
+        src: &RawSource,
+        transform: &CameraTransform,
+        region: Rect,
+        target: &Level0Target,
+    ) -> Result<(), GpuError> {
+        let jobs = self.prepare_in(gpu, src, region);
+        let image = self.upload_image(gpu, src);
+        let m = transform.matrix;
+        let mm = transform.multipliers;
+        let clip = mm[0].min(mm[1]).min(mm[2]);
+        let luma = luminance_row();
+        let rgb = view(&self.tiles.as_ref().expect("prepared").rgb);
+        let device = &gpu.device;
+        let mut in_flight = VecDeque::new();
+        for job in &jobs {
+            if in_flight.len() >= IN_FLIGHT {
+                let oldest = in_flight.pop_front();
+                device
+                    .poll(wgpu::PollType::Wait {
+                        submission_index: oldest,
+                        timeout: None,
+                    })
+                    .map_err(|e| GpuError::Request(e.to_string()))?;
+            }
+            let mut encoder = self.encode_tile(gpu, src, &image, job, mm, true);
+            let o = job.out;
+            let u = Stage4Uniforms {
+                m: m.map(|r| [r[0], r[1], r[2], 0.0]),
+                luma: [luma[0], luma[1], luma[2], 0.0],
+                params: [
+                    transform.exposure,
+                    clip,
+                    DESATURATE_FROM,
+                    if transform.highlight_desaturation {
+                        1.0
+                    } else {
+                        0.0
+                    },
+                ],
+                texels: [o.x, o.y, o.width, o.height],
+                level: [target.tiles_across, target.slots_across, 0, 0],
+            };
+            gpu.queue
+                .write_buffer(&self.stage4_uniforms, 0, bytemuck::bytes_of(&u));
+            let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("stage 4, full resolution"),
+                layout: &self.passes.stage4_full.layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: self.uniforms.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: self.stage4_uniforms.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::TextureView(&rgb),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::TextureView(target.atlas),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: target.slots.as_entire_binding(),
+                    },
+                ],
+            });
+            {
+                let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("stage 4, full resolution"),
+                    timestamp_writes: None,
+                });
+                cpass.set_pipeline(&self.passes.stage4_full.pipeline);
+                cpass.set_bind_group(0, &group, &[]);
+                cpass.dispatch_workgroups(o.width.div_ceil(WG), o.height.div_ceil(WG), 1);
+            }
+            in_flight.push_back(gpu.queue.submit([encoder.finish()]));
+            if self.sample_memory
+                && let Some(r) = device.generate_allocator_report()
+            {
+                let peak = self.peak_allocated.get_or_insert(0);
+                *peak = (*peak).max(r.total_allocated_bytes);
+            }
+        }
+        device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .map_err(|e| GpuError::Request(e.to_string()))?;
+        Ok(())
     }
 }

@@ -284,7 +284,8 @@ Geometry changes which source pixel lands where. It changes no pixel values in M
 - **How** (`reference::sampling`, `gpu::view`): output pixel centers go through one affine into the level's texels: the file's orientation and the scale now, with the edit's turns, flip and crop composed in later. The filter is separable along the level's axes, edges clamped. It takes at most 8 taps per axis while the view is at least half the chosen level on that axis, as at Fit; a view smaller than the smallest level (a thumbnail) or of another aspect ratio takes about 4 per level texel it covers.
 - An integer distance other than 0 weighs exactly 0, so a view the size of a level is an exact copy, in every orientation.
 - The result is the "stage 4 sampled" viewport cache (RGBA16F, the size of the view). Stages 6 and 7 read it, and stage 9 writes the RGBA8 frame from what they leave.
-- **A Fit view larger than level 1** (a 12 MP photo, level 1 2016 px wide, on a 2560 px view) is rendered from level-0 tiles, as at 1:1 (decided 2026-10-19). Until those tiles exist (plan step 6), it is upsampled from level 1, which loses detail.
+- **A Fit view larger than level 1** (a 12 MP photo, level 1 2016 px wide, on a 2560 px view) is rendered from level-0 tiles, as at 1:1 (decided 2026-10-19). Such a photo runs stages 1 to 3 twice, once for the pyramid and once for level 0 (about 10 ms each at 12 MP on the RTX 3060). Deriving level 1 from the level-0 tiles instead would change the pyramid's goldens; it is a possible later optimization.
+- **A view is Fit or a region** (`ViewSpec`): a region has the view's size, a zoom (view pixels per image pixel; 1 is 1:1) and an origin in shown-image pixels. The level is the smallest whose texels per image pixel reach the zoom, so 1:1 and past read level 0. At 1:1 every scale in the affine is exactly 1, so the view is an exact copy of level 0 at any integer pan, in every orientation.
 
 ### Stage 6 (M1 part): exposure and tone
 
@@ -361,6 +362,19 @@ Stages 1 to 4 run per tile, so full-resolution intermediates exist only for one 
   - At 1:1 they are cached in an LRU with a fixed byte cap.
   - Order: visible tiles first, then a ring of one tile around them.
   - Export streams tiles through the whole pipeline and keeps none.
+  - **How** (`gpu::level0`):
+    - The tiles live in one RGBA16F atlas of 256 px slots. Its size comes from the cap and the device's largest texture: 32 × 14 slots (448) on an 8192 px device, 234.9 MB, measured the same on NVIDIA.
+    - A table maps each cache tile of the image to its slot. Stage 4's full-resolution pass (`tile_stage4_full.wgsl`, sharing `stage4()` with the pyramid's reduction) writes through it, and the sampler reads through it.
+    - Missing tiles are rendered as one region at the configured tile sizes (1024 px, 512 for X-Trans), not tile by tile. A tile's pixels do not depend on where its job starts, X-Trans phases included, so a region renders as the whole image would.
+    - The cache is keyed by the photo and every input of stages 1 to 4; a new key empties it. Tiles a view asks for at once are never evicted for each other. A view needing more tiles than there are slots falls back to level 1, upsampled.
+  - **Tests** (`pipeline/tests/level0.rs`):
+    - Each tile matches the CPU's stage 4 on the GPU's stage 3 within one f16 step, for Bayer, X-Trans, linear and non-RAW sources.
+    - A tile is the same, bit for bit, rendered alone, with others, or after evictions in a 4-slot cache.
+    - 1:1 is an exact copy of level 0, in every orientation, at pans that put tile boundaries inside the view.
+    - Criterion 6: a 3000 × 2000 image at 1:1 across 1024 px tile boundaries gives the same frame with 1024 px tiles and as one tile.
+    - Criterion 7 at default edits: Fit against 1:1 averaged down, mean ΔE2000 0.70.
+    - Criterion 8 per pixel at 1:1, on the decoder's own fixtures (JPEG, PNG, 16-bit TIFF and PNG, gray, an lcms2 ICC profile, Display P3 by cICP and the NCLX HEIC into a P3 frame): within 1 code each.
+  - **Bench** (RTX 3060, a 2560 × 1440 view at 1:1, tiles rendered, sampled and through stage 9): Bayer 48 MP 5.9 ms cold and 2.5 ms for a 256 px pan; X-Trans 40 MP 47 ms cold and 6.6 ms. Criterion 14 asks under 100 ms.
 - **GPU memory for one 48 MP edit** (8064 × 6048) has the following worst case. The memory-accounting test asserts the total. Each cap is a fixed constant that the test checks (`pipeline::budget`, `pipeline/tests/memory.rs`). The caps hold the sizes as drivers allocate them: NVIDIA's Vulkan driver pads textures by up to 7 % (measured 2026-10-18), and WARP allocates the exact sizes. The test measures what is allocated where the backend reports it (Vulkan and DX12 do), after the render and at its peak, sampled after each tile's submit while uploads are still staged.
 
 | Item | Size |
@@ -368,7 +382,7 @@ Stages 1 to 4 run per tile, so full-resolution intermediates exist only for one 
 | Pyramid, levels 1 and up, RGBA16F (98 MB for level 1, plus a third: 130 MB; 132.3 MB as NVIDIA allocates it) | 133 MB |
 | Stage 1 to 4 scratch for one tile, intermediates included: Bayer 52 B/px × 1072² = 60 MB (the mosaic, seven RCD buffers, RGBA32F output; 64.2 MB on NVIDIA); X-Trans 188 B/px × 560² = 59 MB (59.2 MB measured; only one demosaic's set is allocated) | 65 MB |
 | Uploads: the raw tile texture (linear DNG, 3 × u16: 6.9 MB; 7.4 MB on NVIDIA) and the staging of the two tiles in flight (2 × 6.9 MB); 21.2 MB at the measured peak | 22 MB |
-| Level-0 tile cache at 1:1 (fixed cap; about 480 tiles of 256², five 2560 × 1440 views with their rings) | 256 MB |
+| Level-0 tile cache at 1:1 (fixed cap; 448 tiles of 256² in one atlas, 234.9 MB measured; about three 2560 × 1440 views with their rings, 120 tiles each) | 256 MB |
 | Viewport stage caches (fixed cap; stage 4 sampled, stage 6, stage 7 at 2560 × 1920 RGBA16F, plus the base layer) | 128 MB |
 | Output frame and two persistent readback buffers, RGBA8 | 60 MB |
 | Histogram and clipping masks | 10 MB |
