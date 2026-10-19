@@ -308,6 +308,7 @@ fn pixel4a_color() -> CameraColor {
         analog_balance: v("analog_balance"),
         as_shot: Some(AsShot::Neutral([n[0], n[1], n[2]])),
         baseline_exposure: 0.4,
+        ..CameraColor::default()
     }
 }
 
