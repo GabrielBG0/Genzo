@@ -423,3 +423,57 @@ fn opcode_plans_follow_the_m1_rules() {
         }
     }
 }
+
+/// LibRaw's black level of each site of the top-left 2 × 2 of the sensor
+/// (scripts/cfa-reference.py, "black from (0,0)"), for the files whose sites
+/// differ; every other corpus file has one black level for all sites, also
+/// checked here. Genzo's pattern starts at the active area, so it is shifted
+/// back to the sensor origin first.
+const LIBRAW_BLACK: &[(&str, [[f64; 2]; 2])] = &[
+    (
+        "raw/OM Digital Solutions/OM-3/P5048182.ORF",
+        [[255.0, 254.0], [255.0, 255.0]],
+    ),
+    (
+        "raw/Google/Pixel 4a/PXL_20201121_100251397.dng",
+        [[1023.0, 1023.0], [1022.0, 1022.0]],
+    ),
+    ("raw/Canon/Canon EOS R5m2/APS-C_CRAW.CR3", [[512.0; 2]; 2]),
+    ("raw/Fujifilm/X-T5/DSCF0021.RAF", [[1020.0; 2]; 2]),
+    (
+        "raw/Nikon/D850/Nikon-D850-12bit-compressed.NEF",
+        [[100.0; 2]; 2],
+    ),
+    (
+        "raw/Olympus/E-M1MarkII/Olympus_EM1mk2_Standard_20MP.ORF",
+        [[255.0; 2]; 2],
+    ),
+    (
+        "raw/Sony/ILCE-7RM5/7RM5-LosslessCompressedLarge.ARW",
+        [[512.0; 2]; 2],
+    ),
+];
+
+#[test]
+fn black_levels_match_libraw() {
+    for &(key, want) in LIBRAW_BLACK {
+        let Some(bytes) = file(key) else { continue };
+        let img = decode(&bytes, DecodeOptions::default()).unwrap();
+        let Pixels::Cfa { raw, .. } = &img.pixels else {
+            panic!("{key}: expected a CFA mosaic");
+        };
+        let l = &raw.levels;
+        let (rows, cols) = (usize::from(l.black_repeat.0), usize::from(l.black_repeat.1));
+        let (top, left) = raw
+            .active_area
+            .map_or((0, 0), |a| (a.top as usize, a.left as usize));
+        for (y, row) in want.iter().enumerate() {
+            for (x, &want) in row.iter().enumerate() {
+                // Sensor site (y, x) is pattern site (y - top, x - left).
+                let r = (y + rows * top - top) % rows;
+                let c = (x + cols * left - left) % cols;
+                assert_eq!(l.black[r * cols + c], want, "{key}: site ({y}, {x})");
+            }
+        }
+    }
+}

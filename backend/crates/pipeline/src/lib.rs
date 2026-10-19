@@ -7,6 +7,7 @@
 
 pub mod camera_color;
 pub mod gpu;
+pub mod raw;
 pub mod reference;
 pub mod test_pattern;
 pub mod tiles;

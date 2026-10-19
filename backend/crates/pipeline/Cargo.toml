@@ -30,3 +30,7 @@ genzo-imgio = { workspace = true, features = ["raw"] }
 [[bench]]
 name = "spike"
 harness = false
+
+[[bench]]
+name = "raw_stages"
+harness = false

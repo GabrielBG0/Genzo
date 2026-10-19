@@ -1,0 +1,44 @@
+[
+ {
+  "name": "pixel4a",
+  "key": "raw/Google/Pixel 4a/PXL_20201121_100251397.dng",
+  "width": 4032,
+  "height": 3024,
+  "planes": 1
+ },
+ {
+  "name": "leica-q2",
+  "key": "raw/Leica/Q2/L1000750.DNG",
+  "width": 8392,
+  "height": 5632,
+  "planes": 1
+ },
+ {
+  "name": "pentax-k10d",
+  "key": "raw/Pentax/K10D/IMGP5398.DNG",
+  "width": 3936,
+  "height": 2624,
+  "planes": 1
+ },
+ {
+  "name": "halide-iphone16pro",
+  "key": "bayer-dng/iphone/Halide_iPhone16Pro_bayer.dng",
+  "width": 4032,
+  "height": 3024,
+  "planes": 1
+ },
+ {
+  "name": "galaxy-s23-ultra",
+  "key": "raw/Samsung/Galaxy S23 Ultra/20230817_120455.dng",
+  "width": 3648,
+  "height": 2736,
+  "planes": 3
+ },
+ {
+  "name": "iphone12pro",
+  "key": "raw/Apple/iPhone 12 Pro/IMG_1361.DNG",
+  "width": 4032,
+  "height": 3024,
+  "planes": 3
+ }
+]
