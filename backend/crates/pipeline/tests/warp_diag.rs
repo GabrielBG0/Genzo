@@ -18,7 +18,8 @@ fn warp_diagnostics() {
         return;
     };
     eprintln!("diag adapter: {} ({})", gpu.info.name, gpu.info.backend);
-    gpu.device.on_uncaptured_error(Arc::new(|e| eprintln!("diag uncaptured: {e}")));
+    gpu.device
+        .on_uncaptured_error(Arc::new(|e| eprintln!("diag uncaptured: {e}")));
     gpu.device
         .set_device_lost_callback(|r, m| eprintln!("diag device lost: {r:?}: {m}"));
     let poll = |gpu: &Gpu, step: &str| {
@@ -35,16 +36,32 @@ fn warp_diagnostics() {
     poll(&gpu, "view new");
     view.sample(&gpu, p, 1, (100, 75));
     poll(&gpu, "sample");
-    eprintln!("diag read sampled: {:?}", view.read_latest(&gpu).map(|v| v.len()));
+    eprintln!(
+        "diag read sampled: {:?}",
+        view.read_latest(&gpu).map(|v| v.len())
+    );
     let linear = Look::with_profile(Profile::GenzoLinear);
     view.color(&gpu, &linear);
     poll(&gpu, "color (stage 7) on sampled");
-    eprintln!("diag read colored: {:?}", view.read_latest(&gpu).map(|v| v.len()));
+    eprintln!(
+        "diag read colored: {:?}",
+        view.read_latest(&gpu).map(|v| v.len())
+    );
     view.tone(&gpu, &linear, None);
     poll(&gpu, "tone (stage 6), linear");
-    eprintln!("diag read toned: {:?}", view.read_latest(&gpu).map(|v| v.len()));
+    eprintln!(
+        "diag read toned: {:?}",
+        view.read_latest(&gpu).map(|v| v.len())
+    );
     let base = BaseCurve::new(&src.color);
-    view.tone(&gpu, &Look::with_profile(Profile::GenzoStandard), Some(&base));
+    view.tone(
+        &gpu,
+        &Look::with_profile(Profile::GenzoStandard),
+        Some(&base),
+    );
     poll(&gpu, "tone (stage 6), standard");
-    eprintln!("diag read toned standard: {:?}", view.read_latest(&gpu).map(|v| v.len()));
+    eprintln!(
+        "diag read toned standard: {:?}",
+        view.read_latest(&gpu).map(|v| v.len())
+    );
 }
