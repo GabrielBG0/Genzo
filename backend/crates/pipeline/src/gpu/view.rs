@@ -1,8 +1,9 @@
 //! What the view shows (DEV-01): the pyramid sampled into the view, kept as
-//! the "stage 4 sampled" cache (RGBA16F, the size of the view), then stage
-//! 9 into an RGBA8 frame. Stages 6 and 7 go between the two; until they
-//! exist the view is what their defaults give, with the base tone curve of
-//! DEV-02 left out (Genzo Linear: clamped at display white).
+//! the "stage 4 sampled" cache (RGBA16F, the size of the view); stage 6
+//! (tone) and stage 7 (color), each into its own cache of the same size, so
+//! a change re-runs from the earliest stage it touches; then stage 9 into
+//! an RGBA8 frame from the latest of them. A view that skips stages 6 and 7
+//! shows the sampled cache as Genzo Linear would.
 
 use std::sync::mpsc;
 
@@ -13,6 +14,7 @@ use genzo_color::output::{EDGE_STEPS, Target};
 use super::level0::{Level0Cache, Level0Error};
 use super::raw_stages::{Pass, Pyramid, RawStages, Slot, padded_row, pass_with};
 use super::{Gpu, GpuError};
+use crate::look::{BaseCurve, Look, Profile};
 use crate::raw::RawSource;
 use crate::reference::sampling::{Sampling, ViewSpec, plan, plan_view, plan_view_without_level0};
 
@@ -40,6 +42,38 @@ struct OutputUniforms {
     size: [u32; 4],
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct ToneUniforms {
+    y_row: [f32; 4],
+    to_prophoto: [[f32; 4]; 3],
+    from_prophoto: [[f32; 4]; 3],
+    controls: [f32; 4],
+    ends: [f32; 4],
+    ramp: [f32; 4],
+    size: [u32; 4],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Pod, Zeroable)]
+struct LookUniforms {
+    to_lms: [[f32; 4]; 3],
+    from_lms: [[f32; 4]; 3],
+    lms_to_lab: [[f32; 4]; 3],
+    lab_to_lms: [[f32; 4]; 3],
+    y_row: [f32; 4],
+    controls: [f32; 4],
+    size: [u32; 4],
+}
+
+/// Which cache holds the view's latest values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Latest {
+    Sampled,
+    Tone,
+    Color,
+}
+
 fn rows(m: &Mat3) -> [[f32; 4]; 3] {
     m.map(|r| [r[0] as f32, r[1] as f32, r[2] as f32, 0.0])
 }
@@ -65,11 +99,21 @@ pub fn dithers(pyramid: &Pyramid, edited: bool) -> bool {
 pub struct ViewStages {
     sample: Pass,
     sample_level0: Pass,
+    tone: Pass,
+    color: Pass,
     output: Pass,
     sample_uniforms: wgpu::Buffer,
+    tone_uniforms: wgpu::Buffer,
+    color_uniforms: wgpu::Buffer,
     output_uniforms: wgpu::Buffer,
+    /// The base curve's table (DEV-02): 4098 f32.
+    curve: wgpu::Buffer,
     /// The stage 4 sampled cache and the frame, for the current view size.
     sampled: Option<wgpu::Texture>,
+    /// The stage 6 and 7 caches, made on first use.
+    toned: Option<wgpu::Texture>,
+    colored: Option<wgpu::Texture>,
+    latest: Latest,
     frame: Option<wgpu::Buffer>,
     size: (u32, u32),
 }
@@ -107,6 +151,20 @@ impl ViewStages {
                 &[Slot::Float, Slot::Store(Rgba16Float), Slot::Storage],
                 false,
             ),
+            tone: pass_with(
+                device,
+                "view tone",
+                include_str!("shaders/view_tone.wgsl"),
+                &[Slot::Float, Slot::Store(Rgba16Float), Slot::Storage],
+                false,
+            ),
+            color: pass_with(
+                device,
+                "view color",
+                include_str!("shaders/view_look.wgsl"),
+                &[Slot::Float, Slot::Store(Rgba16Float)],
+                false,
+            ),
             output: pass_with(
                 device,
                 "view output",
@@ -115,8 +173,19 @@ impl ViewStages {
                 false,
             ),
             sample_uniforms: uniforms("view sample", size_of::<SampleUniforms>()),
+            tone_uniforms: uniforms("view tone", size_of::<ToneUniforms>()),
+            color_uniforms: uniforms("view color", size_of::<LookUniforms>()),
             output_uniforms: uniforms("view output", size_of::<OutputUniforms>()),
+            curve: device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("base curve table"),
+                size: ((genzo_color::tone::TABLE_SIZE + 2) * 4) as u64,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }),
             sampled: None,
+            toned: None,
+            colored: None,
+            latest: Latest::Sampled,
             frame: None,
             size: (0, 0),
         }
@@ -127,10 +196,14 @@ impl ViewStages {
         self.size
     }
 
-    /// The bytes of the stage 4 sampled cache (RGBA16F): one of DEV-01's
-    /// viewport stage caches.
+    /// The bytes of the viewport stage caches that exist (RGBA16F each):
+    /// stage 4 sampled, and stages 6 and 7 once used.
     pub fn cache_bytes(&self) -> u64 {
-        u64::from(self.size.0) * u64::from(self.size.1) * 8
+        let caches = [&self.sampled, &self.toned, &self.colored]
+            .iter()
+            .filter(|t| t.is_some())
+            .count() as u64;
+        caches * u64::from(self.size.0) * u64::from(self.size.1) * 8
     }
 
     /// The bytes of the frame (RGBA8), DEV-01's output line.
@@ -138,12 +211,9 @@ impl ViewStages {
         u64::from(self.size.0) * u64::from(self.size.1) * 4
     }
 
-    fn resize(&mut self, gpu: &Gpu, size: (u32, u32)) {
-        if self.size == size && self.sampled.is_some() {
-            return;
-        }
-        self.sampled = Some(gpu.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("stage 4 sampled"),
+    fn cache(gpu: &Gpu, label: &str, size: (u32, u32)) -> wgpu::Texture {
+        gpu.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some(label),
             size: wgpu::Extent3d {
                 width: size.0,
                 height: size.1,
@@ -157,7 +227,19 @@ impl ViewStages {
                 | wgpu::TextureUsages::STORAGE_BINDING
                 | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
-        }));
+        })
+    }
+
+    fn resize(&mut self, gpu: &Gpu, size: (u32, u32)) {
+        if self.size == size && self.sampled.is_some() {
+            return;
+        }
+        // The old caches go first, so the new ones never add to them.
+        self.sampled = None;
+        self.toned = None;
+        self.colored = None;
+        self.frame = None;
+        self.sampled = Some(Self::cache(gpu, "stage 4 sampled", size));
         self.frame = Some(gpu.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("frame"),
             size: u64::from(size.0) * u64::from(size.1) * 4,
@@ -222,6 +304,7 @@ impl ViewStages {
         out: (u32, u32),
     ) {
         self.resize(gpu, out);
+        self.latest = Latest::Sampled;
         let a = &s.affine;
         let grid = level0.map_or((0, 0), |c| c.grid());
         let u = SampleUniforms {
@@ -275,7 +358,157 @@ impl ViewStages {
         self.dispatch(gpu, pass, &group, out);
     }
 
-    /// Stage 9 from the sampled cache into the frame.
+    fn latest_texture(&self) -> &wgpu::Texture {
+        match self.latest {
+            Latest::Sampled => self.sampled.as_ref(),
+            Latest::Tone => self.toned.as_ref(),
+            Latest::Color => self.colored.as_ref(),
+        }
+        .expect("sample first")
+    }
+
+    /// Stage 6 from the sampled cache into the tone cache. `base` is the
+    /// photo's base curve, which Genzo Standard needs.
+    pub fn tone(&mut self, gpu: &Gpu, look: &Look, base: Option<&BaseCurve>) {
+        let sampled = self
+            .sampled
+            .as_ref()
+            .expect("sample first")
+            .create_view(&Default::default());
+        if self.toned.is_none() {
+            self.toned = Some(Self::cache(gpu, "stage 6", self.size));
+        }
+        let (to, from) = crate::reference::look::prophoto();
+        let curve = look.profile == Profile::GenzoStandard;
+        let ramp = match (curve, base) {
+            (true, Some(b)) => {
+                gpu.queue
+                    .write_buffer(&self.curve, 0, bytemuck::cast_slice(b.table.values()));
+                let r = b.ramp(look.exposure);
+                let slope = 1.0 / (1.0 - r.black());
+                let q = if r.radius() > 0.0 {
+                    slope / (4.0 * r.radius())
+                } else {
+                    0.0
+                };
+                [r.black() as f32, r.radius() as f32, slope as f32, q as f32]
+            }
+            (true, None) => panic!("Genzo Standard needs its base curve"),
+            (false, _) => [0.0; 4],
+        };
+        let y = genzo_color::WORKING_TO_XYZ[1];
+        let u = ToneUniforms {
+            y_row: [y[0] as f32, y[1] as f32, y[2] as f32, 0.0],
+            to_prophoto: rows(&to),
+            from_prophoto: rows(&from),
+            controls: [
+                look.exposure,
+                look.whites / 100.0,
+                look.blacks / 100.0,
+                look.contrast / 100.0,
+            ],
+            ends: [
+                genzo_color::tone::white_end() as f32,
+                genzo_color::tone::black_end() as f32,
+                genzo_color::tone::ENDS_RANGE as f32,
+                genzo_color::tone::CONTRAST_GAIN as f32,
+            ],
+            ramp,
+            size: [self.size.0, self.size.1, u32::from(curve), 0],
+        };
+        gpu.queue
+            .write_buffer(&self.tone_uniforms, 0, bytemuck::bytes_of(&u));
+        let toned = self
+            .toned
+            .as_ref()
+            .expect("made")
+            .create_view(&Default::default());
+        let group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("view tone"),
+            layout: &self.tone.layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.tone_uniforms.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&sampled),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&toned),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: self.curve.as_entire_binding(),
+                },
+            ],
+        });
+        self.dispatch(gpu, &self.tone, &group, self.size);
+        self.latest = Latest::Tone;
+    }
+
+    /// Stage 7 from the tone cache (the sampled cache when stage 6 did not
+    /// run since the last sampling) into the color cache.
+    pub fn color(&mut self, gpu: &Gpu, look: &Look) {
+        let input = match self.latest {
+            Latest::Sampled => self.sampled.as_ref(),
+            Latest::Tone | Latest::Color => self.toned.as_ref(),
+        }
+        .expect("sample first")
+        .create_view(&Default::default());
+        if self.colored.is_none() {
+            self.colored = Some(Self::cache(gpu, "stage 7", self.size));
+        }
+        let m = genzo_color::look::OklabMatrices::working();
+        let y = genzo_color::WORKING_TO_XYZ[1];
+        let lab_to_lms = genzo_color::invert(&genzo_color::output::OKLAB_M2).expect("invertible");
+        let u = LookUniforms {
+            to_lms: rows(&m.to_lms),
+            from_lms: rows(&m.from_lms),
+            lms_to_lab: rows(&genzo_color::output::OKLAB_M2),
+            lab_to_lms: rows(&lab_to_lms),
+            y_row: [y[0] as f32, y[1] as f32, y[2] as f32, 0.0],
+            controls: [
+                look.vibrance / 100.0,
+                look.saturation / 100.0,
+                if look.monochrome { 1.0 } else { 0.0 },
+                genzo_color::look::reference_chroma() as f32,
+            ],
+            size: [self.size.0, self.size.1, 0, 0],
+        };
+        gpu.queue
+            .write_buffer(&self.color_uniforms, 0, bytemuck::bytes_of(&u));
+        let colored = self
+            .colored
+            .as_ref()
+            .expect("made")
+            .create_view(&Default::default());
+        let group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("view color"),
+            layout: &self.color.layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.color_uniforms.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&input),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&colored),
+                },
+            ],
+        });
+        self.dispatch(gpu, &self.color, &group, self.size);
+        self.latest = Latest::Color;
+    }
+
+    /// Stage 9 from the latest cache (stage 7, 6 or the sampled one) into
+    /// the frame.
     pub fn output(&mut self, gpu: &Gpu, target: Target, compress: bool, dither: bool) {
         assert!(self.sampled.is_some(), "sample first");
         let from = target.from_xyz_oklab();
@@ -297,11 +530,7 @@ impl ViewStages {
         };
         gpu.queue
             .write_buffer(&self.output_uniforms, 0, bytemuck::bytes_of(&u));
-        let sampled = self
-            .sampled
-            .as_ref()
-            .expect("sampled")
-            .create_view(&Default::default());
+        let sampled = self.latest_texture().create_view(&Default::default());
         let group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("view output"),
             layout: &self.output.layout,
@@ -342,6 +571,12 @@ impl ViewStages {
             (0, 0),
             self.size,
         )
+    }
+
+    /// The latest cache (stage 7, 6 or the sampled one), RGB row by row: for
+    /// tests.
+    pub fn read_latest(&self, gpu: &Gpu) -> Result<Vec<[f32; 3]>, GpuError> {
+        read_rgba16f(gpu, self.latest_texture(), (0, 0), self.size)
     }
 
     /// The frame, RGBA8 row by row.

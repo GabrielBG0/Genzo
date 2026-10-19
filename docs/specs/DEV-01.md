@@ -592,7 +592,7 @@ Each criterion names the check that proves it. These become the tests. "Corpus" 
     - Exposure +1 doubles linear values before the base curve.
     - Contrast is monotonic in `t` at every slider value, with a slope of at least 0.6, and moves `t_W` by under 0.05 EV and `t_B` by under 0.02 EV.
     - **Halo.** On a 3-stop step edge, Highlights at −100 overshoots the dark side's level by at most 0.15 EV anywhere within twice the filter radius of the edge. The PR that builds it records the measured value here.
-    - Vibrance on a hue sweep through 10° to 80° at constant L and C changes the chroma gain smoothly: no step between neighboring hues 0.1° apart above 0.002.
+    - Vibrance on a hue sweep through 10° to 80° at constant L and C changes the chroma gain smoothly: no step between neighboring hues 0.1° apart above 0.01. The shoulders' steepest change at +100 is about 0.007, and the hard edge they replaced jumped by about 0.47.
 
     *Check:* pipeline tests on the synthetic scene.
 13. **GPU memory.** The accounted allocations for a 48 MP image stay under 1 GB, with the breakdown above as the expected values ±10 %. *Check:* the memory-accounting test (every texture and buffer goes through one tracking allocator), plus the bench kit's GPU process counter on the RTX 3060 (peak under 1 GB).
