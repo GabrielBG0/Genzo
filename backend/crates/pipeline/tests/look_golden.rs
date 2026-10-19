@@ -1,5 +1,9 @@
 //! Stored goldens of stages 6 and 7 (DEV-02 criterion 6, DEV-01 criterion
-//! 5): display output after stage 9, written on lavapipe.
+//! 5), written on lavapipe: the stage 7 cache through color::output's
+//! stage 9 on the CPU, as display floats. The 8-bit frame is not compared:
+//! its dither flips a code wherever devices differ by a hair, which on a
+//! dark gray turns neutral into ΔE 2 (Metal against lavapipe, measured);
+//! stage 9 and the dither have their own golden (view/synthetic-fit-srgb).
 //!
 //! - the synthetic scene with Genzo Standard and tone controls;
 //! - the synthetic scene with Genzo Linear and the presence controls;
@@ -12,12 +16,12 @@ mod sdk_stage2;
 
 use std::sync::{Mutex, MutexGuard};
 
-use genzo_color::output::Target;
+use genzo_color::output::{Target, encode};
 use genzo_imgio::{DecodeOptions, decode};
 use genzo_pipeline::camera_color::camera_transform;
 use genzo_pipeline::gpu::raw_stages::{RawStages, TileConfig};
 use genzo_pipeline::gpu::synthetic::scene_raw;
-use genzo_pipeline::gpu::view::{ViewStages, compresses, dithers};
+use genzo_pipeline::gpu::view::{ViewStages, compresses};
 use genzo_pipeline::gpu::{AdapterChoice, Gpu, GpuError};
 use genzo_pipeline::look::{BaseCurve, Look, Profile};
 use genzo_pipeline::raw::RawSource;
@@ -55,16 +59,12 @@ fn check(gpu: &Gpu, src: &RawSource, look: &Look, out: (u32, u32), name: &str) {
     let base = BaseCurve::new(&src.color);
     view.tone(gpu, look, Some(&base));
     view.color(gpu, look);
-    view.output(
-        gpu,
-        Target::Srgb,
-        compresses(p, Target::Srgb),
-        dithers(p, true),
-    );
-    let frame = view.read_frame(gpu).unwrap();
-    let pixels = frame
+    let compress = compresses(p, Target::Srgb);
+    let pixels = view
+        .read_latest(gpu)
+        .unwrap()
         .iter()
-        .map(|f| [0, 1, 2].map(|c| f32::from(f[c]) / 255.0))
+        .map(|px| encode(px.map(f64::from), Target::Srgb, compress).map(|v| v as f32))
         .collect();
     let case = genzo_golden::Case::new(
         env!("CARGO_MANIFEST_DIR"),
