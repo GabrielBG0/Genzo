@@ -1,0 +1,11 @@
+# Cargo settings for the backend workspace.
+
+[build]
+# At most 8 crates compile or link at once. Each integration test binary of
+# genzo-pipeline and genzo-engine links wgpu with full debug info, about 1 GB
+# per link. At the default, one job per core (16 on the reference desktop),
+# relinking those tests took the machine to 0.8 GB of free RAM, and the
+# system stopped background jobs. At 8 the least free was 7.8 GB, for a
+# relink of 231 s instead of 167 s (2026-10-20). CI's runners have fewer
+# cores, so this changes nothing there. CARGO_BUILD_JOBS overrides it.
+jobs = 8
