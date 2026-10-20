@@ -61,6 +61,7 @@ status=0
 # MSYS_NO_PATHCONV keeps Git Bash from rewriting the container's paths.
 MSYS_NO_PATHCONV=1 docker run --rm \
   -e GENZO_ADAPTER=software -e GENZO_REQUIRE_GPU=1 -e CARGO_TERM_COLOR=never \
+  -e OWNER="$(id -u):$(id -g)" \
   -v "$(native "$root"):/src:ro" \
   -v "$(native "$root/corpus"):/work/corpus:ro" \
   -v "$(native "$out"):/out" \
@@ -77,6 +78,9 @@ MSYS_NO_PATHCONV=1 docker run --rm \
     cargo test --locked --no-fail-fast "$@" -- --nocapture > /out/test.log 2>&1
     status=$?
     if [ -d target/golden-actual ]; then cp -r target/golden-actual/. /out/; fi
+    # The container runs as root; on a Linux host its files would stay
+    # root-owned, and the next run could not remove them.
+    chown -R "$OWNER" /out 2>/dev/null || true
     exit $status
   ' bash "${args[@]}" || status=$?
 
