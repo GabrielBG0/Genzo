@@ -403,7 +403,7 @@ Stages 1 to 4 run per tile, so full-resolution intermediates exist only for one 
 | Uploads: the raw tile texture (linear DNG, 3 × u16: 6.9 MB; 7.4 MB on NVIDIA) and the staging of the two tiles in flight (2 × 6.9 MB); 21.2 MB at the measured peak | 22 MB |
 | Level-0 tile cache at 1:1 (fixed cap; 448 tiles of 256² in one atlas, 234.9 MB measured; about three 2560 × 1440 views with their rings, 120 tiles each) | 256 MB |
 | Viewport stage caches (fixed cap; stage 4 sampled, stage 6, stage 7 at 2560 × 1920 RGBA16F; 118 MB) | 128 MB |
-| Base layer of Highlights and Shadows while it builds: two planes of 4 bytes per working pixel, 18.9 MB for a square image at 1536 × 1536 (measured the same); 9.4 MB kept after (owner, 2026-10-20) | 20 MB |
+| Base layer of Highlights and Shadows while it builds: two planes of 4 bytes per working pixel, 18.9 MB for a square image at 1536 × 1536 (measured the same on NVIDIA, 19.3 MB on WARP with its upload staging in flight); 9.4 MB kept after (owner, 2026-10-20) | 20 MB |
 | Output frame and two persistent readback buffers, RGBA8 | 60 MB |
 | Histogram and clipping masks | 10 MB |
 | **Total** | **694 MB**, under the 1 GB budget with 306 MB to spare |
