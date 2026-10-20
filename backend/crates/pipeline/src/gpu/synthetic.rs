@@ -147,6 +147,25 @@ pub fn scene_xtrans_raw(width: u32, height: u32) -> crate::raw::RawSource {
     src
 }
 
+/// `src` with a camera profile: the Canon EOS 5D Mark II's ColorMatrix2
+/// (D65, as Adobe DNG Converter writes it) and a daylight as-shot neutral,
+/// so stage 4's matrix depends on the white. Without one, every white is
+/// the same pass-through and a white balance change does nothing.
+pub fn with_camera_profile(mut src: crate::raw::RawSource) -> crate::raw::RawSource {
+    use genzo_imgio::raw::{AsShot, CameraColor, ColorMatrix};
+    src.color = CameraColor {
+        color_matrix_1: Some(ColorMatrix {
+            illuminant: Some(21),
+            matrix: vec![
+                0.4716, 0.0603, -0.083, -0.7798, 1.5474, 0.248, -0.1496, 0.1937, 0.6651,
+            ],
+        }),
+        as_shot: Some(AsShot::Neutral([0.47, 1.0, 0.65])),
+        ..CameraColor::default()
+    };
+    src
+}
+
 /// An image of 2 x 2 blocks, one per color, `across` blocks per row: RGBA.
 pub fn blocks(colors: &[[u16; 3]], across: usize) -> ((u32, u32), Vec<u16>) {
     let down = colors.len().div_ceil(across);

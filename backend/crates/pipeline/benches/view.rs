@@ -55,6 +55,19 @@ fn view(c: &mut Criterion) {
             wait(&gpu);
         })
     });
+    // A white balance drag: the same sampling with the ratio matrix after.
+    view.set_ratio(Some([
+        [1.21, -0.08, -0.02],
+        [0.03, 0.98, -0.01],
+        [0.01, -0.06, 0.82],
+    ]));
+    group.bench_function("sample the pyramid, white balance drag", |b| {
+        b.iter(|| {
+            view.sample(&gpu, p, 1, out);
+            wait(&gpu);
+        })
+    });
+    view.set_ratio(None);
     // A crop straightened by 20 degrees, at the same view size: the
     // pyramid's level 1 sampled along a rotated affine.
     let crop = fit(

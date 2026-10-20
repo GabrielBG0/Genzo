@@ -8,6 +8,8 @@
 //! - the synthetic scene with Genzo Standard and tone controls;
 //! - the synthetic scene with Genzo Linear and the presence controls;
 //! - the synthetic scene with Highlights and Shadows (the base layer);
+//! - the synthetic scene with a camera profile, during a white balance
+//!   drag (the ratio on the sampled pyramid);
 //! - the synthetic scene turned, flipped, cropped and straightened, the
 //!   base layer built on the crop;
 //! - the iPhone 12 Pro ProRAW (CC0) with Genzo Standard, through the file's
@@ -20,14 +22,15 @@ mod sdk_stage2;
 
 use std::sync::{Mutex, MutexGuard};
 
+use genzo_color::camera::{temperature_from_xy, xy_from_temperature};
 use genzo_color::output::{Target, encode};
 use genzo_imgio::{DecodeOptions, decode};
-use genzo_pipeline::camera_color::camera_transform;
+use genzo_pipeline::camera_color::{camera_transform, drag_ratio};
 use genzo_pipeline::geometry::{Crop, Geometry, fit};
 use genzo_pipeline::gpu::base::BaseLayer;
 use genzo_pipeline::gpu::level0::Level0Cache;
 use genzo_pipeline::gpu::raw_stages::{RawStages, TileConfig};
-use genzo_pipeline::gpu::synthetic::scene_raw;
+use genzo_pipeline::gpu::synthetic::{scene_raw, with_camera_profile};
 use genzo_pipeline::gpu::view::{ViewStages, compresses};
 use genzo_pipeline::gpu::{AdapterChoice, Gpu, GpuError};
 use genzo_pipeline::look::{BaseCurve, Look, Profile};
@@ -51,6 +54,19 @@ fn gpu() -> Option<(MutexGuard<'static, ()>, Gpu)> {
 /// Renders `src` at Fit into `out` with `look` and checks it against the
 /// golden `name`.
 fn check(gpu: &Gpu, src: &RawSource, look: &Look, out: (u32, u32), name: &str) {
+    check_with(gpu, src, look, out, name, None);
+}
+
+/// [`check`], with the white balance drag `ratio` applied to the sampled
+/// pyramid.
+fn check_with(
+    gpu: &Gpu,
+    src: &RawSource,
+    look: &Look,
+    out: (u32, u32),
+    name: &str,
+    ratio: Option<[[f32; 3]; 3]>,
+) {
     let mut stages = RawStages::new(gpu, TileConfig::default());
     let p = stages
         .render_pyramid(gpu, src, &camera_transform(&src.color, None))
@@ -63,6 +79,7 @@ fn check(gpu: &Gpu, src: &RawSource, look: &Look, out: (u32, u32), name: &str) {
         (f64::from(w) * scale).round() as u32,
         (f64::from(h) * scale).round() as u32,
     );
+    view.set_ratio(ratio);
     view.sample(gpu, p, 1, fit);
     let base = BaseCurve::new(&src.color);
     let mut layer = BaseLayer::new(gpu);
@@ -133,6 +150,31 @@ fn golden_synthetic_local_tone() {
         ..Look::with_profile(Profile::GenzoStandard)
     };
     check(&gpu, &src, &look, (300, 200), "look/synthetic-local-tone");
+}
+
+/// A white balance drag golden: the synthetic scene with a camera profile,
+/// built at its as-shot white and dragged 1500 K cooler and 20 toward
+/// magenta, with Genzo Standard.
+#[test]
+fn golden_synthetic_wb_drag() {
+    let Some((_lock, gpu)) = gpu() else { return };
+    let src = with_camera_profile(scene_raw(1536, 1024));
+    let old = camera_transform(&src.color, None);
+    let (t, tint) = temperature_from_xy(old.white);
+    let new = camera_transform(
+        &src.color,
+        Some(xy_from_temperature(t - 1500.0, tint + 20.0)),
+    );
+    let look = Look::with_profile(Profile::GenzoStandard);
+    let ratio = drag_ratio(&old, &new);
+    check_with(
+        &gpu,
+        &src,
+        &look,
+        (300, 200),
+        "look/synthetic-wb-drag",
+        ratio,
+    );
 }
 
 /// A geometry golden: one clockwise turn, a flip, and a crop straightened

@@ -33,11 +33,13 @@ pub(crate) struct SampleUniforms {
     footprint: [f32; 4],
     sizes: [u32; 4],
     grid: [u32; 4],
+    ratio: [[f32; 4]; 3],
 }
 
 impl SampleUniforms {
     /// Sampling per `s` into an `out`-sized result; `grid` is the level-0
-    /// cache's (tiles across the image, atlas slots across), else 0.
+    /// cache's (tiles across the image, atlas slots across), else 0. No
+    /// white balance drag ([`Self::with_ratio`]).
     pub(crate) fn new(s: &Sampling, out: (u32, u32), grid: (u32, u32)) -> Self {
         let a = &s.affine;
         Self {
@@ -46,7 +48,15 @@ impl SampleUniforms {
             footprint: [s.footprint[0] as f32, s.footprint[1] as f32, 0.0, 0.0],
             sizes: [s.level_size.0, s.level_size.1, out.0, out.1],
             grid: [grid.0, grid.1, 0, 0],
+            ratio: [[0.0; 4]; 3],
         }
+    }
+
+    /// With the white balance drag `m` applied to the sampled values.
+    pub(crate) fn with_ratio(mut self, m: [[f32; 3]; 3]) -> Self {
+        self.grid[2] = 1;
+        self.ratio = m.map(|r| [r[0], r[1], r[2], 0.0]);
+        self
     }
 }
 
@@ -148,6 +158,8 @@ pub struct ViewStages {
     size: (u32, u32),
     /// How the view samples the pyramid, for placing the base layer.
     sampling: Option<Sampling>,
+    /// The white balance drag the next samplings apply, if any.
+    ratio: Option<[[f32; 3]; 3]>,
 }
 
 impl ViewStages {
@@ -241,7 +253,17 @@ impl ViewStages {
             frame: None,
             size: (0, 0),
             sampling: None,
+            ratio: None,
         }
+    }
+
+    /// Applies the white balance drag `m` ([`crate::camera_color::drag_ratio`])
+    /// to the values the next samplings take from the pyramid or level 0,
+    /// or stops applying it (None). Like a change of view, a new ratio
+    /// re-runs from the sampling. The base layer keeps the pyramid's white
+    /// until it is rebuilt when the drag ends.
+    pub fn set_ratio(&mut self, m: Option<[[f32; 3]; 3]>) {
+        self.ratio = m;
     }
 
     /// The view's width and height.
@@ -363,7 +385,10 @@ impl ViewStages {
         self.toned_current = false;
         self.sampling = Some(s.clone());
         let grid = level0.map_or((0, 0), |c| c.grid());
-        let u = SampleUniforms::new(s, out, grid);
+        let mut u = SampleUniforms::new(s, out, grid);
+        if let Some(m) = self.ratio {
+            u = u.with_ratio(m);
+        }
         gpu.queue
             .write_buffer(&self.sample_uniforms, 0, bytemuck::bytes_of(&u));
         let sampled = self
