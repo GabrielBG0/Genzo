@@ -282,3 +282,69 @@ fn the_comparison_tells_settings_apart() {
         sampled.len()
     );
 }
+
+/// TEMPORARY: which use of stage 6 loses the device on CI's WARP (Windows
+/// Server 2022). Each scenario drives ViewStages on a fresh device; the test
+/// fails with the outcomes so CI shows them. Removed before the PR is ready.
+#[test]
+fn diag_warp_scenarios() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let _lock = ONE_DEVICE.lock().unwrap_or_else(|e| e.into_inner());
+    let linear = Look::with_profile(Profile::GenzoLinear);
+    let scenarios: Vec<(&str, (u32, u32), Look, bool)> = vec![
+        ("100x75, linear defaults", (100, 75), linear, false),
+        ("96x80, linear defaults", (96, 80), linear, false),
+        (
+            "100x75, linear, contrast 30",
+            (100, 75),
+            Look {
+                contrast: 30.0,
+                ..linear
+            },
+            false,
+        ),
+        (
+            "100x75, linear defaults, after stage 7",
+            (100, 75),
+            linear,
+            true,
+        ),
+        (
+            "100x75, standard defaults",
+            (100, 75),
+            Look::with_profile(Profile::GenzoStandard),
+            false,
+        ),
+    ];
+    let mut log = String::new();
+    for (name, size, look, color_first) in scenarios {
+        let Ok(gpu) = Gpu::open(AdapterChoice::from_env()) else {
+            return;
+        };
+        let lost = Arc::new(AtomicBool::new(false));
+        let l = lost.clone();
+        gpu.device
+            .set_device_lost_callback(move |_, _| l.store(true, Ordering::SeqCst));
+        gpu.device.on_uncaptured_error(Arc::new(|_| {}));
+        let src = scene_raw(2 * size.0, 2 * size.1);
+        let mut stages = RawStages::new(&gpu, TileConfig::default());
+        let p = stages
+            .render_pyramid(&gpu, &src, &camera_transform(&src.color, None))
+            .unwrap();
+        let mut view = ViewStages::new(&gpu);
+        view.sample(&gpu, p, 1, size);
+        let sampled = view.read_latest(&gpu).map(|v| v.len());
+        if color_first {
+            view.color(&gpu, &look);
+        }
+        let base = BaseCurve::new(&src.color);
+        view.tone(&gpu, &look, Some(&base));
+        let toned = view.read_latest(&gpu).map(|v| v.len());
+        log.push_str(&format!(
+            "{name}: sampled {sampled:?}, toned {toned:?}, lost {}\n",
+            lost.load(Ordering::SeqCst)
+        ));
+    }
+    panic!("diagnostics (always fails, to show the log):\n{log}");
+}
