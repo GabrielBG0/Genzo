@@ -85,7 +85,7 @@ No ramp and no curve: the working-space values go on to stage 7 unchanged. Displ
 |---|---|---|
 | As Shot | the file's white (DEV-01, *White balance*) | `mode: AsShot` |
 | Daylight | CIE D55 (x 0.33242, y 0.34743) | on the daylight locus |
-| Cloudy | CIE D65 (x 0.31271, y 0.32902) | 6504 K (DEV-01 criterion 10) |
+| Cloudy | CIE D65 (x 0.31271, y 0.32902) | 6503 K, tint +10 (6503.01 K, inside DEV-01 criterion 10's 6504 ± 2) |
 | Shade | CIE D75 (x 0.29902, y 0.31485) | |
 | Tungsten | CIE illuminant A (x 0.44757, y 0.40745) | 2856 K, tint 0 |
 | Fluorescent | CIE F2, cool white (x 0.37208, y 0.37529) | |
@@ -111,7 +111,7 @@ No ramp and no curve: the working-space values go on to stage 7 unchanged. Displ
 2. A click on the photo sends `PickWhiteBalance` with the point, in the shown image's normalized coordinates (after geometry, as the crop uses: DEV-01, *Crop*).
 3. The engine samples the area around the point and makes it neutral:
    - **RAW:** it averages a 5 × 5 texel area of pyramid level 1 (about 10 × 10 sensor pixels), mapping the point back through the geometry. It takes the average back to white balanced camera values through the inverse of stage 4's matrix and gain, then to the camera's own values through the white balance multipliers. That camera neutral gives a white point through the same neutral-to-xy solve as As Shot (`NeutralToXY`), and so Temp and Tint.
-   - **Non-RAW:** it averages the same area of the decoded image in the working space and finds its xy. Temp is the shift whose white (`153.8 − temp` mired, DEV-01) lies nearest that xy along the locus, and Tint is the remaining distance as `−3000 × Duv`.
+   - **Non-RAW:** it averages the same area of the decoded image in the working space and finds its xy. Temp and Tint are its Robertson temperature and tint less D65's (DEV-01, *White balance*; `color::white_balance::relative_from_xy`).
    - **It refuses** an area where any sample is within 5 % of the clip level, or whose luminance is below 0.5 % of white. The edit does not change, and the status bar says "Can't set white balance here: the area is clipped" or "too dark".
    - Values past the sliders' ranges are clamped to them.
 4. A successful pick sets `mode: Custom` with the new Temp and Tint, records one history step and renders. The picker then turns itself off.

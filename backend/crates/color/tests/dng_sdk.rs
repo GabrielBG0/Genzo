@@ -290,3 +290,37 @@ fn temperature_and_tint_match_the_sdk() {
     }
     assert_eq!(n, 12);
 }
+
+/// DEV-01 criterion 10: AsShotNeutral to Temp and Tint and back gives the
+/// same camera neutral within 1e-4, on every SDK profile with a neutral
+/// whose white Temp can name (2000 to 50,000 K). Only the Leica variant
+/// with an unknown second illuminant lands outside: past the end of
+/// Robertson's table, where no temperature round-trips.
+#[test]
+fn as_shot_neutral_round_trips_through_temp_and_tint() {
+    let mut n = 0;
+    let mut worst = 0.0f64;
+    let mut outside = Vec::new();
+    for r in &records() {
+        let Some(AsShot::Neutral(neutral)) = as_shot(&r.inputs) else {
+            continue;
+        };
+        let spec = ColorSpec::new(&profile(&r.inputs)).unwrap();
+        let xy = spec.as_shot_xy(Some(AsShot::Neutral(neutral))).unwrap();
+        let (t, tint) = temperature_from_xy(xy);
+        if !(2000.0..=50_000.0).contains(&t) {
+            outside.push(r.variant.clone().unwrap_or_default());
+            continue;
+        }
+        let back = spec.at_white(xy_from_temperature(t, tint)).unwrap();
+        let max = neutral.iter().copied().fold(0.0, f64::max);
+        for (b, n) in back.camera_white.iter().zip(neutral) {
+            worst = worst.max((b - n / max).abs());
+        }
+        n += 1;
+    }
+    println!("{n} neutrals, worst {worst:.2e}");
+    assert_eq!(outside, ["illuminant_2_unknown"]);
+    assert!(n >= 10, "{n} neutrals");
+    assert!(worst <= 1e-4, "{worst}");
+}

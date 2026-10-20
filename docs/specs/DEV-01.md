@@ -509,9 +509,11 @@ While `white_balance.mode` is `AsShot`, the engine fills `temp` and `tint` with 
 - **A file with no as-shot data** (the Kodak DCS760C) uses D55, as the DNG SDK's renderer does (decided 2026-10-18; this spec said D65 before). The status bar says the as-shot white balance is unavailable.
 
 **Non-RAW.** The pixels are already balanced, so Temp and Tint are relative shifts from the encoded white:
-- **Temp:** the source white is the white whose reciprocal temperature is `153.8 − temp` mired (6500 K at 0). It lies on the CIE daylight locus from 4000 K up, and on the Planckian locus below. So −100 is about 3940 K, cooler, and +100 is about 18,600 K, warmer.
+- **The source white** is the one Robertson's method gives, through the same code as RAW, for a reciprocal temperature of `D65's mired − temp` and a tint of `D65's tint + tint` (owner, 2026-10-20). D65 (x 0.3127, y 0.3290) sits at 153.76 mired (6503.7 K) and tint +9.8 on that scale; the reference is computed from it rather than written as 153.8, so 0 and 0 are an exact identity. So the white moves along the Planckian locus at D65's distance from it, with no jump anywhere on the slider. An earlier version put it on the CIE daylight locus from 4000 K up and the Planckian locus below; the two are about 8 tint apart at 4000 K, which made a visible step at Temp −96.
+- **Temp:** −100 is about 3940 K, cooler, and +100 about 18,600 K, warmer.
 - **Tint:** moves that white by `Duv = −tint / 3000`.
-- The image is adapted from that white to D65 with CAT16.
+- The image is adapted from that white to the white 0 and 0 name with CAT16, full adaptation. That white is D65 to about 1e-7, and it makes 0 and 0 an exact identity (`color::white_balance`).
+- **The picker's inverse** is Robertson's temperature and tint of the sampled white, less D65's.
 
 ### Crop and rotation coordinates
 
@@ -608,7 +610,7 @@ Each criterion names the check that proves it. These become the tests. "Corpus" 
     - AsShotNeutral to Temp and Tint and back is within 1e-4.
     - D65 lands at 6504 K ± 2 K. Illuminant A, a blackbody and so on the Planckian locus, lands at 2856 K ± 2 K and tint 0 ± 0.5.
 
-    *Check:* `color` crate tests.
+    *Check:* `color` crate tests (`tests/white_balance.rs`; the AsShotNeutral case in `tests/dng_sdk.rs`, on the SDK fixture's profiles whose white is inside 2000 to 50,000 K). Measured: the round trip within 0.34 K and 0.002 tint over the RAW range, AsShotNeutral within 2e-6, D65 at 6503.01 K, A at 2855.76 K and tint 0.008. The non-RAW CAT16 is checked against colour-science (`scripts/white-balance-reference.py`).
 11. **Clipped highlights are neutral.** A synthetic scene with a patch clipped in one channel, and one clipped in all, renders the clipped area with OkLCh chroma ≤ 0.01, and its edge with no hue band. *Check:* a pipeline test.
 12. **Tone controls behave.**
     - Middle gray stays at 0.18 under Contrast at ±100.
