@@ -165,10 +165,17 @@ impl Geometry {
 /// - the angle is clamped to ±45°;
 /// - a rotated rectangle that leaves the oriented image shrinks about its
 ///   center, keeping its aspect, until it fits;
-/// - None when the result would be under 32 pixels on a side, so the delta
-///   is refused and the crop keeps its last valid state (owner,
-///   2026-10-20). The center is never moved.
+/// - None when the result would be under 32 pixels on a side, or a value is
+///   not finite, so the delta is refused and the crop keeps its last valid
+///   state (owner, 2026-10-20). The center is never moved.
 pub fn fit(crop: Crop, level0: (u32, u32), o: u8) -> Option<Crop> {
+    // NaN would pass the clamps below (clamp keeps it, min drops it).
+    if ![crop.cx, crop.cy, crop.w, crop.h, crop.angle]
+        .iter()
+        .all(|v| v.is_finite())
+    {
+        return None;
+    }
     let oriented = shown(level0, o);
     let (w, h) = (f64::from(oriented.0), f64::from(oriented.1));
     let crop = Crop {
@@ -352,6 +359,27 @@ mod tests {
         };
         let got = fit(just, level0, 1).unwrap();
         assert!((got.w * 4000.0 - 32.0).abs() < 1e-9, "{}", got.w * 4000.0);
+        // Values that are not numbers: refused, not clamped into a crop.
+        for bad in [
+            Crop {
+                angle: f64::NAN,
+                ..inside
+            },
+            Crop {
+                w: f64::NAN,
+                ..inside
+            },
+            Crop {
+                h: f64::INFINITY,
+                ..inside
+            },
+            Crop {
+                cx: f64::NAN,
+                ..inside
+            },
+        ] {
+            assert_eq!(fit(bad, level0, 1), None, "{bad:?}");
+        }
         // Under the minimum by request: refused too.
         let tiny = Crop {
             w: 20.0 / 4000.0,
