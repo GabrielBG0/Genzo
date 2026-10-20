@@ -405,6 +405,11 @@ Stricter than M0 (see Decided, "Golden images in M0"). A stage or decoder is not
   - Each stage keeps its ground-truth tests beside them (the synthetic scene, the darktable references for RCD and Markesteijn).
   - Changing a golden image needs a stated reason in the PR.
   - The harness is `backend/crates/golden` (dev-only). A failing or missing golden writes the render, a ΔE heatmap and metadata to `backend/target/golden-actual/`; CI uploads them, and `scripts/accept-goldens.py` accepts them (lavapipe or CPU only). `corpus/golden-inputs.txt` lists the corpus files CI fetches for them.
+  - New GPU goldens are made before the push, so CI is green on the PR's first run (decided 2026-10-20).
+    - `scripts/goldens-lavapipe.sh` runs the tests on lavapipe in Docker: ubuntu-22.04 and its `mesa-vulkan-drivers`, as the CI job uses. It leaves the candidates in `backend/target/golden-lavapipe/`, and `--accept CASE` takes them.
+    - Its lavapipe (llvmpipe, LLVM 15.0.7) reproduced every stored look golden bit for bit, and its first new golden was byte-identical to CI's render.
+    - The first run takes about 15 minutes, almost all of it building the workspace; later runs reuse the build.
+    - Stop Docker before benchmarks.
 - **Real GPUs:** `scripts/gpu-check.sh` (decided), run by hand on the owner's RTX 3060 desktop before merging a PR that touches the pipeline, the engine or the benchmarks. It checks the adapter, the GPU tests and the benchmarks against a 10 percent baseline, and its summary goes in the PR. CI gates PRs with lavapipe only.
 - **lavapipe** keeps its coarse gate on every PR (25 percent against the slowest run seen, `benchmarks/README.md`).
 - A criterion benchmark per stage, and a fuzz target per decoder.
