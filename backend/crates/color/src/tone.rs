@@ -457,3 +457,52 @@ pub fn base_curve(
     let toned = rgb_tone(p, table).map(f64::from);
     mul(from_prophoto, toned)
 }
+
+/// Middle gray, the point the tone controls work around (DEV-01, stage 6).
+pub const MIDDLE_GRAY: f64 = 0.18;
+
+/// The Whites end: the value the base curve maps to display white, in
+/// `t = log2(Y / 0.18)`.
+pub fn white_end() -> f64 {
+    (1.0 / MIDDLE_GRAY).log2()
+}
+
+/// The Blacks end: the base curve's default black at 0 EV, in `t`.
+pub fn black_end() -> f64 {
+    (DEFAULT_SHADOWS * 0.001 / MIDDLE_GRAY).log2()
+}
+
+/// The furthest Whites and Blacks move their end, in stops.
+pub const ENDS_RANGE: f64 = 1.5;
+
+/// `r(u)`: `u²` up to 1, then `2u − 1`, so the change starts flat at middle
+/// gray and continues smoothly past the source point.
+fn ramp_up(u: f64) -> f64 {
+    if u <= 1.0 { u * u } else { 2.0 * u - 1.0 }
+}
+
+/// Whites and Blacks (DEV-01, stage 6, step 3) on `t`, with `whites` and
+/// `blacks` the sliders over 100 (−1 to 1). Whites acts above middle gray,
+/// Blacks below; each moves its source point onto its end.
+pub fn whites_blacks(t: f64, whites: f64, blacks: f64) -> f64 {
+    if t > 0.0 && whites != 0.0 {
+        let source = white_end() - ENDS_RANGE * whites;
+        t + ENDS_RANGE * whites * ramp_up(t / source)
+    } else if t < 0.0 && blacks != 0.0 {
+        let source = black_end() - ENDS_RANGE * blacks;
+        t + ENDS_RANGE * blacks * ramp_up(t / source)
+    } else {
+        t
+    }
+}
+
+/// Contrast's gain at middle gray per unit of slider (DEV-01).
+pub const CONTRAST_GAIN: f64 = 0.4;
+
+/// Contrast (DEV-01, stage 6, step 4) on `t`, with `contrast` the slider over
+/// 100: `t + 0.4 c × t × exp(−t² / 2σ²)`, σ 1 stop above middle gray and 1.6
+/// below.
+pub fn contrast(t: f64, contrast: f64) -> f64 {
+    let sigma: f64 = if t > 0.0 { 1.0 } else { 1.6 };
+    t + CONTRAST_GAIN * contrast * t * (-t * t / (2.0 * sigma * sigma)).exp()
+}

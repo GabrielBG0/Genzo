@@ -240,11 +240,19 @@ fn the_view_stays_within_its_caps() {
     let before = allocated(&gpu);
     let mut view = ViewStages::new(&gpu);
     view.sample(&gpu, p, 1, (2560, 1920));
+    // Stages 6 and 7 make their caches: three viewport caches in all.
+    let look = genzo_pipeline::look::Look {
+        exposure: 0.5,
+        vibrance: 20.0,
+        ..genzo_pipeline::look::Look::with_profile(genzo_pipeline::look::Profile::Embedded)
+    };
+    view.tone(&gpu, &look, None);
+    view.color(&gpu, &look);
     view.output(&gpu, Target::Srgb, false, false);
     let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
     let (cache, frame) = (view.cache_bytes(), view.frame_bytes());
     println!(
-        "computed: sampled cache {:.1} MB (cap {:.0}), frame {:.1} MB (cap {:.0})",
+        "computed: viewport caches {:.1} MB (cap {:.0}), frame {:.1} MB (cap {:.0})",
         cache as f64 / MB,
         budget::VIEWPORT_CACHES as f64 / MB,
         frame as f64 / MB,

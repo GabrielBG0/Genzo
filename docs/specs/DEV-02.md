@@ -226,7 +226,20 @@ The white balance presets are constants in `color` (their xy), not stored.
 4. **Properties.** The ACR3 curve is monotonic, maps 0 to 0 and 1 to 1, and maps 0.18 to 0.388 ± 0.001. Neutral pixels stay neutral (OkLCh chroma ≤ 0.001 after stage 9, before quantizing). The fraction (mid − min) / (max − min) in ProPhoto is the same before and after, within 1e-5, where max − min is at least 0.01 before and after (below that, the f32 arithmetic the SDK uses rounds by more). Middle gray through the whole step (ramp and curve) is 0.379 ± 0.001, sRGB code 166. *Check:* `color` tests.
 5. **Whole render against the SDK.** The probe renders five corpus DNGs with no hue or saturation tables through `dng_render`: four on the ACR3 curve (Leica Q2, Pentax K10D, the Halide iPhone 16 Pro Bayer DNG, Galaxy S23 Ultra) and the iPhone 12 Pro ProRAW on its own ProfileToneCurve. The iPhone 16 Pro ProRAW is left out: its tiles are JPEG XL, which SDK 1.4 cannot decode. Its curve is still checked by criterion 1. Settings: the SDK's curve choice left as it is, Shadows 5, exposure +1 EV for every file and 0 EV for those whose BaselineExposure is 0 or more (not the Pentax or the iPhone 12 Pro), final space linear ProPhoto RGB as floats. Genzo renders the same files to the end of stage 6 and converts to the same space. Compared as 64 px block means over the default crop:
    - mean difference ≤ 0.5 % of white and the 99th percentile ≤ 2 % (the demosaics differ, and Genzo desaturates near the clip);
-   - these are targets: the PR that first runs the test records the measured values here.
+   - measured on the RTX 3060 (2026-10-19, `pipeline/tests/render_sdk.rs`, the SDK's OpcodeList3 cleared since Genzo skips lens opcodes in M1):
+
+     | Render | Mean | 99th percentile | Worst block |
+     |---|---|---|---|
+     | Leica Q2, 0 EV | 0.038 % | 0.25 % | 12.3 % |
+     | Leica Q2, +1 EV | 0.074 % | 0.50 % | 16.7 % |
+     | Pentax K10D, +1 EV | 0.016 % | 0.046 % | 0.072 % |
+     | Halide iPhone 16 Pro, 0 EV | 0.028 % | 0.28 % | 0.54 % |
+     | Halide iPhone 16 Pro, +1 EV | 0.051 % | 0.42 % | 0.73 % |
+     | Galaxy S23 Ultra, 0 EV | 0.018 % | 0.037 % | 0.34 % |
+     | Galaxy S23 Ultra, +1 EV | 0.027 % | 0.038 % | 0.041 % |
+     | iPhone 12 Pro ProRAW (its own curve), +1 EV | 0.022 % | 0.054 % | 0.062 % |
+
+     The Leica's worst blocks are saturated reds whose camera red channel reaches the clip level: Genzo's highlight desaturation (DEV-01, stage 4) moves them toward neutral, and the SDK does not. With it switched off for a check, the worst block is 1.4 % at 0 EV and 2.0 % at +1 EV.
 
    Negative exposure is not compared (see *Where Genzo differs*). *Check:* a corpus test (local), with the probe extended by a `render_probe`.
 6. **Golden images.** Stage 6 with Genzo Standard, and with Genzo Linear, on the CC0 set, which includes the iPhone 12 Pro ProRAW file and so its own curve: DEV-01 criterion 5's tolerances, as display output after stage 9.

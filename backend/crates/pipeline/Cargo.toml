@@ -24,6 +24,7 @@ half.workspace = true
 [dev-dependencies]
 criterion.workspace = true
 genzo-golden.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 # An independent color engine for the non-RAW tests.
 moxcms.workspace = true

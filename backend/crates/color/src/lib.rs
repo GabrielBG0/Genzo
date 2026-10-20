@@ -8,6 +8,7 @@
 
 pub mod camera;
 pub mod encoding;
+pub mod look;
 pub mod output;
 pub mod tone;
 

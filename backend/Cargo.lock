@@ -644,6 +644,7 @@ dependencies = [
  "half",
  "moxcms 0.9.1",
  "pollster",
+ "serde",
  "serde_json",
  "thiserror",
  "wgpu",

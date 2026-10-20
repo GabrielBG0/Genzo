@@ -148,6 +148,23 @@ jobs:
         with:
           workspaces: backend
       - run: cargo test --locked -p genzo-pipeline -p genzo-engine -- --nocapture
+      # The GPU goldens of corpus files (stages 6 and 7 on the iPhone 12 Pro
+      # ProRAW). The corpus comes only after the tests above, so the other
+      # corpus tests (40 MP files, slow on lavapipe) keep skipping here; the
+      # cache is the backend job's. They run even when a golden above failed,
+      # so one run gives every render to accept.
+      - if: ${{ !cancelled() }}
+        uses: actions/cache@v4
+        with:
+          path: corpus/raw
+          key: golden-corpus-${{ hashFiles('corpus/golden-inputs.txt', 'corpus/manifest.json') }}
+      - if: ${{ !cancelled() }}
+        working-directory: .
+        run: python3 scripts/fetch-raw-corpus.py --list corpus/golden-inputs.txt
+      - if: ${{ !cancelled() }}
+        env:
+          GENZO_REQUIRE_CORPUS: "1"
+        run: cargo test --locked -p genzo-pipeline --test look_golden -- --nocapture
       # lavapipe writes the GPU goldens: on a failure, keep its renders and the
       # driver version they came from.
       - if: failure()
