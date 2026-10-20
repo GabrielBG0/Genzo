@@ -42,19 +42,17 @@ fn ramp_up(u: f32) -> f32 {
     return 2.0 * u - 1.0;
 }
 
+// One return and no test on the slider values: an early-return form lost
+// the device on WARP 10.0.20348 (Windows Server 2022) when both sliders
+// were 0. A slider at 0 shifts by 0 here too, since its source point is
+// then its end, which is not 0.
 fn whites_blacks(t: f32) -> f32 {
-    let whites = tone.controls.y;
-    let blacks = tone.controls.z;
     let range = tone.ends.z;
-    if (t > 0.0 && whites != 0.0) {
-        let source_point = tone.ends.x - range * whites;
-        return t + range * whites * ramp_up(t / source_point);
-    }
-    if (t < 0.0 && blacks != 0.0) {
-        let source_point = tone.ends.y - range * blacks;
-        return t + range * blacks * ramp_up(t / source_point);
-    }
-    return t;
+    // Whites above middle gray, Blacks below.
+    let amount = select(tone.controls.z, tone.controls.y, t > 0.0);
+    let end = select(tone.ends.y, tone.ends.x, t > 0.0);
+    let source_point = end - range * amount;
+    return t + range * amount * ramp_up(t / source_point);
 }
 
 fn contrast(t: f32) -> f32 {

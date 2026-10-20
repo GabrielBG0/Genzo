@@ -178,9 +178,8 @@ impl ViewStages {
             tone_uniforms: uniforms("view tone", size_of::<ToneUniforms>()),
             color_uniforms: uniforms("view color", size_of::<LookUniforms>()),
             output_uniforms: uniforms("view output", size_of::<OutputUniforms>()),
-            // Written at creation: Genzo Linear never uploads a table, and a
-            // buffer wgpu has to zero on first use lost the device on WARP
-            // of Windows Server 2022 (CI, 2026-10-19).
+            // Written at creation, so the pass never reads it uninitialized:
+            // Genzo Linear uploads no table.
             curve: wgpu::util::DeviceExt::create_buffer_init(
                 device,
                 &wgpu::util::BufferInitDescriptor {
