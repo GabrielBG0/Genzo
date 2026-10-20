@@ -166,7 +166,7 @@ fn golden_synthetic_wb_drag() {
         Some(xy_from_temperature(t - 1500.0, tint + 20.0)),
     );
     let look = Look::with_profile(Profile::GenzoStandard);
-    let ratio = drag_ratio(&old, &new);
+    let ratio = Some(drag_ratio(&old, &new).expect("the camera profile's matrix inverts"));
     check_with(
         &gpu,
         &src,
