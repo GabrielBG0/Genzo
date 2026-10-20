@@ -153,6 +153,33 @@ pub fn encoded_transform(e: &InputEncoding) -> CameraTransform {
     }
 }
 
+/// [`encoded_transform`] with the non-RAW white balance `temp` and `tint`
+/// (DEV-01, *White balance*): the CAT16 shift composed after the encoding's
+/// matrix, so a settled render bakes it into stage 4.
+pub fn balanced_encoded_transform(e: &InputEncoding, temp: f64, tint: f64) -> CameraTransform {
+    let shift = genzo_color::white_balance::relative_adaptation(temp, tint);
+    CameraTransform {
+        matrix: genzo_color::mat_mul(&shift, &e.to_working).map(|row| row.map(|v| v as f32)),
+        ..encoded_transform(e)
+    }
+}
+
+/// The white balance drag (DEV-01, stage 2): what turns values stage 4
+/// produced with `old` into those it would produce with `new`, as one
+/// working space matrix, `M_new · diag(r) · M_old⁻¹` with `r` the new
+/// multipliers over the old. Stage 2's clipping and stage 4's highlight
+/// desaturation are not linear, so clipped highlights differ from a
+/// settled render; everything else matches it. The exposure is the file's,
+/// the same on both sides. None when `old`'s matrix is singular.
+pub fn drag_ratio(old: &CameraTransform, new: &CameraTransform) -> Option<[[f32; 3]; 3]> {
+    let f64s = |m: &[[f32; 3]; 3]| m.map(|row| row.map(f64::from));
+    let r = [0, 1, 2].map(|c| f64::from(new.multipliers[c]) / f64::from(old.multipliers[c]));
+    let ratio = [[r[0], 0.0, 0.0], [0.0, r[1], 0.0], [0.0, 0.0, r[2]]];
+    let undo = genzo_color::invert(&f64s(&old.matrix))?;
+    let m = genzo_color::mat_mul(&genzo_color::mat_mul(&f64s(&new.matrix), &ratio), &undo);
+    Some(m.map(|row| row.map(|v| v as f32)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -222,5 +249,53 @@ mod tests {
     fn no_as_shot_white_is_d55() {
         let t = camera_transform(&color(CM.to_vec(), None), None);
         assert_eq!((t.white, t.fallback), (D55_XY, None));
+    }
+
+    fn stage4(t: &CameraTransform, camera: [f32; 3]) -> [f32; 3] {
+        let balanced = [0, 1, 2].map(|i| camera[i] * t.multipliers[i]);
+        t.matrix
+            .map(|row| (0..3).map(|i| row[i] * balanced[i]).sum())
+    }
+
+    fn apply(m: &[[f32; 3]; 3], v: [f32; 3]) -> [f32; 3] {
+        m.map(|row| (0..3).map(|i| row[i] * v[i]).sum())
+    }
+
+    #[test]
+    fn the_drag_ratio_turns_one_white_into_another() {
+        let c = color(CM.to_vec(), Some(raw::AsShot::Neutral([0.6, 1.0, 0.8])));
+        let old = camera_transform(&c, None);
+        let same = drag_ratio(&old, &old).unwrap();
+        for (i, row) in same.iter().enumerate() {
+            for (j, v) in row.iter().enumerate() {
+                assert!((v - f32::from(u8::from(i == j))).abs() < 1e-6, "{same:?}");
+            }
+        }
+        for (t, tint) in [(2856.0, 0.0), (7500.0, 10.0), (4000.0, -30.0)] {
+            let xy = genzo_color::camera::xy_from_temperature(t, tint);
+            let new = camera_transform(&c, Some(xy));
+            let m = drag_ratio(&old, &new).unwrap();
+            for camera in [[0.1, 0.2, 0.05], [0.3, 0.3, 0.3], [0.02, 0.4, 0.2]] {
+                let (got, want) = (apply(&m, stage4(&old, camera)), stage4(&new, camera));
+                for k in 0..3 {
+                    assert!(
+                        (got[k] - want[k]).abs() < 1e-5,
+                        "{t} {tint}: {got:?} {want:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_non_raw_drag_is_its_cat16_shift() {
+        let e = InputEncoding::srgb();
+        let old = encoded_transform(&e);
+        let new = balanced_encoded_transform(&e, 40.0, -25.0);
+        let m = drag_ratio(&old, &new).unwrap();
+        let want = genzo_color::white_balance::relative_adaptation(40.0, -25.0);
+        for (a, b) in m.iter().flatten().zip(want.iter().flatten()) {
+            assert!((f64::from(*a) - b).abs() < 1e-6, "{m:?}");
+        }
     }
 }

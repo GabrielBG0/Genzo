@@ -165,6 +165,10 @@ The LinearizationTable is already applied by the decoder for linear DNG, and by 
 - **Highlight clipping.** Every channel is clipped at the level where the *first* channel saturates after white balance: `clip = min(multiplier[c])` in normalized units. A clipped area therefore comes out neutral white, not magenta or cyan. Real reconstruction of clipped color is later (decided 2026-10-18).
 
 While a slider is dragged, white balance runs as a ratio after the cached demosaic. The pyramid holds working-space values after stage 4, so the ratio `r` (new multipliers over the pyramid's) is applied there as one matrix, `M_new · diag(r) · M_old⁻¹`, where `M_old` is the matrix the pyramid was built with (it keeps its white point, multipliers and matrix). The settled render re-runs this stage and the demosaic with the new multipliers, as M0 does.
+- **Where it runs:** in the view's sampling, after the filter (`camera_color::drag_ratio`, `ViewStages::set_ratio`). Sampling is linear, so that equals applying it to the pyramid or the level-0 tiles, and it costs 0.15 ms at 2560 × 1920 on the RTX 3060.
+- **What it cannot match:** stage 2's clipping and stage 4's highlight desaturation, which are not linear, and at 1:1 the demosaic's choices (criterion 18).
+- **Non-RAW:** the same formula gives the CAT16 shift itself, since the old multipliers are 1 and the new matrix is the shift times the encoding's (`camera_color::balanced_encoded_transform`).
+- **The base layer** keeps the pyramid's white during the drag. It is rebuilt when the drag ends.
 
 ### Stage 3: demosaic
 
@@ -634,5 +638,11 @@ Each criterion names the check that proves it. These become the tests. "Corpus" 
 15. **Fuzzing.** Every decoder path (linear DNG, the rawler path, JPEG XS, JPEG, TIFF, PNG, HEIC) has a cargo-fuzz target. Each runs 10 minutes with no crash, hang or out-of-memory in the PR that adds it.
 16. **Errors keep the app alive.** An injected out-of-memory, from a lowered device limit, returns an error. The retry frees the caches, the render thread stays alive, and the next photo renders. *Check:* a pipeline test (extends PR #22's).
 17. **Unsupported files.** A Nikon HE file in a build without the `jpeg-xs` feature, a CMYK JPEG, and a DNG with a non-optional unknown opcode each show their embedded preview and the reason, and disable the controls. *Check:* engine tests; a Playwright flow against the fake engine for the UI part.
+18. **The white balance drag** (owner, 2026-10-20). The drag frame, the ratio on the old pyramid, matches the settled render, the pyramid rebuilt with the new white. Pixels whose white balanced camera values reach the desaturation threshold under either white are masked, dilated by 2 px. Outside them, with shifts up to 2500 K and 40 tint from the as-shot white:
+    - at Fit: mean ΔE2000 ≤ 0.1 and p99 ≤ 0.5;
+    - at 1:1: mean ≤ 0.6 and p99 ≤ 5. The settled render re-demosaics, and RCD and Markesteijn choose their directions from white balanced values, so fine detail differs until the drag ends;
+    - non-RAW: within 3 f16 steps, since the drag is the settled render's own matrix.
+
+    Measured on the RTX 3060: at Fit, worst mean 0.057 and p99 0.30; at 1:1, worst mean 0.45 and p99 3.9 (the Leica Q2), and 0.02 to 0.06 for the linear iPhone 12 Pro, which has no demosaic. *Check:* `tests/white_balance_drag.rs`, on the synthetic scene with a camera profile and the CC0 corpus (iPhone 12 Pro, Samsung S23 Ultra, Canon R5 II, Fujifilm X-T5, Leica Q2), locally; CI has no corpus for it.
 
 Apple Photos exports are a target for how a photo should look by default (DEV-02's base curve), not a pixel reference. No test compares against them.

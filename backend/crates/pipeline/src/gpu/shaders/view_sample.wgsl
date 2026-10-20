@@ -16,8 +16,12 @@ struct View {
     footprint: vec4<f32>,
     // The level's width and height, the output's width and height.
     sizes: vec4<u32>,
-    // Level 0: cache tiles across the image, atlas slots across.
+    // Level 0: cache tiles across the image, atlas slots across; z is 1 to
+    // apply `ratio`.
     grid: vec4<u32>,
+    // The white balance drag (DEV-01, stage 2), on the sampled values:
+    // sampling is linear, so this equals applying it to the level.
+    ratio: array<vec4<f32>, 3>,
 }
 
 @group(0) @binding(0) var<uniform> view: View;
@@ -73,6 +77,13 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
             let col = clamp(sx.x + i, 0, edge.x);
             sum += ky * kx * fetch(vec2<i32>(col, row));
         }
+    }
+    if (view.grid.z == 1u) {
+        sum = vec3<f32>(
+            dot(view.ratio[0].xyz, sum),
+            dot(view.ratio[1].xyz, sum),
+            dot(view.ratio[2].xyz, sum),
+        );
     }
     store(id.xy, sum);
 }
