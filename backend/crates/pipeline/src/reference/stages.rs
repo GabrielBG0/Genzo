@@ -1,8 +1,9 @@
 //! CPU reference for stages 1 and 2 (DEV-01): the whole image at once, in the
 //! order the GPU runs them per tile.
 
-use super::opcodes::{apply_gain_map, fix_bad_pixels_constant};
+use super::opcodes::{apply_gain_map, fix_bad_pixels_constant, gain_map_sample};
 use crate::raw::RawSource;
+use genzo_model::frame::Rect;
 
 /// Stage 1 over the active area: FixBadPixelsConstant (OpcodeList1) on the
 /// stored values, the SDK's linearization, then the GainMaps (OpcodeList2).
@@ -34,6 +35,63 @@ pub fn stage1(src: &RawSource) -> Vec<f32> {
     }
     for gm in &src.gain_maps {
         apply_gain_map(&mut out, w, h, src.samples, gm);
+    }
+    out
+}
+
+/// [`stage1`] for the active-area pixels in `rect` only, equal to the
+/// whole image's values there, without the cost of the whole image: what the
+/// white balance picker reads (DEV-02).
+pub fn stage1_window(src: &RawSource, rect: Rect) -> Vec<f32> {
+    let (sw, sh) = src.stored;
+    let n = src.samples as usize;
+    let (w, h) = src.size();
+    // FixBadPixelsConstant runs on a copy of the stored window. Each op reads
+    // neighbors up to 2 px away, so a margin of 2 px per op keeps the
+    // window's own pixels exact; an even origin keeps the Bayer phase's
+    // parity. The whole-image path treats the stored values as one plane,
+    // and so does this.
+    let margin = 2 * src.fix_bad_pixels.len() as u32;
+    let (left, top) = (src.active.left + rect.x, src.active.top + rect.y);
+    let x0 = left.saturating_sub(margin) & !1;
+    let y0 = top.saturating_sub(margin) & !1;
+    let x1 = (left + rect.width + margin).min(sw);
+    let y1 = (top + rect.height + margin).min(sh);
+    let fixing = !src.fix_bad_pixels.is_empty();
+    let (ww, wh) = if fixing { (x1 - x0, y1 - y0) } else { (0, 0) };
+    let mut window = Vec::new();
+    if fixing {
+        assert_eq!(n, 1, "FixBadPixelsConstant is for one-plane images");
+        for y in y0..y1 {
+            let start = (y * sw + x0) as usize;
+            window.extend_from_slice(&src.data[start..start + ww as usize]);
+        }
+        for op in &src.fix_bad_pixels {
+            fix_bad_pixels_constant(&mut window, ww, wh, op);
+        }
+    }
+    let lin = &src.linearization;
+    let mut out = Vec::with_capacity(rect.width as usize * rect.height as usize * n);
+    for row in rect.y..rect.y + rect.height {
+        let y = row + src.active.top;
+        for col in rect.x..rect.x + rect.width {
+            let x = col + src.active.left;
+            for p in 0..n {
+                let code = if fixing {
+                    window[((y - y0) * ww + (x - x0)) as usize]
+                } else {
+                    src.data[(y as usize * sw as usize + x as usize) * n + p]
+                };
+                let mut v = match &src.encoding {
+                    Some(e) => e.curves[p].code(code),
+                    None => f32::from(code) * lin.scale[p] - lin.black(row, col, p),
+                };
+                for gm in &src.gain_maps {
+                    v = gain_map_sample(v, gm, (row, col, p as u32), (w, h, src.samples));
+                }
+                out.push(v);
+            }
+        }
     }
     out
 }

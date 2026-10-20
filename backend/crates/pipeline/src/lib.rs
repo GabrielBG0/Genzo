@@ -10,6 +10,7 @@ pub mod camera_color;
 pub mod geometry;
 pub mod gpu;
 pub mod look;
+pub mod picker;
 pub mod raw;
 pub mod reference;
 pub mod test_pattern;

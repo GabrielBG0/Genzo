@@ -132,6 +132,29 @@ impl Frame {
         ((w.round() as u32).max(1), (h.round() as u32).max(1))
     }
 
+    /// Where `point`, in the framed image's normalized coordinates (0 to 1
+    /// on each axis, after orientation, turns, flip and crop, as DEV-02's
+    /// picker sends it), lands in the stored image whose full resolution is
+    /// `level0`: its pixel coordinates, 0 to the width and height.
+    pub fn stored_point(&self, level0: (u32, u32), point: (f64, f64)) -> (f64, f64) {
+        let oriented = shown(level0, self.orientation);
+        let dims = [f64::from(oriented.0), f64::from(oriented.1)];
+        // The oriented image's normalized coordinates.
+        let o = match self.crop {
+            None => [point.0, point.1],
+            Some(crop) => {
+                let (fw, fh) = self.size(level0);
+                let px = self.oriented_map(level0, &crop);
+                let (u, v) = (point.0 * fw, point.1 * fh);
+                [0, 1].map(|i| (px[i][0] * u + px[i][1] * v + px[i][2]) / dims[i])
+            }
+        };
+        let r = orientation(self.orientation);
+        let stored = [f64::from(level0.0), f64::from(level0.1)];
+        let [x, y] = [0, 1].map(|i| (r[i][0] * o[0] + r[i][1] * o[1] + r[i][2]) * stored[i]);
+        (x, y)
+    }
+
     /// The map from framed source pixels (`(u, v, 1)`, 0 to the frame's
     /// size) to oriented source pixels: the crop's center plus the offset,
     /// rotated. Straight, it is a shift by the crop's top left.
@@ -787,6 +810,42 @@ mod tests {
             for v in sample(&level, size, &s, out) {
                 for (c, want) in v.iter().zip([0.25, 0.5, 0.75]) {
                     assert!((c - want).abs() < 1e-6, "{out:?}: {v:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_framed_point_lands_where_the_view_samples_it() {
+        let level0 = (3000, 2000);
+        let crops = [
+            None,
+            Some(Crop {
+                cx: 0.4,
+                cy: 0.55,
+                w: 0.5,
+                h: 0.6,
+                angle: 12.0,
+            }),
+        ];
+        for o in 1..=8u8 {
+            for crop in crops {
+                let frame = Frame {
+                    orientation: o,
+                    crop,
+                };
+                let out = (640, 480);
+                let s = plan_view(level0, &[], frame, ViewSpec::Fit(out));
+                assert_eq!(s.level, 0);
+                for p in [(0.0, 0.0), (320.5, 100.25), (640.0, 480.0), (17.0, 401.0)] {
+                    let a = &s.affine;
+                    let want = [0, 1].map(|i| a[i][0] * p.0 + a[i][1] * p.1 + a[i][2]);
+                    let got = frame
+                        .stored_point(level0, (p.0 / f64::from(out.0), p.1 / f64::from(out.1)));
+                    assert!(
+                        (got.0 - want[0]).abs() < 1e-9 && (got.1 - want[1]).abs() < 1e-9,
+                        "o {o}, crop {crop:?}, {p:?}: {got:?} vs {want:?}"
+                    );
                 }
             }
         }
