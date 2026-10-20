@@ -4,11 +4,12 @@
 //! box passes (`base_box.wgsl`), leaving one plane of `(Ā, b̄)` as f16 pairs.
 //! Stage 6 reads it bilinearly at any view (`ViewStages::tone`).
 //!
-//! It depends on the pyramid and the orientation only, never on the view:
-//! it is sampled from the pyramid's levels, not from level 0, so Fit, 1:1
-//! and export read the same coefficients. Exposure, Highlights and Shadows
-//! do not rebuild it; white balance, the crop and the turns do (the caller
-//! calls [`BaseLayer::build`] again).
+//! It depends on the pyramid and the frame (the orientation, turns, flip
+//! and crop) only, never on the view: it covers the cropped image, sampled
+//! from the pyramid's levels, not from level 0, so Fit, 1:1 and export read
+//! the same coefficients; a tight crop is sampled from level 1 upsampled.
+//! Exposure, Highlights and Shadows do not rebuild it; white balance and
+//! the geometry do (the caller calls [`BaseLayer::build`] again).
 //!
 //! Memory: two planes of 4 bytes per working pixel while it builds (18.9 MB
 //! for a square image, `budget::BASE_LAYER`); the coefficients' plane alone
@@ -20,7 +21,7 @@ use super::raw_stages::{Pass, Pyramid, Slot, pass_with};
 use super::view::{SampleUniforms, map, readback};
 use super::{Gpu, GpuError};
 use crate::reference::base::{EPSILON, T_FLOOR, radius, working_size};
-use crate::reference::sampling::{Sampling, plan, shown};
+use crate::reference::sampling::{Frame, Sampling, ViewSpec, plan_view_without_level0};
 
 const WG: u32 = 16;
 
@@ -102,13 +103,22 @@ impl BaseLayer {
     }
 
     /// Builds the base layer of `pyramid`, whose level 0 (the active area)
-    /// is `level0`, shown in orientation `o`. Replaces the one held.
-    pub fn build(&mut self, gpu: &Gpu, pyramid: &Pyramid, level0: (u32, u32), o: u8) {
+    /// is `level0`, in `frame` (an orientation, or the edit's geometry).
+    /// Replaces the one held.
+    pub fn build(
+        &mut self,
+        gpu: &Gpu,
+        pyramid: &Pyramid,
+        level0: (u32, u32),
+        frame: impl Into<Frame>,
+    ) {
         // The old plane goes first, so the new ones never add to it.
         self.coefficients = None;
         self.sampling = None;
-        let size = working_size(shown(level0, o));
-        let s = plan(&pyramid.level_sizes(), o, size);
+        let frame = frame.into();
+        let size = working_size(frame.pixel_size(level0));
+        let s =
+            plan_view_without_level0(level0, &pyramid.level_sizes(), frame, ViewSpec::Fit(size));
         let bytes = u64::from(size.0) * u64::from(size.1) * 4;
         let plane = |label| {
             gpu.device.create_buffer(&wgpu::BufferDescriptor {

@@ -7,6 +7,7 @@
 
 pub mod budget;
 pub mod camera_color;
+pub mod geometry;
 pub mod gpu;
 pub mod look;
 pub mod raw;

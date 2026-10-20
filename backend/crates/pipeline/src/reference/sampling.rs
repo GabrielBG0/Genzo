@@ -2,8 +2,10 @@
 //! the smallest level at least as large as the output, a Lanczos-2 filter
 //! sized to the remaining scale factor, and one coordinate transform from
 //! output pixels to level texels. The transform holds the file's
-//! orientation now; the edit's quarter turns, flip and crop compose into it
-//! later.
+//! orientation composed with the edit's quarter turns and flip, and the
+//! crop with its straighten angle ([`Frame`]).
+
+use crate::geometry::{Crop, Geometry};
 
 /// Where an output pixel's center lands in a level, and how wide a filter
 /// that needs.
@@ -83,6 +85,68 @@ pub fn plan(levels: &[(u32, u32)], o: u8, out: (u32, u32)) -> Sampling {
     }
 }
 
+/// The image a view shows: the stored image oriented by `orientation` (the
+/// file's composed with the edit's turns and flip, `geometry::compose`),
+/// then cropped and straightened. Without a crop it is the whole oriented
+/// image, sampled exactly as before crops existed.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Frame {
+    pub orientation: u8,
+    pub crop: Option<Crop>,
+}
+
+impl From<u8> for Frame {
+    /// The whole image in orientation `o`.
+    fn from(o: u8) -> Self {
+        Self {
+            orientation: o,
+            crop: None,
+        }
+    }
+}
+
+impl Frame {
+    /// The frame of `geometry` on a file whose orientation is `file`; no
+    /// crop when it is the whole image, straight.
+    pub fn of(geometry: &Geometry, file: u8) -> Self {
+        Self {
+            orientation: geometry.orientation(file),
+            crop: (geometry.crop != Crop::FULL).then_some(geometry.crop),
+        }
+    }
+
+    /// The framed image's size in source pixels (the crop's, unrounded), of
+    /// a stored image whose full resolution is `level0`.
+    pub fn size(&self, level0: (u32, u32)) -> (f64, f64) {
+        let oriented = shown(level0, self.orientation);
+        match self.crop {
+            None => (f64::from(oriented.0), f64::from(oriented.1)),
+            Some(c) => c.pixels(oriented),
+        }
+    }
+
+    /// The framed image's size in whole pixels, at least 1 on each side:
+    /// what a Fit view of it is sized from.
+    pub fn pixel_size(&self, level0: (u32, u32)) -> (u32, u32) {
+        let (w, h) = self.size(level0);
+        ((w.round() as u32).max(1), (h.round() as u32).max(1))
+    }
+
+    /// The map from framed source pixels (`(u, v, 1)`, 0 to the frame's
+    /// size) to oriented source pixels: the crop's center plus the offset,
+    /// rotated. Straight, it is a shift by the crop's top left.
+    fn oriented_map(&self, level0: (u32, u32), crop: &Crop) -> [[f64; 3]; 2] {
+        let oriented = shown(level0, self.orientation);
+        let (w, h) = (f64::from(oriented.0), f64::from(oriented.1));
+        let (cw, ch) = crop.pixels(oriented);
+        let (sin, cos) = crop.angle.to_radians().sin_cos();
+        [
+            [cos, -sin, crop.cx * w - cos * cw / 2.0 + sin * ch / 2.0],
+            [sin, cos, crop.cy * h - sin * cw / 2.0 - cos * ch / 2.0],
+        ]
+    }
+}
+
 /// What a view shows.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ViewSpec {
@@ -90,7 +154,7 @@ pub enum ViewSpec {
     Fit((u32, u32)),
     /// An `out`-sized view of the shown image at `zoom` (view pixels per
     /// image pixel; 1 is 1:1) whose top left is at `origin` (shown image
-    /// pixels).
+    /// pixels: the framed image's, when cropped).
     Region {
         out: (u32, u32),
         zoom: f64,
@@ -111,8 +175,13 @@ impl ViewSpec {
 /// first), shown in orientation `o`: the smallest level at least as large
 /// as the view needs, level 0 when no pyramid level is (decided
 /// 2026-10-19), and level 0 past 1:1.
-pub fn plan_view(level0: (u32, u32), levels: &[(u32, u32)], o: u8, view: ViewSpec) -> Sampling {
-    plan_levels(level0, levels, o, view, true)
+pub fn plan_view(
+    level0: (u32, u32),
+    levels: &[(u32, u32)],
+    frame: impl Into<Frame>,
+    view: ViewSpec,
+) -> Sampling {
+    plan_levels(level0, levels, frame.into(), view, true)
 }
 
 /// As [`plan_view`], from the pyramid's levels only: what a view falls back
@@ -121,19 +190,23 @@ pub fn plan_view(level0: (u32, u32), levels: &[(u32, u32)], o: u8, view: ViewSpe
 pub fn plan_view_without_level0(
     level0: (u32, u32),
     levels: &[(u32, u32)],
-    o: u8,
+    frame: impl Into<Frame>,
     view: ViewSpec,
 ) -> Sampling {
-    plan_levels(level0, levels, o, view, false)
+    plan_levels(level0, levels, frame.into(), view, false)
 }
 
 fn plan_levels(
     level0: (u32, u32),
     levels: &[(u32, u32)],
-    o: u8,
+    frame: Frame,
     view: ViewSpec,
     with_level0: bool,
 ) -> Sampling {
+    let o = frame.orientation;
+    if let Some(crop) = frame.crop {
+        return plan_cropped(level0, levels, &frame, &crop, view, with_level0);
+    }
     match view {
         ViewSpec::Fit(out) => {
             let fits = |l: (u32, u32)| {
@@ -189,6 +262,79 @@ fn plan_levels(
                 footprint,
             }
         }
+    }
+}
+
+/// [`plan_levels`] for a cropped frame: one affine from view pixels through
+/// framed source pixels, the straightened crop and the orientation, to the
+/// level's texels. The level is the smallest whose texels per view pixel
+/// reach 1 along both of the view's axes (Fit), or whose texels per source
+/// pixel reach the zoom (a region), as without a crop; the filter's scale
+/// per level axis is the length of that axis's row of the affine.
+fn plan_cropped(
+    level0: (u32, u32),
+    levels: &[(u32, u32)],
+    frame: &Frame,
+    crop: &Crop,
+    view: ViewSpec,
+    with_level0: bool,
+) -> Sampling {
+    let px = frame.oriented_map(level0, crop);
+    let oriented = shown(level0, frame.orientation);
+    let dims = [f64::from(oriented.0), f64::from(oriented.1)];
+    let r = orientation(frame.orientation);
+    let (fw, fh) = frame.size(level0);
+    // View pixels to framed source pixels: per axis a scale and an offset.
+    let (scale, offset) = match view {
+        ViewSpec::Fit(out) => {
+            assert!(out.0 > 0 && out.1 > 0);
+            ([fw / f64::from(out.0), fh / f64::from(out.1)], [0.0, 0.0])
+        }
+        ViewSpec::Region { out, zoom, origin } => {
+            assert!(out.0 > 0 && out.1 > 0 && zoom > 0.0);
+            ([1.0 / zoom; 2], [origin.0, origin.1])
+        }
+    };
+    // Level_i = sum_j R_ij * (d_i / dims_j) * oriented_j + t_i * d_i: as
+    // without a crop, one division per axis pair, so level 0 straight at
+    // 1:1 has every scale exactly 1.
+    let affine_for = |level: (u32, u32)| -> [[f64; 3]; 2] {
+        let d = [f64::from(level.0), f64::from(level.1)];
+        [0, 1].map(|i| {
+            let k = [0, 1].map(|j| r[i][j] * (d[i] / dims[j]));
+            let row = [
+                k[0] * px[0][0] + k[1] * px[1][0],
+                k[0] * px[0][1] + k[1] * px[1][1],
+                k[0] * px[0][2] + k[1] * px[1][2] + r[i][2] * d[i],
+            ];
+            [
+                row[0] * scale[0],
+                row[1] * scale[1],
+                row[0] * offset[0] + row[1] * offset[1] + row[2],
+            ]
+        })
+    };
+    let all: Vec<(u32, u32)> = std::iter::once(level0)
+        .chain(levels.iter().copied())
+        .collect();
+    // Texels per view pixel along each view axis, the affine's columns,
+    // reach 1: at a zoom, the level's texels per source pixel reach it.
+    let enough = |dims: (u32, u32)| {
+        let a = affine_for(dims);
+        (0..2).all(|j| a[0][j].hypot(a[1][j]) >= 1.0 - 1e-9)
+    };
+    let first = if with_level0 { 0 } else { 1 };
+    let index = (first..all.len())
+        .rev()
+        .find(|&i| enough(all[i]))
+        .unwrap_or(first);
+    let affine = affine_for(all[index]);
+    let footprint = [0, 1].map(|i| affine[i][0].hypot(affine[i][1]).max(1.0));
+    Sampling {
+        level: index as u32,
+        level_size: all[index],
+        affine,
+        footprint,
     }
 }
 
@@ -325,6 +471,165 @@ mod tests {
             corners.sort();
             assert_eq!(corners, [[0, 0], [0, 1], [1, 0], [1, 1]], "{o}");
         }
+    }
+
+    /// A crop of the whole image, straight, plans as no crop does: the same
+    /// level, and the same affine and filter to rounding, in every
+    /// orientation, at Fit and at a zoom.
+    #[test]
+    fn a_full_crop_plans_as_no_crop() {
+        let level0 = (4000, 3000);
+        let levels = [(2000, 1500), (1000, 750), (500, 375), (250, 187)];
+        for o in 1..=8 {
+            let full = Frame {
+                orientation: o,
+                crop: Some(Crop::FULL),
+            };
+            let s = shown(level0, o);
+            for view in [
+                ViewSpec::Fit((s.0 / 3, s.1 / 3)),
+                ViewSpec::Fit((s.0 / 9, s.1 / 9)),
+                ViewSpec::Fit(s),
+                ViewSpec::Region {
+                    out: (640, 480),
+                    zoom: 0.37,
+                    origin: (123.0, 45.5),
+                },
+                ViewSpec::Region {
+                    out: (640, 480),
+                    zoom: 1.0,
+                    origin: (700.0, 300.0),
+                },
+            ] {
+                for with in [true, false] {
+                    let (a, b) = if with {
+                        (
+                            plan_view(level0, &levels, o, view),
+                            plan_view(level0, &levels, full, view),
+                        )
+                    } else {
+                        (
+                            plan_view_without_level0(level0, &levels, o, view),
+                            plan_view_without_level0(level0, &levels, full, view),
+                        )
+                    };
+                    assert_eq!(
+                        (a.level, a.level_size),
+                        (b.level, b.level_size),
+                        "{o} {view:?}"
+                    );
+                    for i in 0..2 {
+                        assert!((a.footprint[i] - b.footprint[i]).abs() < 1e-9);
+                        for k in 0..3 {
+                            assert!(
+                                (a.affine[i][k] - b.affine[i][k]).abs() < 1e-9,
+                                "{o} {view:?}: {:?} vs {:?}",
+                                a.affine,
+                                b.affine
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// A straight crop on whole pixels at 1:1 is an exact copy of that
+    /// region of level 0, in every orientation and with turns and flips.
+    #[test]
+    fn a_straight_crop_at_one_to_one_is_a_copy() {
+        let level0 = (40, 30);
+        let image: Vec<[f32; 3]> = (0..1200)
+            .map(|i| [i as f32, (i * 7 % 13) as f32, 0.5])
+            .collect();
+        let levels = [(20, 15), (10, 7)];
+        for file in 1..=8 {
+            for (turns, flip) in [(0, false), (1, false), (3, true)] {
+                let g = Geometry {
+                    quarter_turns: turns,
+                    flip_horizontal: flip,
+                    crop: Crop::FULL,
+                };
+                let o = g.orientation(file);
+                let oriented = shown(level0, o);
+                let (ow, oh) = (f64::from(oriented.0), f64::from(oriented.1));
+                // 16 x 12 source pixels from (4, 6) of the oriented image.
+                let crop = Crop {
+                    cx: (4.0 + 8.0) / ow,
+                    cy: (6.0 + 6.0) / oh,
+                    w: 16.0 / ow,
+                    h: 12.0 / oh,
+                    angle: 0.0,
+                };
+                let frame = Frame::of(&Geometry { crop, ..g }, file);
+                assert_eq!(frame.pixel_size(level0), (16, 12));
+                let view = ViewSpec::Region {
+                    out: (10, 8),
+                    zoom: 1.0,
+                    origin: (3.0, 2.0),
+                };
+                let s = plan_view(level0, &levels, frame, view);
+                assert_eq!(s.level, 0);
+                let got = sample(&image, level0, &s, (10, 8));
+                // The same pixels through the uncropped 1:1 view, shifted.
+                let whole = plan_view(
+                    level0,
+                    &levels,
+                    o,
+                    ViewSpec::Region {
+                        out: (10, 8),
+                        zoom: 1.0,
+                        origin: (7.0, 8.0),
+                    },
+                );
+                let want = sample(&image, level0, &whole, (10, 8));
+                assert_eq!(got, want, "file {file}, turns {turns}, flip {flip}");
+            }
+        }
+    }
+
+    /// Straightened, the view's corners land on the rotated crop's corners,
+    /// and a tight crop at Fit reads level 0 where the pyramid is too small.
+    #[test]
+    fn a_straightened_crop_maps_onto_its_corners() {
+        let level0 = (4000, 3000);
+        let levels = [(2000, 1500), (1000, 750), (500, 375), (250, 187)];
+        let crop = Crop {
+            cx: 0.45,
+            cy: 0.6,
+            w: 0.3,
+            h: 0.25,
+            angle: 17.0,
+        };
+        let frame = Frame {
+            orientation: 1,
+            crop: Some(crop),
+        };
+        let size = frame.size(level0);
+        assert!((size.0 - 1200.0).abs() < 1e-9 && (size.1 - 750.0).abs() < 1e-9);
+        let out = (600, 375);
+        let s = plan_view(level0, &levels, frame, ViewSpec::Fit(out));
+        // Two source pixels per view pixel: level 1 has one texel each.
+        assert_eq!(s.level, 1);
+        let corners = crop.corners(level0);
+        let a = &s.affine;
+        for (k, (x, y)) in [(0.0, 0.0), (600.0, 0.0), (600.0, 375.0), (0.0, 375.0)]
+            .into_iter()
+            .enumerate()
+        {
+            let at = [0, 1].map(|i| a[i][0] * x + a[i][1] * y + a[i][2]);
+            for i in 0..2 {
+                assert!((at[i] * 2.0 - corners[k][i]).abs() < 1e-9, "corner {k}");
+            }
+        }
+        // The same crop in a view 4 times larger needs level 0.
+        let big = plan_view(level0, &levels, frame, ViewSpec::Fit((2400, 1500)));
+        assert_eq!(big.level, 0);
+        let fallback =
+            plan_view_without_level0(level0, &levels, frame, ViewSpec::Fit((2400, 1500)));
+        assert_eq!(fallback.level, 1);
+        // The filter's scale is the length of each level axis's row.
+        assert!((s.footprint[0] - 1.0).abs() < 1e-12);
     }
 
     #[test]

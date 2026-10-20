@@ -18,7 +18,9 @@ use super::{Gpu, GpuError};
 use crate::look::{BaseCurve, Look, Profile};
 use crate::raw::RawSource;
 use crate::reference::base::{T_FLOOR, view_to_working};
-use crate::reference::sampling::{Sampling, ViewSpec, plan, plan_view, plan_view_without_level0};
+use crate::reference::sampling::{
+    Frame, Sampling, ViewSpec, plan, plan_view, plan_view_without_level0,
+};
 
 const WG: u32 = 16;
 
@@ -309,10 +311,11 @@ impl ViewStages {
         s
     }
 
-    /// Shows `view` of `src` (its pyramid built, shown in orientation `o`):
-    /// renders the level-0 tiles it needs into `cache` when it reads level
-    /// 0 (`key` as for [`Level0Cache::ensure`]), then samples. When the
-    /// cache cannot hold them all, it falls back to the pyramid's level 1.
+    /// Shows `view` of `src` (its pyramid built) in `frame`: an orientation
+    /// (a `u8` for the whole image) or the edit's geometry. Renders the
+    /// level-0 tiles it needs into `cache` when it reads level 0 (`key` as
+    /// for [`Level0Cache::ensure`]), then samples. When the cache cannot
+    /// hold them all, it falls back to the pyramid's level 1.
     #[allow(clippy::too_many_arguments)]
     pub fn show(
         &mut self,
@@ -321,12 +324,13 @@ impl ViewStages {
         cache: &mut Level0Cache,
         src: &RawSource,
         key: u64,
-        o: u8,
+        frame: impl Into<Frame>,
         view: ViewSpec,
     ) -> Result<Sampling, GpuError> {
+        let frame = frame.into();
         let pyramid = stages.pyramid().expect("render_pyramid first");
         let transform = pyramid.transform.clone();
-        let mut s = plan_view(src.size(), &pyramid.level_sizes(), o, view);
+        let mut s = plan_view(src.size(), &pyramid.level_sizes(), frame, view);
         let out = view.out();
         if s.level == 0 {
             let tiles = Level0Cache::tiles_for(s.source_rect(out), src.size());
@@ -334,7 +338,7 @@ impl ViewStages {
                 Ok(()) => {}
                 Err(Level0Error::Full { .. }) => {
                     let pyramid = stages.pyramid().expect("built");
-                    s = plan_view_without_level0(src.size(), &pyramid.level_sizes(), o, view);
+                    s = plan_view_without_level0(src.size(), &pyramid.level_sizes(), frame, view);
                 }
                 Err(Level0Error::Gpu(e)) => return Err(e),
             }

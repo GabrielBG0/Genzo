@@ -283,11 +283,20 @@ Geometry changes which source pixel lands where. It changes no pixel values in M
 3. The straighten angle and the crop rectangle, together (see Data: *Crop*).
 
 **Sampling.** The pyramid level is the smallest one at least as large as the output scale, sampled with a Lanczos-2 filter sized to the remaining scale factor. Upsampling happens only past 1:1.
-- **How** (`reference::sampling`, `gpu::view`): output pixel centers go through one affine into the level's texels: the file's orientation and the scale now, with the edit's turns, flip and crop composed in later. The filter is separable along the level's axes, edges clamped. It takes at most 8 taps per axis while the view is at least half the chosen level on that axis, as at Fit; a view smaller than the smallest level (a thumbnail) or of another aspect ratio takes about 4 per level texel it covers.
+- **How** (`reference::sampling`, `gpu::view`): output pixel centers go through one affine into the level's texels, composing the scale, the crop and its straighten angle, and the orientation. The filter is separable along the level's axes, edges clamped. It takes at most 8 taps per axis while the view is at least half the chosen level on that axis, as at Fit; a view smaller than the smallest level (a thumbnail) or of another aspect ratio takes about 4 per level texel it covers.
 - An integer distance other than 0 weighs exactly 0, so a view the size of a level is an exact copy, in every orientation.
 - The result is the "stage 4 sampled" viewport cache (RGBA16F, the size of the view). Stages 6 and 7 read it, and stage 9 writes the RGBA8 frame from what they leave.
 - **A Fit view larger than level 1** (a 12 MP photo, level 1 2016 px wide, on a 2560 px view) is rendered from level-0 tiles, as at 1:1 (decided 2026-10-19). Such a photo runs stages 1 to 3 twice, once for the pyramid and once for level 0 (about 10 ms each at 12 MP on the RTX 3060). Deriving level 1 from the level-0 tiles instead would change the pyramid's goldens; it is a possible later optimization.
-- **A view is Fit or a region** (`ViewSpec`): a region has the view's size, a zoom (view pixels per image pixel; 1 is 1:1) and an origin in shown-image pixels. The level is the smallest whose texels per image pixel reach the zoom, so 1:1 and past read level 0. At 1:1 every scale in the affine is exactly 1, so the view is an exact copy of level 0 at any integer pan, in every orientation.
+- **The frame** (`geometry`, `reference::sampling::Frame`) is what a view shows:
+  - The file's orientation and the edit's quarter turns and flip compose into one of the eight EXIF orientations (`geometry::compose`). The turns apply first, clockwise, then the flip.
+  - Then comes the crop, straightened about its center in pixel space.
+  - Without a crop the frame is the whole oriented image, planned exactly as before crops existed.
+  - With one, the affine maps view pixels to the crop's source pixels, then rotates them about its center into oriented pixels, then scales to the level (`d / dims` per axis pair, as without a crop). So a straight crop on whole pixels at 1:1 is an exact copy of level 0, in every orientation.
+  - The level is the smallest whose texels per view pixel reach 1 along both of the view's axes (the affine's columns), so a tight crop at Fit reads level 0.
+  - The filter's scale per level axis is the length of that axis's row of the affine, which equals the old maximum when straight.
+  - At 45° a view's bounding box in the image grows: a 2560 × 1440 view at 1:1 of a 48 MP crop needs 144 level-0 tiles, against 66 straight and the cache's 448.
+  - Bench (RTX 3060, the 48 MP pyramid, 2560 × 1920): sampling a crop straightened 20° takes 1.8 ms, against 2.7 ms for the whole image.
+- **A view is Fit or a region** (`ViewSpec`): a region has the view's size, a zoom (view pixels per image pixel; 1 is 1:1) and an origin in shown-image pixels (the crop's, when cropped). The level is the smallest whose texels per image pixel reach the zoom, so 1:1 and past read level 0. At 1:1 every scale in the affine is exactly 1, so the view is an exact copy of level 0 at any integer pan, in every orientation.
 
 ### Stage 6 (M1 part): exposure and tone
 
@@ -298,7 +307,7 @@ This stage works on linear AP1 at viewport resolution. User adjustments change l
    - **The base layer** is `B`, an edge-aware smoothing of `t`: a guided filter of `t` guided by itself, with a radius of 2 percent of the cropped image's long edge and `ε = 0.05` stops² (owner, 2026-10-19), so edges of more than about a quarter stop are kept.
    - **Computed once per edit**, on the whole cropped image at a fixed working size (long edge 1536 px, or the image's own size when smaller), independent of zoom. It is upsampled with the same guided filter at the output resolution. Fit, 1:1 and export therefore use the same base, and a 1:1 tile needs no context beyond it.
    - **How** (`reference::base`, `gpu::base`):
-     - The working image is sampled from the pyramid's levels only, never from level 0, as a Fit view of that size would be, so its coefficients do not depend on what the level-0 cache holds.
+     - The working image is the cropped and straightened frame, sampled from the pyramid's levels only, never from level 0, as a Fit view of that size would be. Its coefficients then do not depend on what the level-0 cache holds, and nothing outside the crop reaches them. A crop whose level-1 texels are fewer than the working size (under about 3072 source pixels on its long edge) is sampled from level 1, upsampled.
      - Its `t` is floored at −16 stops (luminance `0.18 × 2⁻¹⁶`), so noise around black and negative values add no variance.
      - The radius is 2 % of the working long edge, rounded: 31 px at 1536.
      - Box windows are cropped to the image and divided by the pixels they hold.
@@ -510,8 +519,9 @@ The crop is defined on the image after the file's orientation, the quarter turns
 - `cx`, `cy`: the center of the crop rectangle.
 - `w`, `h`: its width and height, as fractions of the oriented image's width and height.
 - `angle`: the straighten angle in degrees, −45 to +45, positive clockwise, rotating the crop rectangle about its center. The rotation happens in pixel space: the rectangle is converted to pixels (`w × width` by `h × height`) first, so straightening never changes its aspect ratio.
-- **The rotated rectangle must lie inside the oriented image.** The engine clamps a delta that would break this, by shrinking `w` and `h` about the center.
+- **The rotated rectangle must lie inside the oriented image.** The engine clamps a delta that would break this, by shrinking `w` and `h` about the center by the same factor, so the aspect holds (`geometry::fit`). The angle is clamped to ±45°.
 - **The minimum crop** is 32 source pixels on each side.
+- **A delta that cannot be met is refused**, and the crop keeps its last valid state (owner, 2026-10-20). That covers a center so near an edge that no 32 px crop fits about it, and a request under the minimum. The center is never moved.
 - **A quarter turn or flip** maps the existing crop into the new orientation, so the same region stays selected.
 
 DEV-12 and the M2 catalog use these coordinates; a change here is a schema version bump.
@@ -557,7 +567,7 @@ Nothing is written next to the original files, and nothing is written to them.
   - All eight EXIF values, mirrored ones included.
   - A RAW file's orientation is applied after demosaic, never to the mosaic.
 - **A 90° turn after a crop** keeps the cropped region (Data: Crop).
-- **The straighten angle with a crop that no longer fits:** the crop shrinks about its center, and is never moved off the image.
+- **The straighten angle with a crop that no longer fits:** the crop shrinks about its center, and is never moved off the image. When even the 32 px minimum cannot fit about that center, the delta is refused (Data: Crop).
 
 ## Acceptance criteria
 

@@ -8,6 +8,8 @@
 //! - the synthetic scene with Genzo Standard and tone controls;
 //! - the synthetic scene with Genzo Linear and the presence controls;
 //! - the synthetic scene with Highlights and Shadows (the base layer);
+//! - the synthetic scene turned, flipped, cropped and straightened, the
+//!   base layer built on the crop;
 //! - the iPhone 12 Pro ProRAW (CC0) with Genzo Standard, through the file's
 //!   own ProfileToneCurve, at default edits and with Highlights and
 //!   Shadows. CI runs this file after fetching the corpus
@@ -21,13 +23,16 @@ use std::sync::{Mutex, MutexGuard};
 use genzo_color::output::{Target, encode};
 use genzo_imgio::{DecodeOptions, decode};
 use genzo_pipeline::camera_color::camera_transform;
+use genzo_pipeline::geometry::{Crop, Geometry, fit};
 use genzo_pipeline::gpu::base::BaseLayer;
+use genzo_pipeline::gpu::level0::Level0Cache;
 use genzo_pipeline::gpu::raw_stages::{RawStages, TileConfig};
 use genzo_pipeline::gpu::synthetic::scene_raw;
 use genzo_pipeline::gpu::view::{ViewStages, compresses};
 use genzo_pipeline::gpu::{AdapterChoice, Gpu, GpuError};
 use genzo_pipeline::look::{BaseCurve, Look, Profile};
 use genzo_pipeline::raw::RawSource;
+use genzo_pipeline::reference::sampling::{Frame, ViewSpec};
 
 static ONE_DEVICE: Mutex<()> = Mutex::new(());
 
@@ -128,6 +133,76 @@ fn golden_synthetic_local_tone() {
         ..Look::with_profile(Profile::GenzoStandard)
     };
     check(&gpu, &src, &look, (300, 200), "look/synthetic-local-tone");
+}
+
+/// A geometry golden: one clockwise turn, a flip, and a crop straightened
+/// by 8 degrees, shown at Fit through the level-0 tiles where the crop
+/// needs them, with Highlights and Shadows on a base built on the crop.
+#[test]
+fn golden_synthetic_cropped() {
+    let Some((_lock, gpu)) = gpu() else { return };
+    let src = scene_raw(1536, 1024);
+    let geometry = Geometry {
+        quarter_turns: 1,
+        flip_horizontal: true,
+        crop: Crop {
+            cx: 0.45,
+            cy: 0.55,
+            w: 0.7,
+            h: 0.6,
+            angle: 8.0,
+        },
+    };
+    let crop = fit(geometry.crop, src.size(), geometry.orientation(1)).unwrap();
+    let frame = Frame::of(&Geometry { crop, ..geometry }, 1);
+    let look = Look {
+        highlights: -60.0,
+        shadows: 50.0,
+        ..Look::with_profile(Profile::GenzoStandard)
+    };
+    let mut stages = RawStages::new(&gpu, TileConfig::default());
+    let p = stages
+        .render_pyramid(&gpu, &src, &camera_transform(&src.color, None))
+        .unwrap();
+    let compress = compresses(p, Target::Srgb);
+    let mut layer = BaseLayer::new(&gpu);
+    layer.build(&gpu, p, src.size(), frame);
+    let framed = frame.pixel_size(src.size());
+    let scale = 300.0 / f64::from(framed.0.max(framed.1));
+    let out = (
+        (f64::from(framed.0) * scale).round() as u32,
+        (f64::from(framed.1) * scale).round() as u32,
+    );
+    let mut cache = Level0Cache::new(&gpu);
+    let mut view = ViewStages::new(&gpu);
+    view.show(
+        &gpu,
+        &mut stages,
+        &mut cache,
+        &src,
+        1,
+        frame,
+        ViewSpec::Fit(out),
+    )
+    .unwrap();
+    let base = BaseCurve::new(&src.color);
+    view.tone(&gpu, &look, Some(&base), Some(&layer));
+    view.color(&gpu, &look);
+    let pixels = view
+        .read_latest(&gpu)
+        .unwrap()
+        .iter()
+        .map(|px| encode(px.map(f64::from), Target::Srgb, compress).map(|v| v as f32))
+        .collect();
+    let case = genzo_golden::Case::new(
+        env!("CARGO_MANIFEST_DIR"),
+        "look/synthetic-cropped",
+        genzo_golden::Space::DisplaySrgb,
+        genzo_golden::Producer::Gpu {
+            adapter: gpu.info.name.clone(),
+        },
+    );
+    genzo_golden::check(&case, &genzo_golden::Image::new(out.0, out.1, pixels));
 }
 
 #[test]

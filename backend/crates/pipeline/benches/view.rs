@@ -12,6 +12,8 @@
 //! The base layer of Highlights and Shadows (1536 x 1152 from the 48 MP
 //! pyramid, paid on a white balance, crop or turn) 2.85 ms; stage 6 reading
 //! it 0.45 ms, about 0.06 ms over Genzo Standard alone (2026-10-20).
+//! Sampling a crop straightened 20 degrees 1.8 ms: the crop is smaller than
+//! the image, so its filter is narrower (2026-10-20).
 //!
 //! Skipped without a GPU adapter. `GENZO_ADAPTER=software` benchmarks the
 //! software adapter.
@@ -19,12 +21,14 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use genzo_color::output::Target;
 use genzo_pipeline::camera_color::camera_transform;
+use genzo_pipeline::geometry::{Crop, fit};
 use genzo_pipeline::gpu::base::BaseLayer;
 use genzo_pipeline::gpu::raw_stages::{RawStages, TileConfig};
 use genzo_pipeline::gpu::synthetic::scene_raw;
 use genzo_pipeline::gpu::view::ViewStages;
 use genzo_pipeline::gpu::{AdapterChoice, Gpu};
 use genzo_pipeline::look::{BaseCurve, Look, Profile};
+use genzo_pipeline::reference::sampling::{Frame, ViewSpec, plan_view_without_level0};
 
 fn view(c: &mut Criterion) {
     let Ok(gpu) = Gpu::open(AdapterChoice::from_env()) else {
@@ -51,6 +55,34 @@ fn view(c: &mut Criterion) {
             wait(&gpu);
         })
     });
+    // A crop straightened by 20 degrees, at the same view size: the
+    // pyramid's level 1 sampled along a rotated affine.
+    let crop = fit(
+        Crop {
+            angle: 20.0,
+            ..Crop::FULL
+        },
+        src.size(),
+        1,
+    )
+    .unwrap();
+    let straightened = Frame {
+        orientation: 1,
+        crop: Some(crop),
+    };
+    let s = plan_view_without_level0(
+        src.size(),
+        &p.level_sizes(),
+        straightened,
+        ViewSpec::Fit(out),
+    );
+    group.bench_function("sample a crop straightened 20 degrees", |b| {
+        b.iter(|| {
+            view.sample_with(&gpu, p, None, &s, out);
+            wait(&gpu);
+        })
+    });
+    view.sample(&gpu, p, 1, out);
     for (name, compress) in [("stage 9, gamut compressed", true), ("stage 9", false)] {
         group.bench_function(name, |b| {
             b.iter(|| {
