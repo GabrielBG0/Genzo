@@ -145,14 +145,14 @@ fn stages_6_and_7_match_the_reference() {
                 if *curve_name != "ACR3" && look.profile != Profile::GenzoStandard {
                     continue;
                 }
-                view.tone(&gpu, &look, Some(base));
+                view.tone(&gpu, &look, Some(base), None);
                 let toned = view.read_latest(&gpu).unwrap();
                 view.color(&gpu, &look);
                 let colored = view.read_latest(&gpu).unwrap();
                 let mut worst = (0f64, 0usize);
                 for i in 0..sampled.len() {
                     let s = sampled[i].map(f64::from);
-                    let want6 = stage6(s, &look, Some(base));
+                    let want6 = stage6(s, &look, Some(base), None);
                     for c in 0..3 {
                         assert!(
                             close(toned[i][c], want6[c]),
@@ -220,7 +220,7 @@ fn stages_run_from_the_latest_cache() {
         exposure: 2.0,
         ..Look::with_profile(Profile::GenzoLinear)
     };
-    view.tone(&gpu, &bright, None);
+    view.tone(&gpu, &bright, None, None);
     view.sample(&gpu, p, 1, (100, 75));
     view.color(&gpu, &mono);
     view.color(&gpu, &mono);
@@ -262,7 +262,7 @@ fn the_comparison_tells_settings_apart() {
         contrast: 30.0,
         ..Look::with_profile(Profile::GenzoStandard)
     };
-    view.tone(&gpu, &look, Some(&base));
+    view.tone(&gpu, &look, Some(&base), None);
     let toned = view.read_latest(&gpu).unwrap();
     let other = Look {
         contrast: 25.0,
@@ -272,7 +272,7 @@ fn the_comparison_tells_settings_apart() {
         .iter()
         .zip(&toned)
         .filter(|(s, t)| {
-            let want = stage6(s.map(f64::from), &other, Some(&base));
+            let want = stage6(s.map(f64::from), &other, Some(&base), None);
             (0..3).any(|c| !close(t[c], want[c]))
         })
         .count();

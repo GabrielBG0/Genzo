@@ -10,7 +10,9 @@
 //!   level 0 (decided 2026-10-19); a view the cache cannot hold falls back
 //!   to level 1.
 //! - Criterion 6: 1:1 through 1024 px tiles equals one tile, code for code.
-//! - Criterion 7 at default edits: Fit matches 1:1 downsampled.
+//! - Criterion 7: Fit matches 1:1 downsampled, at default edits and with
+//!   Highlights −100 and Shadows +100 (local tone mapping, one base layer
+//!   for both), the latter on what the Fit view resolves.
 //! - Criterion 8 per pixel at 1:1, on the decoder's own fixtures.
 
 use std::sync::{Mutex, MutexGuard};
@@ -18,11 +20,13 @@ use std::sync::{Mutex, MutexGuard};
 use genzo_color::output::Target;
 use genzo_model::frame::Rect;
 use genzo_pipeline::camera_color::{CameraTransform, camera_transform, encoded_transform};
+use genzo_pipeline::gpu::base::BaseLayer;
 use genzo_pipeline::gpu::level0::{Level0Cache, TILE};
 use genzo_pipeline::gpu::raw_stages::{RawStages, TileConfig, Until};
 use genzo_pipeline::gpu::synthetic::{scene_raw, scene_xtrans_raw};
 use genzo_pipeline::gpu::view::{ViewStages, compresses, dithers};
 use genzo_pipeline::gpu::{AdapterChoice, Gpu, GpuError};
+use genzo_pipeline::look::{BaseCurve, Look, Profile};
 use genzo_pipeline::raw::RawSource;
 use genzo_pipeline::reference::sampling::{ViewSpec, sample, shown};
 use genzo_pipeline::reference::stages::stage4;
@@ -392,43 +396,76 @@ fn lab_srgb(rgb: [u8; 4]) -> [f64; 3] {
     )
 }
 
-/// Criterion 7 at default edits: the Fit frame against the 1:1 frame
-/// averaged down to Fit (in linear light), within mean ΔE2000 1.0.
+/// Criterion 7: the Fit frame against the 1:1 frame averaged down to Fit
+/// (in linear light), within mean ΔE2000 1.0.
+///
+/// - At default edits, on the whole frame.
+/// - With Highlights at −100 and Shadows at +100, where local tone mapping
+///   shows, on the scene's gradients and patches (owner, 2026-10-20). The
+///   band of fine lines below them (3.3 stops, an 8 px period) is texture
+///   the Fit view cannot resolve: any non-linear tone diverges there, the
+///   base curve alone measuring 2.95 over the whole frame.
 #[test]
 fn criterion_7_fit_matches_one_to_one() {
     let Some((_lock, gpu)) = gpu() else { return };
     let src = scene_raw(1024, 768);
+    let k = 4;
+    let fit = (src.size().0 / k, src.size().1 / k);
+    // The lines start at 80 % of the height; Fit's Lanczos-2 reaches 2 px.
+    let resolved = fit.1 * 8 / 10 - 2;
+    let local = Look {
+        highlights: -100.0,
+        shadows: 100.0,
+        ..Look::with_profile(Profile::GenzoStandard)
+    };
+    for (name, look, rows) in [
+        ("default edits", None, fit.1),
+        ("Highlights and Shadows", Some(local), resolved),
+    ] {
+        let mean = fit_against_one_to_one(&gpu, &src, look, k, rows);
+        println!("{name}: Fit against 1:1 averaged down: mean ΔE2000 {mean:.3}");
+        assert!(mean <= 1.0, "{name}: {mean}");
+    }
+}
+
+/// Criterion 7's measure for `src` with `look` (stages 6 and 7, one base
+/// layer for both views), or none (stage 9 on the sampled cache): Fit at
+/// 1/`k`, over its first `rows` rows.
+fn fit_against_one_to_one(
+    gpu: &Gpu,
+    src: &RawSource,
+    look: Option<Look>,
+    k: u32,
+    rows: u32,
+) -> f64 {
     let size = src.size();
-    let t = transform(&src);
-    let mut stages = RawStages::new(&gpu, TileConfig::default());
-    stages.render_pyramid(&gpu, &src, &t).unwrap();
-    let mut cache = Level0Cache::new(&gpu);
-    let mut view = ViewStages::new(&gpu);
-    let one = ViewSpec::Region {
+    let t = transform(src);
+    let mut stages = RawStages::new(gpu, TileConfig::default());
+    stages.render_pyramid(gpu, src, &t).unwrap();
+    let mut layer = BaseLayer::new(gpu);
+    layer.build(gpu, stages.pyramid().unwrap(), size, 1);
+    let curve = BaseCurve::new(&src.color);
+    let mut cache = Level0Cache::new(gpu);
+    let mut view = ViewStages::new(gpu);
+    let mut render = |spec: ViewSpec| {
+        view.show(gpu, &mut stages, &mut cache, src, 1, 1, spec)
+            .unwrap();
+        if let Some(look) = &look {
+            view.tone(gpu, look, Some(&curve), Some(&layer));
+            view.color(gpu, look);
+        }
+        view.output(gpu, Target::Srgb, true, false);
+        view.read_frame(gpu).unwrap()
+    };
+    let full = render(ViewSpec::Region {
         out: size,
         zoom: 1.0,
         origin: (0.0, 0.0),
-    };
-    view.show(&gpu, &mut stages, &mut cache, &src, 1, 1, one)
-        .unwrap();
-    view.output(&gpu, Target::Srgb, true, false);
-    let full = view.read_frame(&gpu).unwrap();
-    let k = 4;
+    });
     let fit = (size.0 / k, size.1 / k);
-    view.show(
-        &gpu,
-        &mut stages,
-        &mut cache,
-        &src,
-        1,
-        1,
-        ViewSpec::Fit(fit),
-    )
-    .unwrap();
-    view.output(&gpu, Target::Srgb, true, false);
-    let small = view.read_frame(&gpu).unwrap();
+    let small = render(ViewSpec::Fit(fit));
     let mut total = 0.0;
-    for y in 0..fit.1 {
+    for y in 0..rows {
         for x in 0..fit.0 {
             let mut lin = [0.0; 3];
             for dy in 0..k {
@@ -447,9 +484,7 @@ fn criterion_7_fit_matches_one_to_one() {
             );
         }
     }
-    let mean = total / f64::from(fit.0 * fit.1);
-    println!("Fit against 1:1 averaged down: mean ΔE2000 {mean:.3}");
-    assert!(mean <= 1.0, "{mean}");
+    total / f64::from(fit.0 * rows)
 }
 
 /// Criterion 8 per pixel at 1:1: the decoder's own fixtures, unedited, come

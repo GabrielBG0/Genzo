@@ -1,10 +1,11 @@
 //! The tone and presence controls' shapes (DEV-01, criterion 12): Contrast
 //! and Whites and Blacks are monotonic with the stated minimum slopes,
-//! leave middle gray where it is and fade before the ends; Vibrance's skin
+//! leave middle gray where it is and fade before the ends; Highlights and
+//! Shadows follow their weights in the base layer; Vibrance's skin
 //! weight has no step on a hue sweep.
 
 use genzo_color::look::{reference_chroma, skin, vibrance_gain};
-use genzo_color::tone::{black_end, contrast, white_end, whites_blacks};
+use genzo_color::tone::{black_end, contrast, highlights_shadows, white_end, whites_blacks};
 
 /// `t` from −12 to +8 stops, finely.
 fn grid() -> impl Iterator<Item = f64> {
@@ -57,6 +58,27 @@ fn whites_and_blacks_are_monotonic_and_reach_their_ends() {
         // Whites leaves the shadows alone and Blacks the highlights.
         assert_eq!(whites_blacks(-2.0, v, 0.0), -2.0);
         assert_eq!(whites_blacks(2.0, 0.0, v), 2.0);
+    }
+}
+
+/// Highlights and Shadows move the base layer by its weights: nothing at
+/// middle gray, the full 2 EV from +2.5 EV and from −4 EV, and the detail
+/// kept (the change depends on the base only).
+#[test]
+fn highlights_and_shadows_follow_their_weights() {
+    for v in [-1.0, -0.5, 0.5, 1.0] {
+        assert_eq!(highlights_shadows(0.3, 0.0, v, v), 0.3, "middle gray");
+        assert_eq!(highlights_shadows(4.0, 2.5, v, 0.0), 4.0 + 2.0 * v);
+        assert_eq!(highlights_shadows(-6.0, -4.0, 0.0, v), -6.0 + 2.0 * v);
+        // Highlights leaves the shadows alone and Shadows the highlights.
+        assert_eq!(highlights_shadows(-3.0, -3.0, v, 0.0), -3.0);
+        assert_eq!(highlights_shadows(3.0, 3.0, 0.0, v), 3.0);
+        // Half way up the ramp, half the move.
+        let half = highlights_shadows(1.0, 1.25, v, 0.0) - 1.0;
+        assert!((half - v).abs() < 1e-12, "{half}");
+        // The detail t − B passes through.
+        let d = highlights_shadows(1.7, 1.2, v, v) - highlights_shadows(1.2, 1.2, v, v);
+        assert!((d - 0.5).abs() < 1e-12);
     }
 }
 

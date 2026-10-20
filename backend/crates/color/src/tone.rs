@@ -496,6 +496,25 @@ pub fn whites_blacks(t: f64, whites: f64, blacks: f64) -> f64 {
     }
 }
 
+/// The furthest Highlights and Shadows move the base layer, in stops.
+pub const LOCAL_RANGE: f64 = 2.0;
+
+/// Where Highlights' weight reaches 1, in `B` (stops above middle gray).
+pub const HIGHLIGHTS_FULL: f64 = 2.5;
+
+/// Where Shadows' weight reaches 1, in `−B` (stops below middle gray).
+pub const SHADOWS_FULL: f64 = 4.0;
+
+/// Highlights and Shadows (DEV-01, stage 6, step 2) on `t`, whose base
+/// layer is `base`, with `highlights` and `shadows` the sliders over 100:
+/// `B` moves by up to 2 EV, weighted by smoothstep ramps in `B` from middle
+/// gray to +2.5 EV and to −4 EV; the detail `t − B` is kept.
+pub fn highlights_shadows(t: f64, base: f64, highlights: f64, shadows: f64) -> f64 {
+    let up = crate::look::smoothstep(0.0, HIGHLIGHTS_FULL, base);
+    let down = crate::look::smoothstep(0.0, SHADOWS_FULL, -base);
+    t + LOCAL_RANGE * (highlights * up + shadows * down)
+}
+
 /// Contrast's gain at middle gray per unit of slider (DEV-01).
 pub const CONTRAST_GAIN: f64 = 0.4;
 

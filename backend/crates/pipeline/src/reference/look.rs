@@ -2,7 +2,9 @@
 //! GPU's view passes are tested against.
 
 use genzo_color::look::{look, luminance};
-use genzo_color::tone::{MIDDLE_GRAY, base_curve, contrast, whites_blacks, working_to_prophoto};
+use genzo_color::tone::{
+    MIDDLE_GRAY, base_curve, contrast, highlights_shadows, whites_blacks, working_to_prophoto,
+};
 use genzo_color::{Mat3, invert};
 
 use crate::look::{BaseCurve, Look, Profile};
@@ -17,14 +19,27 @@ pub fn prophoto() -> (Mat3, Mat3) {
     (to, invert(&to).expect("invertible"))
 }
 
-/// Stage 6 on a working-space pixel: exposure, Whites and Blacks, Contrast
-/// on luminance (RGB scaled by the luminance ratio), then the profile's base
-/// curve. `base` is needed for Genzo Standard.
-pub fn stage6(rgb: [f64; 3], l: &Look, base: Option<&BaseCurve>) -> [f64; 3] {
+/// Stage 6 on a working-space pixel: exposure, Highlights and Shadows,
+/// Whites and Blacks, Contrast on luminance (RGB scaled by the luminance
+/// ratio), then the profile's base curve. `base` is needed for Genzo
+/// Standard; `local`, the pixel's base layer value at 0 EV
+/// (`reference::base::base`), when Highlights or Shadows is not 0.
+pub fn stage6(rgb: [f64; 3], l: &Look, base: Option<&BaseCurve>, local: Option<f64>) -> [f64; 3] {
     let gain = 2f64.powf(f64::from(l.exposure));
     let y = luminance(rgb);
     let ratio = if y > MIN_LUMINANCE {
-        let t = (y / MIDDLE_GRAY).log2() + f64::from(l.exposure);
+        let exposure = f64::from(l.exposure);
+        let mut t = (y / MIDDLE_GRAY).log2() + exposure;
+        if l.is_local() {
+            let b = local.expect("Highlights and Shadows need the base layer");
+            // Exposure shifts the base by the same amount.
+            t = highlights_shadows(
+                t,
+                b + exposure,
+                f64::from(l.highlights) / 100.0,
+                f64::from(l.shadows) / 100.0,
+            );
+        }
         let t = whites_blacks(t, f64::from(l.whites) / 100.0, f64::from(l.blacks) / 100.0);
         let t = contrast(t, f64::from(l.contrast) / 100.0);
         MIDDLE_GRAY * t.exp2() / y

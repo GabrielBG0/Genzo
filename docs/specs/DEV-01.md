@@ -296,7 +296,16 @@ This stage works on linear AP1 at viewport resolution. User adjustments change l
 1. **Exposure:** a gain of 2^EV.
 2. **Highlights and Shadows: local tone mapping** (decided 2026-10-18).
    - **The base layer** is `B`, an edge-aware smoothing of `t`: a guided filter of `t` guided by itself, with a radius of 2 percent of the cropped image's long edge and `ε = 0.05` stops² (owner, 2026-10-19), so edges of more than about a quarter stop are kept.
-   - **Computed once per edit**, on the whole cropped image at a fixed working size (long edge 1536 px), independent of zoom. It is upsampled with the same guided filter at the output resolution. Fit, 1:1 and export therefore use the same base, and a 1:1 tile needs no context beyond it.
+   - **Computed once per edit**, on the whole cropped image at a fixed working size (long edge 1536 px, or the image's own size when smaller), independent of zoom. It is upsampled with the same guided filter at the output resolution. Fit, 1:1 and export therefore use the same base, and a 1:1 tile needs no context beyond it.
+   - **How** (`reference::base`, `gpu::base`):
+     - The working image is sampled from the pyramid's levels only, never from level 0, as a Fit view of that size would be, so its coefficients do not depend on what the level-0 cache holds.
+     - Its `t` is floored at −16 stops (luminance `0.18 × 2⁻¹⁶`), so noise around black and negative values add no variance.
+     - The radius is 2 % of the working long edge, rounded: 31 px at 1536.
+     - Box windows are cropped to the image and divided by the pixels they hold.
+     - The filter keeps `Ā` and `b̄`, the box means of `a = σ² / (σ² + ε)` and `b = μ (1 − a)`. At the output, they are read bilinearly at the pixel's place in the working image (texel centers at `i + 0.5`, edges clamped), and `B = Ā · max(t, −16) + b̄`, from `t` at 0 EV.
+     - On the GPU the filter is four separable box passes over two planes of 4 bytes per working pixel. The plane between the first two holds each row window's mean and variance as f16, not its sums of `t` and `t²`, which f16 cannot hold at `t` of −16. The coefficients are f16 too. Measured against the CPU's f64: `Ā` within 6e-4, `B` within 0.006 stops.
+     - After the build only the coefficients' plane is kept (9.4 MB for a square image).
+     - **Bench** (RTX 3060, the 48 MP pyramid): the build 2.85 ms. Stage 6 reading the base 0.45 ms at 2560 × 1920, 0.06 ms over Genzo Standard without it.
    - **Detail** is `D = t − B`, and is kept.
    - **Highlights** move `B` by `h × w_h(B)`, and **Shadows** by `s × w_s(B)`. The weights are smoothstep ramps in `B`: `w_h = smoothstep(0, 2.5, B)` rises from 0 at middle gray to 1 at +2.5 EV, and `w_s = smoothstep(0, 4, −B)` mirrors it toward −4 EV (owner, 2026-10-19). `h` and `s` scale the slider (−100 to +100) to at most ±2 EV.
    - Exposure is a constant shift in `t`, so changing it shifts `B` by the same amount and needs no new base. White balance, the crop, the straighten angle, the quarter turns and the flip recompute it. The profile does not, since both profiles share everything before stage 6.
@@ -393,10 +402,11 @@ Stages 1 to 4 run per tile, so full-resolution intermediates exist only for one 
 | Stage 1 to 4 scratch for one tile, intermediates included: Bayer 52 B/px × 1072² = 60 MB (the mosaic, seven RCD buffers, RGBA32F output; 64.2 MB on NVIDIA); X-Trans 188 B/px × 560² = 59 MB (59.2 MB measured; only one demosaic's set is allocated) | 65 MB |
 | Uploads: the raw tile texture (linear DNG, 3 × u16: 6.9 MB; 7.4 MB on NVIDIA) and the staging of the two tiles in flight (2 × 6.9 MB); 21.2 MB at the measured peak | 22 MB |
 | Level-0 tile cache at 1:1 (fixed cap; 448 tiles of 256² in one atlas, 234.9 MB measured; about three 2560 × 1440 views with their rings, 120 tiles each) | 256 MB |
-| Viewport stage caches (fixed cap; stage 4 sampled, stage 6, stage 7 at 2560 × 1920 RGBA16F, plus the base layer) | 128 MB |
+| Viewport stage caches (fixed cap; stage 4 sampled, stage 6, stage 7 at 2560 × 1920 RGBA16F; 118 MB) | 128 MB |
+| Base layer of Highlights and Shadows while it builds: two planes of 4 bytes per working pixel, 18.9 MB for a square image at 1536 × 1536 (measured the same); 9.4 MB kept after (owner, 2026-10-20) | 20 MB |
 | Output frame and two persistent readback buffers, RGBA8 | 60 MB |
 | Histogram and clipping masks | 10 MB |
-| **Total** | **674 MB**, under the 1 GB budget with 326 MB to spare |
+| **Total** | **694 MB**, under the 1 GB budget with 306 MB to spare |
 
 A software adapter uses the same sizes.
 
@@ -513,6 +523,7 @@ DEV-12 and the M2 catalog use these coordinates; a change here is a schema versi
 | GPU | The mip pyramid, levels 1 and up, of the current photo | Until another photo is selected or white balance settles |
 | GPU | Level-0 tiles at 1:1, an LRU with a 256 MB cap | Until the view, the photo or an earlier stage changes |
 | GPU | The viewport stage caches, 128 MB cap | Until the view or an earlier stage changes |
+| GPU | The base layer's coefficients (Highlights and Shadows), 9.4 MB at most | Until another photo is selected, or white balance, the crop, the straighten angle, the quarter turns or the flip change. Not the view, exposure or any other tone control |
 | CPU | The decoded input of the current photo | Until another photo is selected |
 | CPU | The pyramids of the prefetched neighbors, an LRU with a 768 MB cap | The session |
 | CPU and disk | Embedded previews | The session (the disk tier is the `cache` crate's) |
@@ -571,6 +582,9 @@ Each criterion names the check that proves it. These become the tests. "Corpus" 
  The same goldens hold on real GPUs. *Check:* the golden harness in CI on every PR, and `scripts/gpu-check.sh` on the RTX 3060 before merging pipeline changes. Changing a golden needs a stated reason in the PR.
 6. **No tile seams.** A 3000 × 2000 image rendered with 1024 px tiles and as one tile differs by at most 1 code. *Check:* a pipeline test on lavapipe.
 7. **Fit matches 1:1.** The Fit render and the 1:1 render downsampled to Fit differ by mean ΔE2000 ≤ 1.0, with Highlights at −100 and Shadows at +100, which is where local tone mapping shows. *Check:* a pipeline test.
+   - **What is measured** (owner, 2026-10-20): the Highlights and Shadows case is measured on what the Fit view resolves, the synthetic scene's gradients and patches (0.080 measured).
+   - **Why not the fine lines:** the band of fine lines (3.3 stops, an 8 px period) cannot be resolved at Fit. Any non-linear tone applied before downsampling diverges there from one applied after: the base curve alone measures 2.95 over the whole frame, and Highlights −100 with Shadows +100 2.17.
+   - The default-edit case is measured on the whole frame (0.70).
 8. **Non-RAW is an identity when unedited.**
    - An sRGB JPEG and an sRGB PNG render within 1 code of their decoded values. A 16-bit sRGB TIFF renders within 1.5 codes of its decoded values (on the 8-bit scale): those lie between codes, and the pyramid's f16 adds up to 1.3 codes before rounding.
    - A Display P3 HEIC renders to a P3 frame within 1 code.
@@ -592,7 +606,9 @@ Each criterion names the check that proves it. These become the tests. "Corpus" 
     - Shadows mirrors that.
     - Exposure +1 doubles linear values before the base curve.
     - Contrast is monotonic in `t` at every slider value, with a slope of at least 0.6, and moves `t_W` by under 0.05 EV and `t_B` by under 0.02 EV.
-    - **Halo.** On a 3-stop step edge, Highlights at −100 overshoots the dark side's level by at most 0.15 EV anywhere within twice the filter radius of the edge. The PR that builds it records the measured value here.
+    - **Halo.** On a 3-stop step edge, Highlights at −100 overshoots the dark side's level by at most 0.15 EV anywhere within twice the filter radius of the edge. Measured 0.074 EV at worst, with the dark side at +1 EV.
+      - The test sweeps the dark side through Highlights' ramp (0, +0.5, +1, +1.5 EV), where any pull of the bright side on `B` shows.
+      - It measures the change against Highlights at 0, on a view the size of level 1, so the step has no ringing of its own.
     - Vibrance on a hue sweep through 10° to 80° at constant L and C changes the chroma gain smoothly: no step between neighboring hues 0.1° apart above 0.01. The shoulders' steepest change at +100 is about 0.007, and the hard edge they replaced jumped by about 0.47.
 
     *Check:* pipeline tests on the synthetic scene.
