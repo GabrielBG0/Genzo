@@ -73,6 +73,17 @@ fn relative_temp_spans_what_dev01_names() {
     );
 }
 
+/// The reference the non-RAW shifts start from, as DEV-01 quotes it:
+/// D65_XY's Robertson mired and tint.
+#[test]
+fn relative_shifts_start_from_d65_as_dev01_quotes_it() {
+    let (t, tint) = temperature_from_xy(genzo_color::camera::D65_XY);
+    let mired = 1.0e6 / t;
+    println!("D65_XY: {t:.3} K, {mired:.4} mired, tint {tint:.4}");
+    assert_eq!((mired * 100.0).round() / 100.0, 153.76);
+    assert_eq!((tint * 10.0).round() / 10.0, 9.8);
+}
+
 #[test]
 fn relative_temp_and_tint_round_trip() {
     for i in -20..=20 {
