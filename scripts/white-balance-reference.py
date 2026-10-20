@@ -40,7 +40,7 @@ def main():
                 colour.xy_to_XYZ(src), colour.xy_to_XYZ(dst), transform="CAT16"
             )
             lines.append(json.dumps({"from": src, "to": dst, "cat16": m.tolist()}))
-    OUT.write_text("\n".join(lines) + "\n")
+    OUT.write_text("\n".join(lines) + "\n", newline="\n")
     print(f"{len(lines)} records -> {OUT.relative_to(ROOT)}")
 
 
