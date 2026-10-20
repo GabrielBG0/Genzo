@@ -27,7 +27,7 @@ fn uniforms(flag: u32) -> Vec<u8> {
     b
 }
 
-fn run(source: &str, flag: u32) -> String {
+fn run(source: &str, flag: u32, write_curve: bool, storage_input: bool) -> String {
     let Ok(gpu) = Gpu::open(AdapterChoice::from_env()) else {
         return "no adapter".into();
     };
@@ -65,7 +65,13 @@ fn run(source: &str, flag: u32) -> String {
             view_formats: &[],
         })
     };
-    let input = texture(wgpu::TextureUsages::TEXTURE_BINDING);
+    let input = texture(if storage_input {
+        wgpu::TextureUsages::TEXTURE_BINDING
+            | wgpu::TextureUsages::STORAGE_BINDING
+            | wgpu::TextureUsages::COPY_SRC
+    } else {
+        wgpu::TextureUsages::TEXTURE_BINDING
+    });
     let output = texture(wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_SRC);
     let u = uniforms(flag);
     let ubuf = d.create_buffer(&wgpu::BufferDescriptor {
@@ -84,7 +90,9 @@ fn run(source: &str, flag: u32) -> String {
     let table: Vec<u8> = (0..4098)
         .flat_map(|i| ((i as f32 / 4096.0).min(1.0)).to_le_bytes())
         .collect();
-    gpu.queue.write_buffer(&curve, 0, &table);
+    if write_curve {
+        gpu.queue.write_buffer(&curve, 0, &table);
+    }
     let layout = pipeline.get_bind_group_layout(0);
     let iv = input.create_view(&Default::default());
     let ov = output.create_view(&Default::default());
@@ -188,7 +196,14 @@ fn warp_diagnostics() {
     ];
     let mut log = String::new();
     for (name, source, flag) in &variants {
-        log.push_str(&format!("{name}: {}\n", run(source, *flag)));
+        log.push_str(&format!("{name}: {}\n", run(source, *flag, true, false)));
+    }
+    for (name, write, storage) in [
+        ("full shader, flag 0, curve never written", false, false),
+        ("full shader, flag 0, input with storage usage", true, true),
+        ("full shader, flag 0, both", false, true),
+    ] {
+        log.push_str(&format!("{name}: {}\n", run(SHADER, 0, write, storage)));
     }
     panic!("diagnostics (always fails, to show the log):\n{log}");
 }

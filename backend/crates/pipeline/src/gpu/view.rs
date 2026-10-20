@@ -178,12 +178,17 @@ impl ViewStages {
             tone_uniforms: uniforms("view tone", size_of::<ToneUniforms>()),
             color_uniforms: uniforms("view color", size_of::<LookUniforms>()),
             output_uniforms: uniforms("view output", size_of::<OutputUniforms>()),
-            curve: device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("base curve table"),
-                size: ((genzo_color::tone::TABLE_SIZE + 2) * 4) as u64,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            }),
+            // Written at creation: Genzo Linear never uploads a table, and a
+            // buffer wgpu has to zero on first use lost the device on WARP
+            // of Windows Server 2022 (CI, 2026-10-19).
+            curve: wgpu::util::DeviceExt::create_buffer_init(
+                device,
+                &wgpu::util::BufferInitDescriptor {
+                    label: Some("base curve table"),
+                    contents: &[0; (genzo_color::tone::TABLE_SIZE + 2) * 4],
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                },
+            ),
             sampled: None,
             toned: None,
             colored: None,
