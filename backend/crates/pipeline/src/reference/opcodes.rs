@@ -57,20 +57,50 @@ pub fn apply_gain_map(image: &mut [f32], width: u32, height: u32, planes: u32, g
     let first = area.plane;
     let last = area.plane.saturating_add(area.planes).min(planes);
     for plane in first..last {
-        let map_plane = plane.min(gm.map_planes - 1);
         for row in (t..b).step_by(area.row_pitch as usize) {
-            let (v1, v2, fv) = map_index(row, height, gm.origin_v, gm.spacing_v, gm.points_v);
             for col in (l..r).step_by(area.col_pitch as usize) {
-                let (h1, h2, fh) = map_index(col, width, gm.origin_h, gm.spacing_h, gm.points_h);
-                let at = |v, h| gm.entry(v, h, map_plane);
-                let top = at(v1, h1) * (1.0 - fh) + at(v1, h2) * fh;
-                let bottom = at(v2, h1) * (1.0 - fh) + at(v2, h2) * fh;
-                let gain = top * (1.0 - fv) + bottom * fv;
+                let gain = map_gain(gm, plane, row, col, width, height);
                 let i = (row as usize * width as usize + col as usize) * planes as usize
                     + plane as usize;
                 image[i] = (image[i] * gain).min(1.0);
             }
         }
+    }
+}
+
+/// The map's gain at one sample, interpolated as [`apply_gain_map`] does.
+fn map_gain(gm: &GainMap, plane: u32, row: u32, col: u32, width: u32, height: u32) -> f32 {
+    let map_plane = plane.min(gm.map_planes - 1);
+    let (v1, v2, fv) = map_index(row, height, gm.origin_v, gm.spacing_v, gm.points_v);
+    let (h1, h2, fh) = map_index(col, width, gm.origin_h, gm.spacing_h, gm.points_h);
+    let at = |v, h| gm.entry(v, h, map_plane);
+    let top = at(v1, h1) * (1.0 - fh) + at(v1, h2) * fh;
+    let bottom = at(v2, h1) * (1.0 - fh) + at(v2, h2) * fh;
+    top * (1.0 - fv) + bottom * fv
+}
+
+/// [`apply_gain_map`] for one sample at (`row`, `col`), `plane`, of a
+/// `width` x `height` image with `planes` planes: the sample times the
+/// gain, clipped at 1, when the map covers it; else unchanged.
+pub fn gain_map_sample(
+    value: f32,
+    gm: &GainMap,
+    (row, col, plane): (u32, u32, u32),
+    (width, height, planes): (u32, u32, u32),
+) -> f32 {
+    let Some((t, l, b, r)) = overlap(&gm.area, height, width) else {
+        return value;
+    };
+    let area = &gm.area;
+    let covered = (area.plane..area.plane.saturating_add(area.planes).min(planes)).contains(&plane)
+        && (t..b).contains(&row)
+        && (l..r).contains(&col)
+        && (row - t) % area.row_pitch == 0
+        && (col - l) % area.col_pitch == 0;
+    if covered {
+        (value * map_gain(gm, plane, row, col, width, height)).min(1.0)
+    } else {
+        value
     }
 }
 
