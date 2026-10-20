@@ -19,7 +19,7 @@ pub fn reference_chroma() -> f64 {
         .fold(0.0, f64::max)
 }
 
-fn smoothstep(lo: f64, hi: f64, x: f64) -> f64 {
+pub(crate) fn smoothstep(lo: f64, hi: f64, x: f64) -> f64 {
     let t = ((x - lo) / (hi - lo)).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
 }

@@ -3,7 +3,9 @@
 // one affine into the chosen level, then a Lanczos-2 filter sized to the
 // remaining scale factor, separable along the level's axes, edges clamped.
 // `fetch` reads a texel: a pyramid level (view_fetch_pyramid.wgsl) or level
-// 0 through the tile cache (view_fetch_level0.wgsl).
+// 0 through the tile cache (view_fetch_level0.wgsl). `store` writes the
+// result: into the view's sampled cache (view_store_texture.wgsl) or as
+// the base layer's working t (base_store_t.wgsl).
 
 struct View {
     // Level coordinates of an output pixel's center: dot(row, (x, y, 1)).
@@ -19,7 +21,6 @@ struct View {
 }
 
 @group(0) @binding(0) var<uniform> view: View;
-@group(0) @binding(2) var sampled: texture_storage_2d<rgba16float, write>;
 
 const PI: f32 = 3.14159265358979;
 
@@ -73,5 +74,5 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
             sum += ky * kx * fetch(vec2<i32>(col, row));
         }
     }
-    textureStore(sampled, vec2<i32>(id.xy), vec4<f32>(sum, 1.0));
+    store(id.xy, sum);
 }

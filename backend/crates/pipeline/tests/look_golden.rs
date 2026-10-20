@@ -7,8 +7,10 @@
 //!
 //! - the synthetic scene with Genzo Standard and tone controls;
 //! - the synthetic scene with Genzo Linear and the presence controls;
+//! - the synthetic scene with Highlights and Shadows (the base layer);
 //! - the iPhone 12 Pro ProRAW (CC0) with Genzo Standard, through the file's
-//!   own ProfileToneCurve. CI runs this file after fetching the corpus
+//!   own ProfileToneCurve, at default edits and with Highlights and
+//!   Shadows. CI runs this file after fetching the corpus
 //!   (GENZO_REQUIRE_CORPUS=1); elsewhere a missing file skips.
 
 #[allow(dead_code)]
@@ -19,6 +21,7 @@ use std::sync::{Mutex, MutexGuard};
 use genzo_color::output::{Target, encode};
 use genzo_imgio::{DecodeOptions, decode};
 use genzo_pipeline::camera_color::camera_transform;
+use genzo_pipeline::gpu::base::BaseLayer;
 use genzo_pipeline::gpu::raw_stages::{RawStages, TileConfig};
 use genzo_pipeline::gpu::synthetic::scene_raw;
 use genzo_pipeline::gpu::view::{ViewStages, compresses};
@@ -57,7 +60,11 @@ fn check(gpu: &Gpu, src: &RawSource, look: &Look, out: (u32, u32), name: &str) {
     );
     view.sample(gpu, p, 1, fit);
     let base = BaseCurve::new(&src.color);
-    view.tone(gpu, look, Some(&base));
+    let mut layer = BaseLayer::new(gpu);
+    if look.is_local() {
+        layer.build(gpu, p, src.size(), 1);
+    }
+    view.tone(gpu, look, Some(&base), Some(&layer));
     view.color(gpu, look);
     let compress = compresses(p, Target::Srgb);
     let pixels = view
@@ -111,6 +118,19 @@ fn golden_synthetic_linear_presence() {
 }
 
 #[test]
+fn golden_synthetic_local_tone() {
+    let Some((_lock, gpu)) = gpu() else { return };
+    let src = scene_raw(1536, 1024);
+    let look = Look {
+        highlights: -70.0,
+        shadows: 60.0,
+        exposure: 0.3,
+        ..Look::with_profile(Profile::GenzoStandard)
+    };
+    check(&gpu, &src, &look, (300, 200), "look/synthetic-local-tone");
+}
+
+#[test]
 fn golden_iphone_12_pro_standard() {
     let Some(path) = sdk_stage2::corpus_file("raw/Apple/iPhone 12 Pro/IMG_1361.DNG") else {
         return;
@@ -129,4 +149,16 @@ fn golden_iphone_12_pro_standard() {
     );
     let look = Look::with_profile(Profile::GenzoStandard);
     check(&gpu, &src, &look, (400, 300), "look/iphone-12-pro-standard");
+    let local = Look {
+        highlights: -80.0,
+        shadows: 70.0,
+        ..look
+    };
+    check(
+        &gpu,
+        &src,
+        &local,
+        (400, 300),
+        "look/iphone-12-pro-local-tone",
+    );
 }

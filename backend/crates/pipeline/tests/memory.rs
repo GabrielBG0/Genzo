@@ -4,7 +4,9 @@
 //! them (`generate_allocator_report`: DX12 and Vulkan), measured.
 //!
 //! A second photo of the same size replaces the first without the total
-//! growing: the old pyramid is freed before the new one is made.
+//! growing: the old pyramid is freed before the new one is made. The view's
+//! caches, the level-0 tile cache and the base layer each stay within
+//! their own line.
 
 use genzo_color::encoding::InputEncoding;
 use genzo_imgio::raw::{Levels, Rect};
@@ -246,7 +248,7 @@ fn the_view_stays_within_its_caps() {
         vibrance: 20.0,
         ..genzo_pipeline::look::Look::with_profile(genzo_pipeline::look::Profile::Embedded)
     };
-    view.tone(&gpu, &look, None);
+    view.tone(&gpu, &look, None, None);
     view.color(&gpu, &look);
     view.output(&gpu, Target::Srgb, false, false);
     let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
@@ -314,5 +316,57 @@ fn the_level0_cache_stays_within_its_cap() {
         let used = after - before;
         println!("measured: {:.1} MB for the cache", used as f64 / MB);
         assert!(used <= budget::LEVEL0_CACHE, "{used} bytes");
+    }
+}
+
+/// The base layer of a square image, its largest working size (1536 x
+/// 1536): both planes while it builds within DEV-01's 20 MB line, and only
+/// the coefficients' plane after; a rebuild frees the old plane first.
+#[test]
+fn the_base_layer_stays_within_its_cap() {
+    use genzo_pipeline::gpu::base::{BaseLayer, peak_bytes};
+    let gpu = match Gpu::open(AdapterChoice::from_env()) {
+        Ok(gpu) => gpu,
+        Err(GpuError::NoAdapter) if std::env::var("GENZO_REQUIRE_GPU").as_deref() != Ok("1") => {
+            eprintln!("skipped: no GPU adapter");
+            return;
+        }
+        Err(e) => panic!("{e}"),
+    };
+    let size = (3072, 3072);
+    let src = encoded_source(size);
+    let t = encoded_transform(src.encoding.as_ref().unwrap());
+    let mut stages = RawStages::new(&gpu, TileConfig::default());
+    stages.render_pyramid(&gpu, &src, &t).unwrap();
+    let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+    // Measured from after the passes and their uniforms exist: D3D12 gives
+    // each small buffer its own 64 KiB allocation (6 x 64 KiB on WARP).
+    let mut layer = BaseLayer::new(&gpu);
+    let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+    let before = allocated(&gpu);
+    for build in ["first build", "rebuild"] {
+        layer.build(&gpu, stages.pyramid().unwrap(), size, 1);
+        assert_eq!(layer.size(), (1536, 1536));
+        // Before the GPU finishes, the scratch plane is still held.
+        let peak = allocated(&gpu);
+        let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+        println!(
+            "{build}: computed peak {:.1} MB, held {:.1} MB (cap {:.0} MB)",
+            peak_bytes(layer.size()) as f64 / MB,
+            layer.bytes() as f64 / MB,
+            budget::BASE_LAYER as f64 / MB
+        );
+        assert!(peak_bytes(layer.size()) <= budget::BASE_LAYER);
+        assert_eq!(layer.bytes() * 2, peak_bytes(layer.size()));
+        if let (Some(before), Some(peak), Some(after)) = (before, peak, allocated(&gpu)) {
+            let (peak, held) = (peak - before, after - before);
+            println!(
+                "{build}: measured peak {:.1} MB, held {:.1} MB",
+                peak as f64 / MB,
+                held as f64 / MB
+            );
+            assert!(peak <= budget::BASE_LAYER, "{peak} bytes");
+            assert!(held <= layer.bytes() + 100_000, "{held} bytes");
+        }
     }
 }

@@ -1,6 +1,7 @@
 // Stage 6 (DEV-01, M1 part) on the view, as pipeline::reference::look
-// computes it: exposure, Whites and Blacks, and Contrast on luminance in
-// t = log2(Y / 0.18), RGB scaled by the luminance ratio; then, for Genzo
+// computes it: exposure, Highlights and Shadows (from the base layer, read
+// as reference::base does), Whites and Blacks, and Contrast on luminance
+// in t = log2(Y / 0.18), RGB scaled by the luminance ratio; then, for Genzo
 // Standard, the base curve (DEV-02): into linear ProPhoto, the exposure
 // ramp per channel, the DNG SDK's RGBTone through the curve table, and
 // back. The table is read from a buffer and interpolated here: a filtered
@@ -17,6 +18,13 @@ struct Tone {
     ends: vec4<f32>,
     // The ramp: black, toe radius, slope, quadratic scale.
     ramp: vec4<f32>,
+    // Highlights and Shadows over 100, the floor of t, 1 to read the base
+    // layer.
+    local: vec4<f32>,
+    // View pixel centers to the base layer's working coordinates.
+    to_base: array<vec4<f32>, 2>,
+    // The base layer's width and height.
+    base_size: vec4<u32>,
     // Width, height, 1 to apply the base curve, unused.
     size: vec4<u32>,
 }
@@ -25,6 +33,8 @@ struct Tone {
 @group(0) @binding(1) var input: texture_2d<f32>;
 @group(0) @binding(2) var result: texture_storage_2d<rgba16float, write>;
 @group(0) @binding(3) var<storage, read> curve: array<f32>;
+// (Ā, b̄) per working pixel, as f16 pairs (gpu::base).
+@group(0) @binding(4) var<storage, read> coefficients: array<u32>;
 
 const MIDDLE_GRAY: f32 = 0.18;
 const MIN_LUMINANCE: f32 = 1e-10;
@@ -58,6 +68,35 @@ fn whites_blacks(t: f32) -> f32 {
 fn contrast(t: f32) -> f32 {
     let sigma = select(1.6, 1.0, t > 0.0);
     return t + tone.ends.w * tone.controls.w * t * exp(-t * t / (2.0 * sigma * sigma));
+}
+
+fn coefficient(x: i32, y: i32) -> vec2<f32> {
+    return unpack2x16float(coefficients[u32(y) * tone.base_size.x + u32(x)]);
+}
+
+// The base B at 0 EV of the pixel at view position p whose t at 0 EV is
+// t0: the coefficients bilinearly at its working coordinates, edges
+// clamped (reference::base::coefficients_at and base).
+fn local_base(p: vec2<f32>, t0: f32) -> f32 {
+    let at = vec3<f32>(p, 1.0);
+    let u = vec2<f32>(dot(tone.to_base[0].xyz, at), dot(tone.to_base[1].xyz, at)) - 0.5;
+    let i = floor(u);
+    let f = u - i;
+    let edge = vec2<i32>(tone.base_size.xy) - 1;
+    let a = clamp(vec2<i32>(i), vec2<i32>(0), edge);
+    let b = clamp(vec2<i32>(i) + 1, vec2<i32>(0), edge);
+    let top = mix(coefficient(a.x, a.y), coefficient(b.x, a.y), f.x);
+    let bottom = mix(coefficient(a.x, b.y), coefficient(b.x, b.y), f.x);
+    let ab = mix(top, bottom, f.y);
+    return ab.x * max(t0, tone.local.z) + ab.y;
+}
+
+// Highlights and Shadows (color::tone::highlights_shadows): B moves by up
+// to 2 EV, weighted by smoothstep ramps to +2.5 and -4 EV.
+fn highlights_shadows(t: f32, b: f32) -> f32 {
+    let up = smoothstep(0.0, 2.5, b);
+    let down = smoothstep(0.0, 4.0, -b);
+    return t + 2.0 * (tone.local.x * up + tone.local.y * down);
 }
 
 // dng_function_exposure_ramp.
@@ -135,7 +174,13 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     let y = dot(tone.y_row.xyz, rgb);
     var ratio = exp2(tone.controls.x);
     if (y > MIN_LUMINANCE) {
-        var t = log2(y / MIDDLE_GRAY) + tone.controls.x;
+        let t0 = log2(y / MIDDLE_GRAY);
+        var t = t0 + tone.controls.x;
+        if (tone.local.w != 0.0) {
+            // Exposure shifts the base by the same amount.
+            let p = vec2<f32>(id.xy) + 0.5;
+            t = highlights_shadows(t, local_base(p, t0) + tone.controls.x);
+        }
         t = contrast(whites_blacks(t));
         ratio = MIDDLE_GRAY * exp2(t) / y;
     }

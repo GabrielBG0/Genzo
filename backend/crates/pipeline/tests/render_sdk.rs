@@ -73,7 +73,7 @@ fn genzo_means(gpu: &Gpu, src: &RawSource, r: &Render) -> Vec<Vec<[f64; 3]>> {
                 .show(gpu, &mut stages, &mut cache, src, 1, 1, spec)
                 .unwrap();
             assert_eq!(s.level, 0, "1:1 reads level 0");
-            view.tone(gpu, &look, Some(&base));
+            view.tone(gpu, &look, Some(&base), None);
             let pixels = view.read_latest(gpu).unwrap();
             for y in 0..out.1 {
                 for x in 0..out.0 {

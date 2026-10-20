@@ -1,7 +1,7 @@
 //! Criterion benchmark for the view (DEV-01): the pyramid sampled into a
 //! 2560 x 1920 view, then stage 9 into its RGBA8 frame, with the gamut
-//! compression (a RAW photo) and without (an sRGB JPEG); and stages 6 and 7
-//! (DEV-02's base curve with Genzo Standard). From a 48 MP
+//! compression (a RAW photo) and without (an sRGB JPEG); stages 6 and 7
+//! (DEV-02's base curve with Genzo Standard); and the base layer. From a 48 MP
 //! pyramid: level 2 (2016 x 1512) is too small, so sampling reads level 1
 //! (4032 x 3024).
 //!
@@ -9,6 +9,9 @@
 //! with the gamut compression, 0.33 ms without. Stage 6 0.39 ms with
 //! Genzo Standard and 0.31 ms with Genzo Linear, so the base curve costs
 //! about 0.07 ms (DEV-02 criterion 10 allows 1 ms); stage 7 0.39 ms.
+//! The base layer of Highlights and Shadows (1536 x 1152 from the 48 MP
+//! pyramid, paid on a white balance, crop or turn) 2.85 ms; stage 6 reading
+//! it 0.45 ms, about 0.06 ms over Genzo Standard alone (2026-10-20).
 //!
 //! Skipped without a GPU adapter. `GENZO_ADAPTER=software` benchmarks the
 //! software adapter.
@@ -16,6 +19,7 @@
 use criterion::{Criterion, criterion_group, criterion_main};
 use genzo_color::output::Target;
 use genzo_pipeline::camera_color::camera_transform;
+use genzo_pipeline::gpu::base::BaseLayer;
 use genzo_pipeline::gpu::raw_stages::{RawStages, TileConfig};
 use genzo_pipeline::gpu::synthetic::scene_raw;
 use genzo_pipeline::gpu::view::ViewStages;
@@ -78,11 +82,32 @@ fn view(c: &mut Criterion) {
     ] {
         group.bench_function(name, |b| {
             b.iter(|| {
-                view.tone(&gpu, &look, Some(&base));
+                view.tone(&gpu, &look, Some(&base), None);
                 wait(&gpu);
             })
         });
     }
+    // The base layer: built on a white balance, crop or turn, not per
+    // slider frame; then stage 6 reading it, which every Highlights and
+    // Shadows frame pays (criterion 14's 16 ms).
+    let mut layer = BaseLayer::new(&gpu);
+    group.bench_function("base layer, 1536 x 1152", |b| {
+        b.iter(|| {
+            layer.build(&gpu, p, src.size(), 1);
+            wait(&gpu);
+        })
+    });
+    let local = Look {
+        highlights: -60.0,
+        shadows: 40.0,
+        ..standard
+    };
+    group.bench_function("stage 6, Highlights and Shadows", |b| {
+        b.iter(|| {
+            view.tone(&gpu, &local, Some(&base), Some(&layer));
+            wait(&gpu);
+        })
+    });
     group.bench_function("stage 7", |b| {
         b.iter(|| {
             view.color(&gpu, &standard);

@@ -11,23 +11,41 @@ use bytemuck::{Pod, Zeroable};
 use genzo_color::Mat3;
 use genzo_color::output::{EDGE_STEPS, Target};
 
+use super::base::BaseLayer;
 use super::level0::{Level0Cache, Level0Error};
 use super::raw_stages::{Pass, Pyramid, RawStages, Slot, padded_row, pass_with};
 use super::{Gpu, GpuError};
 use crate::look::{BaseCurve, Look, Profile};
 use crate::raw::RawSource;
+use crate::reference::base::{T_FLOOR, view_to_working};
 use crate::reference::sampling::{Sampling, ViewSpec, plan, plan_view, plan_view_without_level0};
 
 const WG: u32 = 16;
 
+/// view_sample.wgsl's uniforms.
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
-struct SampleUniforms {
+pub(crate) struct SampleUniforms {
     across: [f32; 4],
     down: [f32; 4],
     footprint: [f32; 4],
     sizes: [u32; 4],
     grid: [u32; 4],
+}
+
+impl SampleUniforms {
+    /// Sampling per `s` into an `out`-sized result; `grid` is the level-0
+    /// cache's (tiles across the image, atlas slots across), else 0.
+    pub(crate) fn new(s: &Sampling, out: (u32, u32), grid: (u32, u32)) -> Self {
+        let a = &s.affine;
+        Self {
+            across: [a[0][0] as f32, a[0][1] as f32, a[0][2] as f32, 0.0],
+            down: [a[1][0] as f32, a[1][1] as f32, a[1][2] as f32, 0.0],
+            footprint: [s.footprint[0] as f32, s.footprint[1] as f32, 0.0, 0.0],
+            sizes: [s.level_size.0, s.level_size.1, out.0, out.1],
+            grid: [grid.0, grid.1, 0, 0],
+        }
+    }
 }
 
 #[repr(C)]
@@ -51,6 +69,12 @@ struct ToneUniforms {
     controls: [f32; 4],
     ends: [f32; 4],
     ramp: [f32; 4],
+    /// Highlights and Shadows over 100, T_FLOOR, 1 to read the base layer.
+    local: [f32; 4],
+    /// View pixel centers to the base layer's working coordinates.
+    to_base: [[f32; 4]; 2],
+    /// The base layer's width and height.
+    base_size: [u32; 4],
     size: [u32; 4],
 }
 
@@ -108,6 +132,8 @@ pub struct ViewStages {
     output_uniforms: wgpu::Buffer,
     /// The base curve's table (DEV-02): 4098 f32.
     curve: wgpu::Buffer,
+    /// Bound in place of the base layer when stage 6 does not read it.
+    no_base: wgpu::Buffer,
     /// The stage 4 sampled cache and the frame, for the current view size.
     sampled: Option<wgpu::Texture>,
     /// The stage 6 and 7 caches, made on first use.
@@ -118,6 +144,8 @@ pub struct ViewStages {
     toned_current: bool,
     frame: Option<wgpu::Buffer>,
     size: (u32, u32),
+    /// How the view samples the pyramid, for placing the base layer.
+    sampling: Option<Sampling>,
 }
 
 impl ViewStages {
@@ -138,7 +166,8 @@ impl ViewStages {
                 "view sample",
                 concat!(
                     include_str!("shaders/view_sample.wgsl"),
-                    include_str!("shaders/view_fetch_pyramid.wgsl")
+                    include_str!("shaders/view_fetch_pyramid.wgsl"),
+                    include_str!("shaders/view_store_texture.wgsl")
                 ),
                 &[Slot::Float, Slot::Store(Rgba16Float)],
                 false,
@@ -148,7 +177,8 @@ impl ViewStages {
                 "view sample, level 0",
                 concat!(
                     include_str!("shaders/view_sample.wgsl"),
-                    include_str!("shaders/view_fetch_level0.wgsl")
+                    include_str!("shaders/view_fetch_level0.wgsl"),
+                    include_str!("shaders/view_store_texture.wgsl")
                 ),
                 &[Slot::Float, Slot::Store(Rgba16Float), Slot::Storage],
                 false,
@@ -157,7 +187,12 @@ impl ViewStages {
                 device,
                 "view tone",
                 include_str!("shaders/view_tone.wgsl"),
-                &[Slot::Float, Slot::Store(Rgba16Float), Slot::Storage],
+                &[
+                    Slot::Float,
+                    Slot::Store(Rgba16Float),
+                    Slot::Storage,
+                    Slot::Storage,
+                ],
                 false,
             ),
             color: pass_with(
@@ -188,6 +223,14 @@ impl ViewStages {
                     usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
                 },
             ),
+            no_base: wgpu::util::DeviceExt::create_buffer_init(
+                device,
+                &wgpu::util::BufferInitDescriptor {
+                    label: Some("no base layer"),
+                    contents: &[0; 4],
+                    usage: wgpu::BufferUsages::STORAGE,
+                },
+            ),
             sampled: None,
             toned: None,
             colored: None,
@@ -195,6 +238,7 @@ impl ViewStages {
             toned_current: false,
             frame: None,
             size: (0, 0),
+            sampling: None,
         }
     }
 
@@ -313,15 +357,9 @@ impl ViewStages {
         self.resize(gpu, out);
         self.latest = Latest::Sampled;
         self.toned_current = false;
-        let a = &s.affine;
+        self.sampling = Some(s.clone());
         let grid = level0.map_or((0, 0), |c| c.grid());
-        let u = SampleUniforms {
-            across: [a[0][0] as f32, a[0][1] as f32, a[0][2] as f32, 0.0],
-            down: [a[1][0] as f32, a[1][1] as f32, a[1][2] as f32, 0.0],
-            footprint: [s.footprint[0] as f32, s.footprint[1] as f32, 0.0, 0.0],
-            sizes: [s.level_size.0, s.level_size.1, out.0, out.1],
-            grid: [grid.0, grid.1, 0, 0],
-        };
+        let u = SampleUniforms::new(s, out, grid);
         gpu.queue
             .write_buffer(&self.sample_uniforms, 0, bytemuck::bytes_of(&u));
         let sampled = self
@@ -376,8 +414,16 @@ impl ViewStages {
     }
 
     /// Stage 6 from the sampled cache into the tone cache. `base` is the
-    /// photo's base curve, which Genzo Standard needs.
-    pub fn tone(&mut self, gpu: &Gpu, look: &Look, base: Option<&BaseCurve>) {
+    /// photo's base curve, which Genzo Standard needs; `layer` the base
+    /// layer, which Highlights and Shadows need. Stage 6 only reads it, so
+    /// no tone control rebuilds it.
+    pub fn tone(
+        &mut self,
+        gpu: &Gpu,
+        look: &Look,
+        base: Option<&BaseCurve>,
+        layer: Option<&BaseLayer>,
+    ) {
         let sampled = self
             .sampled
             .as_ref()
@@ -404,6 +450,21 @@ impl ViewStages {
             (true, None) => panic!("Genzo Standard needs its base curve"),
             (false, _) => [0.0; 4],
         };
+        let local = look.is_local();
+        let (to_base, base_size, coefficients) = if local {
+            let layer = layer.expect("Highlights and Shadows need the base layer");
+            let working = layer.sampling().expect("build the base layer first");
+            let m = view_to_working(self.sampling.as_ref().expect("sample first"), working);
+            let row = |r: [f64; 3]| [r[0] as f32, r[1] as f32, r[2] as f32, 0.0];
+            let (w, h) = layer.size();
+            (
+                [row(m[0]), row(m[1])],
+                [w, h, 0, 0],
+                layer.coefficients().expect("built"),
+            )
+        } else {
+            ([[0.0; 4]; 2], [0; 4], &self.no_base)
+        };
         let y = genzo_color::WORKING_TO_XYZ[1];
         let u = ToneUniforms {
             y_row: [y[0] as f32, y[1] as f32, y[2] as f32, 0.0],
@@ -422,6 +483,14 @@ impl ViewStages {
                 genzo_color::tone::CONTRAST_GAIN as f32,
             ],
             ramp,
+            local: [
+                look.highlights / 100.0,
+                look.shadows / 100.0,
+                T_FLOOR as f32,
+                if local { 1.0 } else { 0.0 },
+            ],
+            to_base,
+            base_size,
             size: [self.size.0, self.size.1, u32::from(curve), 0],
         };
         gpu.queue
@@ -450,6 +519,10 @@ impl ViewStages {
                 wgpu::BindGroupEntry {
                     binding: 3,
                     resource: self.curve.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: coefficients.as_entire_binding(),
                 },
             ],
         });
@@ -647,7 +720,7 @@ pub(crate) fn read_rgba16f(
     Ok(out)
 }
 
-fn readback(gpu: &Gpu, size: u64) -> wgpu::Buffer {
+pub(crate) fn readback(gpu: &Gpu, size: u64) -> wgpu::Buffer {
     gpu.device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("view readback"),
         size,
@@ -656,7 +729,7 @@ fn readback(gpu: &Gpu, size: u64) -> wgpu::Buffer {
     })
 }
 
-fn map(
+pub(crate) fn map(
     gpu: &Gpu,
     encoder: wgpu::CommandEncoder,
     buffer: &wgpu::Buffer,

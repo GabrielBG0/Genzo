@@ -27,8 +27,8 @@ pub struct Look {
     pub monochrome: bool,
     pub exposure: f32,
     pub contrast: f32,
-    /// Highlights and Shadows need the base layer (local tone mapping), a
-    /// later step; until then they do nothing.
+    /// Highlights and Shadows move the base layer (local tone mapping), so
+    /// stage 6 needs it when either is not 0.
     pub highlights: f32,
     pub shadows: f32,
     pub whites: f32,
@@ -50,7 +50,19 @@ impl Look {
     /// curve.
     pub fn tone_is_identity(&self) -> bool {
         self.profile != Profile::GenzoStandard
-            && [self.exposure, self.contrast, self.whites, self.blacks] == [0.0; 4]
+            && [
+                self.exposure,
+                self.contrast,
+                self.highlights,
+                self.shadows,
+                self.whites,
+                self.blacks,
+            ] == [0.0; 6]
+    }
+
+    /// Whether stage 6 reads the base layer: Highlights or Shadows moved.
+    pub fn is_local(&self) -> bool {
+        self.highlights != 0.0 || self.shadows != 0.0
     }
 
     /// Whether stage 7 changes nothing.

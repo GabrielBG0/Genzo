@@ -19,18 +19,22 @@ pub const UPLOAD: u64 = 22 * MB;
 pub const LEVEL0_CACHE: u64 = 256 * MB;
 /// The viewport stage caches (steps 6 and 7).
 pub const VIEWPORT_CACHES: u64 = 128 * MB;
+/// The base layer of Highlights and Shadows while it builds: two planes of
+/// 4 bytes per working pixel, 18.9 MB for a square image at 1536 px.
+pub const BASE_LAYER: u64 = 20 * MB;
 /// The output frame and two persistent readback buffers, RGBA8.
 pub const OUTPUT: u64 = 60 * MB;
 /// Histogram and clipping masks.
 pub const HISTOGRAM: u64 = 10 * MB;
 
 /// The whole budget's items.
-pub const ITEMS: [u64; 7] = [
+pub const ITEMS: [u64; 8] = [
     PYRAMID,
     TILE_SCRATCH,
     UPLOAD,
     LEVEL0_CACHE,
     VIEWPORT_CACHES,
+    BASE_LAYER,
     OUTPUT,
     HISTOGRAM,
 ];
@@ -45,7 +49,7 @@ mod tests {
     #[test]
     fn the_items_add_up_to_the_spec_total() {
         let total: u64 = ITEMS.iter().sum();
-        assert_eq!(total, 674 * MB);
+        assert_eq!(total, 694 * MB);
         assert!(total < LIMIT);
     }
 }
