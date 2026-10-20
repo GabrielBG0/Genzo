@@ -42,10 +42,32 @@ fn gpu() -> Option<(MutexGuard<'static, ()>, Gpu)> {
 }
 
 /// Two f16 steps, plus 1e-5 for the GPU's f32 Lanczos weights (as
-/// tests/view.rs).
-fn f16_close(got: f32, want: f32) -> bool {
+/// tests/view.rs), plus 1e-4 of `near`, the brightest reference value
+/// within the filter's reach: the weights' f32 error scales with the
+/// neighbors, not with the result. Where bright neighbors' lobes cancel to
+/// a dark value, upsampling through a straightened crop on Metal (macOS
+/// Intel, CI) was off by 1.15e-5 at 7.2e-4 beside 0.108.
+fn f16_close(got: f32, want: f32, near: f32) -> bool {
     let step = want.abs().max(6.2e-5) / 1024.0;
-    (got - want).abs() <= 2.0 * step + 1e-5
+    (got - want).abs() <= 2.0 * step + 1e-5 + 1e-4 * near
+}
+
+/// The largest |value| of channel `c` within 3 pixels of pixel `i` in an
+/// image `w` wide: the filter reaches 2 texels, at most 1.5 view pixels
+/// each here (the 3/2 Fit), and less when downsampling.
+fn near(image: &[[f32; 3]], w: usize, i: usize, c: usize) -> f32 {
+    let (x, y) = ((i % w) as i64, (i / w) as i64);
+    let h = (image.len() / w) as i64;
+    let mut m: f32 = 0.0;
+    for dy in -3..=3 {
+        for dx in -3..=3 {
+            let (nx, ny) = (x + dx, y + dy);
+            if (0..w as i64).contains(&nx) && (0..h).contains(&ny) {
+                m = m.max(image[(ny * w as i64 + nx) as usize][c].abs());
+            }
+        }
+    }
+    m
 }
 
 /// Level 0 of `src`, through an uncropped 1:1 view of the whole image (an
@@ -151,8 +173,9 @@ fn straightened_crops_match_the_reference() {
             };
             for (i, (g, w)) in got.iter().zip(&want).enumerate() {
                 for c in 0..3 {
+                    let n = near(&want, out.0 as usize, i, c);
                     assert!(
-                        f16_close(g[c], w[c]),
+                        f16_close(g[c], w[c], n),
                         "{name}, {spec:?} (level {}), pixel {i}: {g:?} vs {w:?}",
                         s.level
                     );
