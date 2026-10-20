@@ -112,11 +112,22 @@ fn clipped_dark_and_colorless_areas_are_refused() {
         pick(&gray, Frame::from(1), (0.5, 0.5)),
         Err(PickError::NoColor)
     );
+    // A color camera whose color data cannot be used: no profile, or a
+    // singular matrix that no white solves.
     let unprofiled = scene_raw(64, 64);
     assert_eq!(
         pick(&unprofiled, Frame::from(1), (0.5, 0.5)),
-        Err(PickError::NoColor)
+        Err(PickError::Unsolved)
     );
+    let mut singular = painted(64, 64, |_, _| n.map(|v| 0.4 * v));
+    if let Some(m) = singular.color.color_matrix_1.as_mut() {
+        m.matrix = vec![0.0; 9];
+    }
+    assert_eq!(
+        pick(&singular, Frame::from(1), (0.5, 0.5)),
+        Err(PickError::Unsolved)
+    );
+    assert_ne!(PickError::Unsolved.message(), PickError::NoColor.message());
 }
 
 /// The stored image's left half lit at 3000 K, its right half at 7000 K:

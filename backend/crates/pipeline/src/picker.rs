@@ -44,9 +44,12 @@ pub enum PickError {
     Clipped,
     /// The area's luminance is below 0.5 % of white.
     TooDark,
-    /// The image records no color (a monochrome sensor), or its camera
-    /// profile is unusable, so Temp and Tint mean nothing.
+    /// The image records no color: a monochrome sensor, or a mosaic whose
+    /// window misses a color.
     NoColor,
+    /// The camera profile is unusable, or no white solves for the area (a
+    /// singular matrix): a color camera whose color data Genzo cannot use.
+    Unsolved,
 }
 
 impl PickError {
@@ -56,6 +59,9 @@ impl PickError {
             PickError::Clipped => "Can't set white balance here: the area is clipped",
             PickError::TooDark => "Can't set white balance here: the area is too dark",
             PickError::NoColor => "This camera records no color",
+            PickError::Unsolved => {
+                "Can't set white balance: this camera's color data can't be used"
+            }
         }
     }
 }
@@ -124,13 +130,13 @@ pub fn pick(src: &RawSource, frame: Frame, point: (f64, f64)) -> Result<(f64, f6
             }
             let spec = dng_profile(&src.color)
                 .and_then(|p| ColorSpec::new(&p).ok())
-                .ok_or(PickError::NoColor)?;
-            let xy = spec.neutral_to_xy(neutral).ok_or(PickError::NoColor)?;
+                .ok_or(PickError::Unsolved)?;
+            let xy = spec.neutral_to_xy(neutral).ok_or(PickError::Unsolved)?;
             // Balanced at its own white, the area is a neutral gray whose
             // value is any channel times its multiplier.
             let t = camera_transform(&src.color, Some(xy));
             if t.fallback.is_some() {
-                return Err(PickError::NoColor);
+                return Err(PickError::Unsolved);
             }
             let gray = f64::from(t.multipliers[1]) * neutral[1];
             if gray < TOO_DARK {
