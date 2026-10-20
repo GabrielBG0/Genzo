@@ -4,7 +4,11 @@
 # mesa-vulkan-drivers, and stable Rust. Used by scripts/goldens-lavapipe.sh.
 FROM ubuntu:22.04
 
-RUN apt-get update \
+# CI installs the current Mesa and stable Rust on every run. The script passes
+# the ISO week here, so the cached layers below are rebuilt at least weekly
+# and cannot drift far from CI's versions.
+ARG REFRESH=unset
+RUN echo "refresh $REFRESH" && apt-get update \
     && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         ca-certificates curl build-essential cmake pkg-config python3 \
         mesa-vulkan-drivers vulkan-tools \

@@ -54,7 +54,8 @@ mkdir -p "$out" "$root/corpus"
 
 image=genzo-lavapipe
 echo "== image $image"
-docker build -q -t "$image" "$(native "$root/scripts/lavapipe")" >/dev/null
+docker build -q -t "$image" --build-arg REFRESH="$(date -u +%G-W%V)" \
+  "$(native "$root/scripts/lavapipe")" >/dev/null
 
 echo "== cargo test ${args[*]} on lavapipe"
 status=0
@@ -72,7 +73,10 @@ MSYS_NO_PATHCONV=1 docker run --rm \
     cd /src && tar --exclude=./backend/target --exclude=./corpus --exclude=./.git \
       --exclude=./frontend/node_modules -cf - . | (cd /work && tar -xf -)
     vulkaninfo --summary > /out/vulkaninfo.txt 2>&1
+    # Compare with the same lines in the CI lavapipe log if a golden differs.
     grep -m1 -i "deviceName" /out/vulkaninfo.txt || true
+    grep -m1 -i "driverInfo" /out/vulkaninfo.txt || true
+    rustc --version
     cd /work/backend
     rm -rf target/golden-actual
     cargo test --locked --no-fail-fast "$@" -- --nocapture > /out/test.log 2>&1
