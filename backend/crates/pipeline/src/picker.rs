@@ -116,6 +116,12 @@ pub fn pick(src: &RawSource, frame: Frame, point: (f64, f64)) -> Result<(f64, f6
         }
         None => {
             let neutral = camera_mean(src, rect, &values).ok_or(PickError::NoColor)?;
+            // A black area has no neutral to solve; say so before the solve
+            // fails. The balanced gray below is the exact test.
+            let top = neutral.iter().copied().fold(f64::MIN, f64::max);
+            if neutral.iter().any(|v| *v <= 0.0) || top < TOO_DARK {
+                return Err(PickError::TooDark);
+            }
             let spec = dng_profile(&src.color)
                 .and_then(|p| ColorSpec::new(&p).ok())
                 .ok_or(PickError::NoColor)?;

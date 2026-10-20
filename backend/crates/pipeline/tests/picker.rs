@@ -97,6 +97,15 @@ fn clipped_dark_and_colorless_areas_are_refused() {
         pick(&dark, Frame::from(1), (0.5, 0.5)),
         Err(PickError::TooDark)
     );
+    // Black, at and just below the black level: no neutral to solve.
+    for v in [0.0, -0.001] {
+        let black = painted(64, 64, |_, _| [v; 3]);
+        assert_eq!(
+            pick(&black, Frame::from(1), (0.5, 0.5)),
+            Err(PickError::TooDark),
+            "{v}"
+        );
+    }
     let mut gray = painted(64, 64, |_, _| n.map(|v| 0.4 * v));
     gray.cfa = None;
     assert_eq!(
