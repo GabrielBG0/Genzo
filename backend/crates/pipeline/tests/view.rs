@@ -192,6 +192,68 @@ fn the_frame_matches_the_reference() {
     }
 }
 
+/// The half-size drag preview at Fit: each pixel is stage 9 of the mean of
+/// a 2 x 2 block of the latest cache, the block clamped at the edge of an
+/// odd size, within 1 code of the CPU's; the dither at the preview's own
+/// position.
+#[test]
+fn the_half_size_preview_matches_the_reference() {
+    let Some((_lock, gpu)) = gpu() else { return };
+    let colors: Vec<[u16; 3]> = (0..4096u32)
+        .map(|i| [(i % 16) * 4369, (i / 16 % 16) * 4369, (i / 256) * 4369].map(|v| v as u16))
+        .collect();
+    let (size, rgba) = blocks(&colors, 64);
+    let enc = InputEncoding::nclx(9, 13).unwrap();
+    let src = RawSource::from_encoded(size, &rgba, &enc).unwrap();
+    let mut stages = RawStages::new(&gpu, TileConfig::default());
+    let p = pyramid(&gpu, &mut stages, &src);
+    let mut view = ViewStages::new(&gpu);
+    // Odd both ways, so the last row and column average a clamped block.
+    let out = (301, 227);
+    view.sample(&gpu, p, 1, out);
+    let latest = view.read_latest(&gpu).unwrap();
+    let half = (out.0.div_ceil(2), out.1.div_ceil(2));
+    for target in [Target::Srgb, Target::DisplayP3] {
+        for compress in [false, true] {
+            view.output_half(&gpu, target, compress, true);
+            assert_eq!(view.frame_size(), half);
+            let frame = view.read_frame(&gpu).unwrap();
+            assert_eq!(frame.len(), (half.0 * half.1) as usize);
+            let (mut off, mut worst) = (0, 0);
+            for (i, f) in frame.iter().enumerate() {
+                let (x, y) = (i as u32 % half.0, i as u32 / half.0);
+                let mut mean = [0.0f64; 3];
+                for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                    let (sx, sy) = ((2 * x + dx).min(out.0 - 1), (2 * y + dy).min(out.1 - 1));
+                    let v = latest[(sy * out.0 + sx) as usize];
+                    for c in 0..3 {
+                        mean[c] += f64::from(v[c]) / 4.0;
+                    }
+                }
+                let want = pixel(mean, (x, y), target, compress, true);
+                for c in 0..3 {
+                    let d = (i32::from(f[c]) - i32::from(want[c])).abs();
+                    off += usize::from(d > 0);
+                    worst = worst.max(d);
+                }
+                assert_eq!(f[3], 255);
+            }
+            let n = half.0 * half.1 * 3;
+            println!(
+                "{target:?}, compress {compress}: {off} of {n} channels off, by at most {worst}"
+            );
+            assert!(worst <= 1, "{target:?} {compress}: {worst} codes");
+            assert!(
+                off * 200 < n as usize,
+                "{target:?} {compress}: {off} of {n}"
+            );
+        }
+    }
+    // The full frame again after the preview, as on release.
+    let (off, worst) = frame_against_cpu(&gpu, &mut view, Target::Srgb, true);
+    assert!(worst <= 1 && off * 200 < (out.0 * out.1 * 3) as usize);
+}
+
 /// Criterion 8's colors: every combination of a few 8-bit levels, the
 /// primaries, near-black and near-white among them; or spread 16-bit codes.
 fn colors(sixteen: bool) -> Vec<[u16; 3]> {

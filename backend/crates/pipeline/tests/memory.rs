@@ -271,7 +271,8 @@ fn the_view_stays_within_its_caps() {
         budget::OUTPUT as f64 / MB
     );
     assert!(cache <= budget::VIEWPORT_CACHES && frame <= budget::OUTPUT);
-    if let (Some(before), Some(after)) = (before, allocated(&gpu)) {
+    let full = allocated(&gpu);
+    if let (Some(before), Some(after)) = (before, full) {
         let used = after - before;
         println!("measured: {:.1} MB for the view", used as f64 / MB);
         // Plus uniforms and the driver's padding.
@@ -279,6 +280,18 @@ fn the_view_stays_within_its_caps() {
             used as f64 <= (cache + frame) as f64 * 1.07 + 2e6,
             "{used} bytes"
         );
+    }
+    // The half-size drag preview goes through the same frame and staging.
+    view.output_half(&gpu, Target::Srgb, false, false);
+    view.read_frame(&gpu).unwrap();
+    let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+    assert_eq!(view.output_bytes(), frame);
+    if let (Some(full), Some(half)) = (full, allocated(&gpu)) {
+        println!(
+            "measured: {} bytes more for the half-size preview",
+            half - full
+        );
+        assert!(half - full <= 65_536, "{} bytes", half - full);
     }
 }
 

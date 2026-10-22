@@ -444,6 +444,10 @@ A software adapter uses the same sizes.
 - **Interactive** (during a gesture): the cheapest path to a correct-looking frame.
   - White balance is applied as a ratio after the cached demosaic.
   - At Fit, the frame goes as a half-size JPEG preview, the Windows ladder step that M0 measured.
+    - Stage 9 runs at half size (rounded up), each pixel from the mean of a 2 × 2 block of the latest cache in linear light, clamped at the edge of an odd size, into the top left of the frame (`ViewStages::output_half`). Stages 6 and 7 stay at full size, so their caches serve the settled frame on release. The spike averaged the encoded 8-bit frame instead.
+    - It needs no memory of its own: the frame and its staging buffers hold it, and `tests/memory.rs` measures 0 bytes more.
+    - **Accuracy:** within 1 code of the CPU's stage 9 of the same block means, the dither drawn at the preview's own pixel (`tests/view.rs`, an odd 301 × 227 view of saturated BT.2020 colors, sRGB and Display P3, with and without gamut compression: at most 3 of 51,642 channels off, by 1).
+    - **Cost** on the RTX 3060 at 2560 × 1920: stage 9 and readback 3.2 ms for the preview, 12.0 ms for the full frame. The engine encodes it in bands (quality 80, as in M0).
   - At 1:1, the visible tiles go as JPEG at full scale (quality 80) instead of lossless. M0 measured full lossless frames at 111 to 125 ms p95 on Linux; JPEG tiles cut the bytes about twentyfold. The autobench's 1:1 drag case reports it, and the budget table does not gate it.
   - On the software adapter, the interactive frame is a 1280 px proxy.
 - **Settled:** full quality, swapped in about 150 ms after the gesture ends.
