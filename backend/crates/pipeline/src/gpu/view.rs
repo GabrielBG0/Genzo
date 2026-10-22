@@ -171,6 +171,9 @@ pub struct ViewStages {
     /// low byte, and its staging buffers.
     frame: Option<wgpu::Texture>,
     staging: Option<Staging>,
+    /// What the frame holds: 1 for the view, 2 for the half-size drag
+    /// preview in its top left ([`Self::output_half`]).
+    frame_scale: u32,
     size: (u32, u32),
     /// How the view samples the pyramid (the anchored view's sampling,
     /// [`ViewSpec::anchored`]), for placing the base layer, and the view's
@@ -271,6 +274,7 @@ impl ViewStages {
             toned_current: false,
             frame: None,
             staging: None,
+            frame_scale: 1,
             size: (0, 0),
             sampling: None,
             offset: (0, 0),
@@ -682,7 +686,23 @@ impl ViewStages {
     /// Stage 9 from the latest cache (stage 7, 6 or the sampled one) into
     /// the frame.
     pub fn output(&mut self, gpu: &Gpu, target: Target, compress: bool, dither: bool) {
+        self.output_at(gpu, target, compress, dither, 1);
+    }
+
+    /// The drag preview at Fit (DEV-01, Interactive): stage 9 at half size,
+    /// each pixel from the mean of a 2 x 2 block of the latest cache in
+    /// linear light (clamped at the edge of an odd size), into the top left
+    /// of the frame. It costs no memory and a quarter of stage 9; the engine
+    /// sends it as JPEG and replaces it with the full frame on release.
+    pub fn output_half(&mut self, gpu: &Gpu, target: Target, compress: bool, dither: bool) {
+        assert_eq!(self.offset, (0, 0), "the half-size preview is for Fit");
+        self.output_at(gpu, target, compress, dither, 2);
+    }
+
+    fn output_at(&mut self, gpu: &Gpu, target: Target, compress: bool, dither: bool, scale: u32) {
         assert!(self.sampled.is_some(), "sample first");
+        self.frame_scale = scale;
+        let out = self.frame_size();
         let from = target.from_xyz_oklab();
         let c = target.compression();
         let lms = genzo_color::mat_mul(&genzo_color::output::OKLAB_M1, &target.to_xyz());
@@ -698,8 +718,8 @@ impl ViewStages {
                 c.power as f32,
                 if compress { 1.0 } else { 0.0 },
             ],
-            size: [self.size.0, self.size.1, EDGE_STEPS, u32::from(dither)],
-            offset: [self.offset.0, self.offset.1, 0, 0],
+            size: [out.0, out.1, EDGE_STEPS, u32::from(dither)],
+            offset: [self.offset.0, self.offset.1, scale as i32, 0],
         };
         gpu.queue
             .write_buffer(&self.output_uniforms, 0, bytemuck::bytes_of(&u));
@@ -727,7 +747,14 @@ impl ViewStages {
                 },
             ],
         });
-        self.dispatch(gpu, &self.output, &group, self.size);
+        self.dispatch(gpu, &self.output, &group, out);
+    }
+
+    /// The size of what the frame holds: the view's, or half of it rounded
+    /// up after [`Self::output_half`].
+    pub fn frame_size(&self) -> (u32, u32) {
+        let s = self.frame_scale;
+        (self.size.0.div_ceil(s), self.size.1.div_ceil(s))
     }
 
     fn dispatch(&self, gpu: &Gpu, pass: &Pass, group: &wgpu::BindGroup, size: (u32, u32)) {
@@ -763,15 +790,17 @@ impl ViewStages {
         self.offset
     }
 
-    /// The frame, RGBA8 row by row: what Fit sends.
+    /// The frame, RGBA8 row by row: what Fit sends, the view or the
+    /// half-size preview ([`Self::frame_size`]).
     pub fn read_frame(&self, gpu: &Gpu) -> Result<Vec<[u8; 4]>, GpuError> {
+        let (width, height) = self.frame_size();
         let whole = Rect {
             x: 0,
             y: 0,
-            width: self.size.0,
-            height: self.size.1,
+            width,
+            height,
         };
-        let bytes = self.read_rects(gpu, &[whole])?.remove(0);
+        let bytes = self.read(gpu, &[whole])?.remove(0);
         Ok(bytes.as_chunks::<4>().0.to_vec())
     }
 
@@ -779,6 +808,11 @@ impl ViewStages {
     /// send ([`super::readback::visible_tiles`]'s frame rectangles). Only
     /// they are copied, through the frame's staging buffers.
     pub fn read_rects(&self, gpu: &Gpu, rects: &[Rect]) -> Result<Vec<Vec<u8>>, GpuError> {
+        assert_eq!(self.frame_scale, 1, "the frame holds the half-size preview");
+        self.read(gpu, rects)
+    }
+
+    fn read(&self, gpu: &Gpu, rects: &[Rect]) -> Result<Vec<Vec<u8>>, GpuError> {
         let frame = self.frame.as_ref().expect("output first");
         self.staging
             .as_ref()

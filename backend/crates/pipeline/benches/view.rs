@@ -18,6 +18,9 @@
 //! sends), and one column of 256 px tiles (what a 256 px pan at 1:1 sends):
 //! 11.5 ms for the 19.7 MB frame (M0 measured about 9 ms for a 2560 x 1440
 //! one, 14.7 MB), 0.94 ms for the column (2026-10-22).
+//! Stage 9 and its readback, as a drag at Fit sends them: 3.2 ms for the
+//! half-size preview (1280 x 960, 4.9 MB), 12.0 ms for the full frame
+//! (2026-10-22).
 //!
 //! Skipped without a GPU adapter. `GENZO_ADAPTER=software` benchmarks the
 //! software adapter.
@@ -177,6 +180,19 @@ fn view(c: &mut Criterion) {
     assert_eq!(column.len(), 8);
     group.bench_function("readback, one column of tiles", |b| {
         b.iter(|| view.read_rects(&gpu, &column).unwrap())
+    });
+    // The drag preview at Fit: stage 9 at half size and its readback.
+    group.bench_function("half-size preview, stage 9 and readback", |b| {
+        b.iter(|| {
+            view.output_half(&gpu, Target::Srgb, true, true);
+            view.read_frame(&gpu).unwrap()
+        })
+    });
+    group.bench_function("full frame, stage 9 and readback", |b| {
+        b.iter(|| {
+            view.output(&gpu, Target::Srgb, true, true);
+            view.read_frame(&gpu).unwrap()
+        })
     });
     group.finish();
 }

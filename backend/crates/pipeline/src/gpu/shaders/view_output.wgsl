@@ -4,7 +4,8 @@
 // triangular dither from an integer hash (none for an unedited non-RAW
 // photo). The dither is drawn at the pixel's anchored position (`offset`
 // added), so at 1:1 it does not depend on the pan. Each pixel goes out as
-// one u32 texel, R in the low byte.
+// one u32 texel, R in the low byte. The half-size drag preview takes each
+// pixel from the mean of a 2 x 2 block of the cache, in linear light.
 
 struct Output {
     // AP1 to linear target RGB, one row per vec4.
@@ -20,7 +21,8 @@ struct Output {
     compression: vec4<f32>,
     // Width, height, bisection steps, 1 to dither or 0 not to.
     size: vec4<u32>,
-    // The view's whole-pixel offset (view_sample.wgsl).
+    // The view's whole-pixel offset (view_sample.wgsl), and 2 for the
+    // half-size preview or 1.
     offset: vec4<i32>,
 }
 
@@ -90,6 +92,22 @@ fn compress(rgb: vec3<f32>) -> vec3<f32> {
     return from_oklab(vec3<f32>(lab.x, k * lo * dir));
 }
 
+// The cache value pixel `p` of the frame starts from: the cache's own, or
+// at half size the mean of its 2 x 2 block, clamped at the edge.
+fn source(p: vec2<i32>) -> vec3<f32> {
+    var rgb = textureLoad(sampled, p, 0).rgb;
+    if (out.offset.z == 2) {
+        let last = vec2<i32>(textureDimensions(sampled)) - 1;
+        let q = 2 * p;
+        let sum = textureLoad(sampled, min(q, last), 0).rgb
+            + textureLoad(sampled, min(q + vec2(1, 0), last), 0).rgb
+            + textureLoad(sampled, min(q + vec2(0, 1), last), 0).rgb
+            + textureLoad(sampled, min(q + vec2(1, 1), last), 0).rgb;
+        rgb = sum * 0.25;
+    }
+    return rgb;
+}
+
 fn srgb_encode(v: f32) -> f32 {
     if (v <= 0.0031308) {
         return 12.92 * v;
@@ -119,7 +137,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     if (id.x >= out.size.x || id.y >= out.size.y) {
         return;
     }
-    var rgb = m3(out.to_target, textureLoad(sampled, vec2<i32>(id.xy), 0).rgb);
+    var rgb = m3(out.to_target, source(vec2<i32>(id.xy)));
     if (out.compression.w != 0.0) {
         rgb = compress(rgb);
     }

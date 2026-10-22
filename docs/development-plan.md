@@ -347,7 +347,7 @@ These come from `docs/m0-results.md` and decide how the steps below are built:
    - White balance applied after the cached demosaic while dragging; the settled render re-demosaics.
    - Generation numbers, latest-wins coalescing and cancellation.
 6. `pipeline`, what reaches the viewport:
-   - At Fit: the half-size JPEG preview while dragging, the full frame on release.
+   - At Fit: the half-size JPEG preview while dragging, the full frame on release. Stage 9 renders the preview at half size from 2 × 2 means of the latest cache in linear light, into the frame it already has (DEV-01, Interactive); the engine's JPEG bands are wired with the gesture phase in step 9.
    - At 1:1: 256 px tiles, visible tiles first, then a ring around them.
    - Read back only the visible tiles, into persistent staging buffers: two per frame, mapped for each read and unmapped before the next copy, since wgpu cannot copy into a mapped buffer. A pixel at 1:1 does not depend on the pan, so a pan reads back only the tiles it exposes (DEV-01, Readback).
    - The settled render does the visible area first. Measure the settled frame's transfer (11 MB raw, about 40 ms on Linux) and compress it if the pause after release shows.
