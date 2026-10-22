@@ -5,9 +5,11 @@
 //! mapped for the read and unmapped before the next copy into it.
 //!
 //! Each rectangle is one texture-to-buffer copy, its rows padded to the
-//! 256 bytes a copy's row needs. The rectangles go into the first buffer
-//! and spill into the second; each buffer holds the whole frame, so the
-//! tiles of a view (their padding included) always fit the two.
+//! 256 bytes a copy's row needs and its start at a multiple of 512 bytes:
+//! D3D12 without unrestricted copy pitches (the windows-2022 runner's WARP)
+//! needs that, and wgpu would otherwise copy through an intermediate buffer
+//! of its own. The rectangles go into the first buffer and spill into the
+//! second; a request larger than both takes another round.
 
 use std::sync::mpsc;
 
@@ -69,9 +71,33 @@ pub(crate) struct Staging {
     buffers: [wgpu::Buffer; 2],
 }
 
+/// Where a copy may start in a buffer (D3D12_TEXTURE_DATA_PLACEMENT_ALIGNMENT).
+const PLACEMENT: u64 = 512;
+
 /// Bytes of `rect`'s copy: its rows, padded.
 fn copy_bytes(rect: &Rect) -> u64 {
     u64::from(padded_row(rect.width, 4)) * u64::from(rect.height)
+}
+
+/// Where the first of `rects` that fit go, in two buffers of `capacity`
+/// bytes each: (buffer, offset) per rectangle placed, in order.
+fn place(rects: &[Rect], capacity: u64) -> Vec<(usize, u64)> {
+    let mut placed = Vec::new();
+    let (mut buffer, mut offset) = (0, 0u64);
+    for rect in rects {
+        let bytes = copy_bytes(rect);
+        assert!(bytes <= capacity, "{rect:?} is larger than a buffer");
+        offset = offset.next_multiple_of(PLACEMENT);
+        if offset + bytes > capacity {
+            if buffer == 1 {
+                break;
+            }
+            (buffer, offset) = (1, 0);
+        }
+        placed.push((buffer, offset));
+        offset += bytes;
+    }
+    placed
 }
 
 impl Staging {
@@ -112,24 +138,13 @@ impl Staging {
         let mut out = Vec::with_capacity(rects.len());
         let mut rest = rects;
         while !rest.is_empty() {
-            // Place what fits: the first buffer, then the second.
-            let mut placed = Vec::new();
-            let (mut buffer, mut offset) = (0, 0u64);
             for rect in rest {
                 assert!(
                     rect.x + rect.width <= frame.width() && rect.y + rect.height <= frame.height(),
                     "{rect:?} is outside the frame"
                 );
-                let bytes = copy_bytes(rect);
-                if offset + bytes > self.buffers[buffer].size() {
-                    if buffer == 1 {
-                        break;
-                    }
-                    (buffer, offset) = (1, 0);
-                }
-                placed.push((buffer, offset));
-                offset += bytes;
             }
+            let placed = place(rest, self.buffers[0].size());
             let mut encoder = gpu.device.create_command_encoder(&Default::default());
             for (rect, &(b, at)) in rest.iter().zip(&placed) {
                 encoder.copy_texture_to_buffer(
@@ -212,6 +227,21 @@ mod tests {
             y,
             width,
             height,
+        }
+    }
+
+    #[test]
+    fn copies_start_on_the_placement_alignment_and_spill() {
+        // Partial tiles: rows of 512 bytes, 7 rows, so 3584 bytes each.
+        let rects = vec![rect(0, 0, 100, 7); 5];
+        let capacity = 8192;
+        let placed = place(&rects, capacity);
+        assert_eq!(placed, [(0, 0), (0, 3584), (1, 0), (1, 3584)]);
+        // 3584 is a multiple of 512; an odd size is not, and moves the next.
+        let odd = [rect(0, 0, 10, 3), rect(0, 0, 10, 3)];
+        assert_eq!(place(&odd, capacity), [(0, 0), (0, 1024)]);
+        for (_, at) in place(&odd, capacity) {
+            assert_eq!(at % PLACEMENT, 0);
         }
     }
 
