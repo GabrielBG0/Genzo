@@ -14,6 +14,10 @@
 //! it 0.45 ms, about 0.06 ms over Genzo Standard alone (2026-10-20).
 //! Sampling a crop straightened 20 degrees 1.8 ms: the crop is smaller than
 //! the image, so its filter is narrower (2026-10-20).
+//! Readback through the frame's staging buffers: the whole frame (what Fit
+//! sends), and one column of 256 px tiles (what a 256 px pan at 1:1 sends):
+//! 11.5 ms for the 19.7 MB frame (M0 measured about 9 ms for a 2560 x 1440
+//! one, 14.7 MB), 0.94 ms for the column (2026-10-22).
 //!
 //! Skipped without a GPU adapter. `GENZO_ADAPTER=software` benchmarks the
 //! software adapter.
@@ -24,6 +28,7 @@ use genzo_pipeline::camera_color::camera_transform;
 use genzo_pipeline::geometry::{Crop, fit};
 use genzo_pipeline::gpu::base::BaseLayer;
 use genzo_pipeline::gpu::raw_stages::{RawStages, TileConfig};
+use genzo_pipeline::gpu::readback::visible_tiles;
 use genzo_pipeline::gpu::synthetic::scene_raw;
 use genzo_pipeline::gpu::view::ViewStages;
 use genzo_pipeline::gpu::{AdapterChoice, Gpu};
@@ -158,6 +163,20 @@ fn view(c: &mut Criterion) {
             view.color(&gpu, &standard);
             wait(&gpu);
         })
+    });
+    view.output(&gpu, Target::Srgb, true, true);
+    wait(&gpu);
+    group.bench_function("readback, the whole frame", |b| {
+        b.iter(|| view.read_frame(&gpu).unwrap())
+    });
+    let column: Vec<_> = visible_tiles((0, 0), out, out)
+        .into_iter()
+        .filter(|t| t.frame.x == out.0 - 256)
+        .map(|t| t.frame)
+        .collect();
+    assert_eq!(column.len(), 8);
+    group.bench_function("readback, one column of tiles", |b| {
+        b.iter(|| view.read_rects(&gpu, &column).unwrap())
     });
     group.finish();
 }

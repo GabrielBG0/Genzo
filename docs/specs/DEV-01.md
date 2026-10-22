@@ -362,7 +362,7 @@ Works in OkLCh, converted from linear AP1 through XYZ (D65).
    - **RAW photos:** always.
    - **Non-RAW photos:** only when the source gamut is not inside the target. Adobe RGB or ProPhoto RGB into sRGB qualifies, and so does Display P3 into sRGB. An sRGB JPEG into an sRGB frame does not, so its saturated colors stay exact. Colors an edit pushes past the edge are clipped per channel there.
 2. **Clamp** to 0 to 1, then encode with the sRGB transfer function (also used by Display P3).
-3. **Quantize** to 8 bits with deterministic dither: triangular, ±1 code, from an integer hash of the pixel position (PCG), so the CPU reference and every GPU draw the same noise and goldens are stable.
+3. **Quantize** to 8 bits with deterministic dither: triangular, ±1 code, from an integer hash of the pixel position (PCG), drawn at the pixel's anchored position (its place in the shown image at 1:1; see Readback), so the CPU reference and every GPU draw the same noise and goldens are stable.
    - **An unedited non-RAW photo is not dithered** (decided 2026-10-19), so it shows its own codes. Its values come back up to 1.3 codes off through the RGBA16F pyramid: a channel near 0 beside a bright one, like sRGB (2, 250, 0). Dither on top of that reached 2 codes. RAW photos and any edit keep the dither.
 4. **Tag the frame** `rgba8Srgb`, `rgba8DisplayP3`, or the matching JPEG preview format. The webview converts to the monitor (spec v1 color policy).
 
@@ -450,7 +450,10 @@ A software adapter uses the same sizes.
   - White balance re-demosaics, visible area first: at Fit the pyramid is rebuilt tile by tile, starting with the tiles the view shows. At 1:1, the visible level-0 tiles go first.
   - The frame is lossless: the full frame at Fit, the visible tiles at 1:1.
 - **Generations.** Every request carries a generation number, and requests coalesce latest-wins. A stale frame is dropped, and work in flight for an older generation is cancelled between tiles.
-- **Readback** copies only what is sent: at 1:1, the visible 256 px tiles. It goes into staging buffers that stay mapped across frames.
+- **Readback** copies only what is sent: at 1:1, the visible 256 px tiles of the shown image, clipped to the view and the image; at Fit, the whole frame (`gpu::readback`).
+  - **Staging:** two buffers made with the frame and kept for as long as its size, each holding the whole frame with its rows padded to 256 bytes. wgpu cannot copy into a mapped buffer, so "kept mapped across frames" is not possible as written: a buffer is mapped for the read and unmapped before the next copy into it. Each tile is one texture-to-buffer copy (the frame is an R32Uint texture of packed RGBA8), starting at a multiple of 512 bytes: D3D12 without unrestricted copy pitches (the windows-2022 runner's WARP) needs that, and wgpu otherwise copies through an intermediate buffer of its own, 17.6 MB more for a 2560 × 1920 view's tiles. The tiles go into the first buffer and spill into the second; more than both hold takes another round.
+  - **A pixel at 1:1 does not depend on the pan.** A view splits into a whole-pixel offset and the rest (`ViewSpec::anchored`), and sampling, the base layer read and the dither all work at the pixel's anchored position. Every whole-pixel pan at 1:1 has the same anchored view, so a tile the frontend holds stays valid and a pan reads back only the tiles it exposes.
+  - **Tests** (`pipeline/tests/readback.rs`): the tiles read alone are the frame's pixels bit for bit, across rounds; two overlapping 1:1 views give the same codes where they overlap, bit for bit, with Highlights, Shadows, stage 7 and the dither on, in a turned, flipped and straightened crop too. The output line (frame and both buffers at 2560 × 1920: 59 MB) is checked by `tests/memory.rs`.
 
 ## Inputs and shortcuts
 
@@ -460,7 +463,7 @@ DEV-01 has no shortcuts of its own; DEV-02 and DEV-12 own the controls. Its inpu
   - Between *start* and *end*, renders are interactive. The settled render follows *end*.
   - A delta without a gesture, such as a typed value or a reset, is a start and an end in one.
   - The engine records one history step per *end* (APP-10).
-- **`SetView`**: the viewport size in device pixels, the zoom (Fit or 1:1), and the visible rectangle in image coordinates after geometry. Panning at 1:1 sends `SetView`, and the engine renders what became visible.
+- **`SetView`**: the viewport size in device pixels, the zoom (Fit or 1:1), and the visible rectangle in image coordinates after geometry. Panning at 1:1 sends `SetView`, and the engine renders what became visible. At 1:1 the engine snaps the origin to whole image pixels: tiles the frontend holds stay valid only across whole-pixel pans (Readback).
 - **`SelectPhoto`**: the photo whose edit the deltas apply to.
 
 ## States

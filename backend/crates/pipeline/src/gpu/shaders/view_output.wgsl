@@ -2,8 +2,9 @@
 // linear AP1 to the target's linear RGB, hue-preserving gamut compression
 // in Oklab chroma, the clamp, the sRGB transfer function, and 8 bits with a
 // triangular dither from an integer hash (none for an unedited non-RAW
-// photo). Each pixel goes out as one u32,
-// R in the low byte.
+// photo). The dither is drawn at the pixel's anchored position (`offset`
+// added), so at 1:1 it does not depend on the pan. Each pixel goes out as
+// one u32 texel, R in the low byte.
 
 struct Output {
     // AP1 to linear target RGB, one row per vec4.
@@ -19,11 +20,13 @@ struct Output {
     compression: vec4<f32>,
     // Width, height, bisection steps, 1 to dither or 0 not to.
     size: vec4<u32>,
+    // The view's whole-pixel offset (view_sample.wgsl).
+    offset: vec4<i32>,
 }
 
 @group(0) @binding(0) var<uniform> out: Output;
 @group(0) @binding(1) var sampled: texture_2d<f32>;
-@group(0) @binding(2) var<storage, read_write> frame: array<u32>;
+@group(0) @binding(2) var frame: texture_storage_2d<r32uint, write>;
 
 fn m3(m: array<vec4<f32>, 3>, v: vec3<f32>) -> vec3<f32> {
     return vec3<f32>(dot(m[0].xyz, v), dot(m[1].xyz, v), dot(m[2].xyz, v));
@@ -120,9 +123,11 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     if (out.compression.w != 0.0) {
         rgb = compress(rgb);
     }
-    let noise = select(0.0, dither(id.x, id.y), out.size.w != 0u);
+    let at = bitcast<vec2<u32>>(vec2<i32>(id.xy) + out.offset.xy);
+    let noise = select(0.0, dither(at.x, at.y), out.size.w != 0u);
     let r = quantize(srgb_encode(clamp(rgb.x, 0.0, 1.0)), noise);
     let g = quantize(srgb_encode(clamp(rgb.y, 0.0, 1.0)), noise);
     let b = quantize(srgb_encode(clamp(rgb.z, 0.0, 1.0)), noise);
-    frame[id.y * out.size.x + id.x] = r | (g << 8u) | (b << 16u) | (255u << 24u);
+    let rgba = r | (g << 8u) | (b << 16u) | (255u << 24u);
+    textureStore(frame, vec2<i32>(id.xy), vec4<u32>(rgba, 0u, 0u, 0u));
 }
