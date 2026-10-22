@@ -22,6 +22,10 @@ struct View {
     // The white balance drag (DEV-01, stage 2), on the sampled values:
     // sampling is linear, so this equals applying it to the level.
     ratio: array<vec4<f32>, 3>,
+    // The whole-pixel offset of the view (reference::sampling, ViewSpec::
+    // anchored): pixel `id` is computed at `id + offset`, so at 1:1 its
+    // value does not depend on the pan.
+    offset: vec4<i32>,
 }
 
 @group(0) @binding(0) var<uniform> view: View;
@@ -54,7 +58,8 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
     if (id.x >= view.sizes.z || id.y >= view.sizes.w) {
         return;
     }
-    let p = vec3<f32>(f32(id.x) + 0.5, f32(id.y) + 0.5, 1.0);
+    let at = vec2<i32>(id.xy) + view.offset.xy;
+    let p = vec3<f32>(f32(at.x) + 0.5, f32(at.y) + 0.5, 1.0);
     let c = vec2<f32>(dot(view.across.xyz, p), dot(view.down.xyz, p));
     let f = view.footprint.xy;
     let sx = span(c.x, f.x);

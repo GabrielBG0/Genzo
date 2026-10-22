@@ -21,12 +21,15 @@ struct Tone {
     // Highlights and Shadows over 100, the floor of t, 1 to read the base
     // layer.
     local: vec4<f32>,
-    // View pixel centers to the base layer's working coordinates.
+    // Anchored view pixel centers (`offset` added) to the base layer's
+    // working coordinates.
     to_base: array<vec4<f32>, 2>,
     // The base layer's width and height.
     base_size: vec4<u32>,
     // Width, height, 1 to apply the base curve, unused.
     size: vec4<u32>,
+    // The view's whole-pixel offset (view_sample.wgsl).
+    offset: vec4<i32>,
 }
 
 @group(0) @binding(0) var<uniform> tone: Tone;
@@ -178,7 +181,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         var t = t0 + tone.controls.x;
         if (tone.local.w != 0.0) {
             // Exposure shifts the base by the same amount.
-            let p = vec2<f32>(id.xy) + 0.5;
+            let p = vec2<f32>(vec2<i32>(id.xy) + tone.offset.xy) + 0.5;
             t = highlights_shadows(t, local_base(p, t0) + tone.controls.x);
         }
         t = contrast(whites_blacks(t));

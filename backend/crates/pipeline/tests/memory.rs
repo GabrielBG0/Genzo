@@ -5,8 +5,8 @@
 //!
 //! A second photo of the same size replaces the first without the total
 //! growing: the old pyramid is freed before the new one is made. The view's
-//! caches, the level-0 tile cache and the base layer each stay within
-//! their own line.
+//! caches with the frame and its staging, the level-0 tile cache and the
+//! base layer each stay within their own line.
 
 use genzo_color::encoding::InputEncoding;
 use genzo_imgio::raw::{Levels, Rect};
@@ -15,6 +15,10 @@ use genzo_pipeline::camera_color::{camera_transform, encoded_transform};
 use genzo_pipeline::gpu::raw_stages::{RawStages, TileConfig, pyramid_bytes};
 use genzo_pipeline::gpu::{AdapterChoice, Gpu, GpuError};
 use genzo_pipeline::raw::{Cfa, Linearization, RawSource};
+
+/// One device at a time: WARP crashes with several in one process, and
+/// each test measures the process's allocations.
+static ONE_DEVICE: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 fn allocated(gpu: &Gpu) -> Option<u64> {
     gpu.device
@@ -104,6 +108,7 @@ fn encoded_source((w, h): (u32, u32)) -> RawSource {
 
 #[test]
 fn a_48mp_edit_stays_within_the_budget() {
+    let _lock = ONE_DEVICE.lock().unwrap_or_else(|e| e.into_inner());
     let gpu = match Gpu::open(AdapterChoice::from_env()) {
         Ok(gpu) => gpu,
         Err(GpuError::NoAdapter) if std::env::var("GENZO_REQUIRE_GPU").as_deref() != Ok("1") => {
@@ -221,11 +226,13 @@ fn within_budget(
 }
 
 /// The view at the largest size DEV-01 budgets (2560 x 1920): its sampled
-/// cache within the viewport caches' line, its frame within the output's.
+/// cache within the viewport caches' line, its frame and two staging buffers
+/// within the output's, after a 1:1 read of tiles at a pan that clips them.
 #[test]
 fn the_view_stays_within_its_caps() {
     use genzo_color::output::Target;
     use genzo_pipeline::gpu::view::ViewStages;
+    let _lock = ONE_DEVICE.lock().unwrap_or_else(|e| e.into_inner());
     let gpu = match Gpu::open(AdapterChoice::from_env()) {
         Ok(gpu) => gpu,
         Err(GpuError::NoAdapter) if std::env::var("GENZO_REQUIRE_GPU").as_deref() != Ok("1") => {
@@ -251,10 +258,13 @@ fn the_view_stays_within_its_caps() {
     view.tone(&gpu, &look, None, None);
     view.color(&gpu, &look);
     view.output(&gpu, Target::Srgb, false, false);
+    let tiles = genzo_pipeline::gpu::readback::visible_tiles((1, 1), (2560, 1920), (4000, 3000));
+    let rects: Vec<_> = tiles.iter().map(|t| t.frame).collect();
+    view.read_rects(&gpu, &rects).unwrap();
     let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
-    let (cache, frame) = (view.cache_bytes(), view.frame_bytes());
+    let (cache, frame) = (view.cache_bytes(), view.output_bytes());
     println!(
-        "computed: viewport caches {:.1} MB (cap {:.0}), frame {:.1} MB (cap {:.0})",
+        "computed: viewport caches {:.1} MB (cap {:.0}), frame and staging {:.1} MB (cap {:.0})",
         cache as f64 / MB,
         budget::VIEWPORT_CACHES as f64 / MB,
         frame as f64 / MB,
@@ -264,7 +274,7 @@ fn the_view_stays_within_its_caps() {
     if let (Some(before), Some(after)) = (before, allocated(&gpu)) {
         let used = after - before;
         println!("measured: {:.1} MB for the view", used as f64 / MB);
-        // Plus uniforms and the driver's padding; readback is a later step's.
+        // Plus uniforms and the driver's padding.
         assert!(
             used as f64 <= (cache + frame) as f64 * 1.07 + 2e6,
             "{used} bytes"
@@ -277,6 +287,7 @@ fn the_view_stays_within_its_caps() {
 #[test]
 fn the_level0_cache_stays_within_its_cap() {
     use genzo_pipeline::gpu::level0::Level0Cache;
+    let _lock = ONE_DEVICE.lock().unwrap_or_else(|e| e.into_inner());
     let gpu = match Gpu::open(AdapterChoice::from_env()) {
         Ok(gpu) => gpu,
         Err(GpuError::NoAdapter) if std::env::var("GENZO_REQUIRE_GPU").as_deref() != Ok("1") => {
@@ -325,6 +336,7 @@ fn the_level0_cache_stays_within_its_cap() {
 #[test]
 fn the_base_layer_stays_within_its_cap() {
     use genzo_pipeline::gpu::base::{BaseLayer, peak_bytes};
+    let _lock = ONE_DEVICE.lock().unwrap_or_else(|e| e.into_inner());
     let gpu = match Gpu::open(AdapterChoice::from_env()) {
         Ok(gpu) => gpu,
         Err(GpuError::NoAdapter) if std::env::var("GENZO_REQUIRE_GPU").as_deref() != Ok("1") => {

@@ -349,7 +349,7 @@ These come from `docs/m0-results.md` and decide how the steps below are built:
 6. `pipeline`, what reaches the viewport:
    - At Fit: the half-size JPEG preview while dragging, the full frame on release.
    - At 1:1: 256 px tiles, visible tiles first, then a ring around them.
-   - Read back only the visible tiles, into persistent staging buffers.
+   - Read back only the visible tiles, into persistent staging buffers: two per frame, mapped for each read and unmapped before the next copy, since wgpu cannot copy into a mapped buffer. A pixel at 1:1 does not depend on the pan, so a pan reads back only the tiles it exposes (DEV-01, Readback).
    - The settled render does the visible area first. Measure the settled frame's transfer (11 MB raw, about 40 ms on Linux) and compress it if the pause after release shows.
 7. `pipeline`: the histogram, and clipping masks for J.
 8. `cache`: an in-memory LRU of decoded mip levels in CPU memory, used for the prefetched neighbors (never on the GPU, so the 1 GB budget holds), and a disk tier for embedded previews. `jobs`: a priority scheduler, rayon for CPU work and tokio for IO.

@@ -191,6 +191,30 @@ impl ViewSpec {
             ViewSpec::Fit(out) | ViewSpec::Region { out, .. } => out,
         }
     }
+
+    /// The view split into a whole-pixel `offset` and the rest: the view's
+    /// pixel (x, y) is the anchored view's pixel (x + offset). The GPU
+    /// computes every pixel at its anchored position, so at 1:1 a pixel's
+    /// value does not depend on the pan: every whole-pixel pan has the same
+    /// anchored view, at origin 0 (DEV-01, Readback). A Fit view has no
+    /// offset.
+    pub fn anchored(&self) -> (ViewSpec, (i32, i32)) {
+        match *self {
+            ViewSpec::Fit(_) => (*self, (0, 0)),
+            ViewSpec::Region { out, zoom, origin } => {
+                let offset = [origin.0, origin.1].map(|o| (o * zoom).floor() as i32);
+                let rest = |o: f64, d: i32| o - f64::from(d) / zoom;
+                (
+                    ViewSpec::Region {
+                        out,
+                        zoom,
+                        origin: (rest(origin.0, offset[0]), rest(origin.1, offset[1])),
+                    },
+                    (offset[0], offset[1]),
+                )
+            }
+        }
+    }
 }
 
 /// The sampling for `view` of an image whose level 0 (full resolution, the

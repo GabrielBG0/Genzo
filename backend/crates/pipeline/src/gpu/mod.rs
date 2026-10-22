@@ -8,6 +8,7 @@
 pub mod base;
 pub mod level0;
 pub mod raw_stages;
+pub mod readback;
 pub mod spike;
 pub mod synthetic;
 pub mod thread;

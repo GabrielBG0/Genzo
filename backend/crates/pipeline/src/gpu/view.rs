@@ -14,6 +14,7 @@ use genzo_color::output::{EDGE_STEPS, Target};
 use super::base::BaseLayer;
 use super::level0::{Level0Cache, Level0Error};
 use super::raw_stages::{Pass, Pyramid, RawStages, Slot, padded_row, pass_with};
+use super::readback::Staging;
 use super::{Gpu, GpuError};
 use crate::look::{BaseCurve, Look, Profile};
 use crate::raw::RawSource;
@@ -21,6 +22,7 @@ use crate::reference::base::{T_FLOOR, view_to_working};
 use crate::reference::sampling::{
     Frame, Sampling, ViewSpec, plan, plan_view, plan_view_without_level0,
 };
+use genzo_model::frame::Rect;
 
 const WG: u32 = 16;
 
@@ -34,6 +36,7 @@ pub(crate) struct SampleUniforms {
     sizes: [u32; 4],
     grid: [u32; 4],
     ratio: [[f32; 4]; 3],
+    offset: [i32; 4],
 }
 
 impl SampleUniforms {
@@ -49,7 +52,15 @@ impl SampleUniforms {
             sizes: [s.level_size.0, s.level_size.1, out.0, out.1],
             grid: [grid.0, grid.1, 0, 0],
             ratio: [[0.0; 4]; 3],
+            offset: [0; 4],
         }
+    }
+
+    /// With the view's whole-pixel offset ([`ViewSpec::anchored`]): `s` is
+    /// then the anchored view's sampling.
+    pub(crate) fn with_offset(mut self, (x, y): (i32, i32)) -> Self {
+        self.offset = [x, y, 0, 0];
+        self
     }
 
     /// With the white balance drag `m` applied to the sampled values.
@@ -70,6 +81,7 @@ struct OutputUniforms {
     lms_to_rgb: [[f32; 4]; 3],
     compression: [f32; 4],
     size: [u32; 4],
+    offset: [i32; 4],
 }
 
 #[repr(C)]
@@ -88,6 +100,7 @@ struct ToneUniforms {
     /// The base layer's width and height.
     base_size: [u32; 4],
     size: [u32; 4],
+    offset: [i32; 4],
 }
 
 #[repr(C)]
@@ -154,10 +167,16 @@ pub struct ViewStages {
     latest: Latest,
     /// Whether the stage 6 cache holds stage 6 of the current sampling.
     toned_current: bool,
-    frame: Option<wgpu::Buffer>,
+    /// The frame: one R32Uint texel per pixel, RGBA8 packed with R in the
+    /// low byte, and its staging buffers.
+    frame: Option<wgpu::Texture>,
+    staging: Option<Staging>,
     size: (u32, u32),
-    /// How the view samples the pyramid, for placing the base layer.
+    /// How the view samples the pyramid (the anchored view's sampling,
+    /// [`ViewSpec::anchored`]), for placing the base layer, and the view's
+    /// whole-pixel offset.
     sampling: Option<Sampling>,
+    offset: (i32, i32),
     /// The white balance drag the next samplings apply, if any.
     ratio: Option<[[f32; 3]; 3]>,
 }
@@ -220,7 +239,7 @@ impl ViewStages {
                 device,
                 "view output",
                 include_str!("shaders/view_output.wgsl"),
-                &[Slot::Float, Slot::StorageRw],
+                &[Slot::Float, Slot::Store(wgpu::TextureFormat::R32Uint)],
                 false,
             ),
             sample_uniforms: uniforms("view sample", size_of::<SampleUniforms>()),
@@ -251,8 +270,10 @@ impl ViewStages {
             latest: Latest::Sampled,
             toned_current: false,
             frame: None,
+            staging: None,
             size: (0, 0),
             sampling: None,
+            offset: (0, 0),
             ratio: None,
         }
     }
@@ -281,9 +302,14 @@ impl ViewStages {
         caches * u64::from(self.size.0) * u64::from(self.size.1) * 8
     }
 
-    /// The bytes of the frame (RGBA8), DEV-01's output line.
-    pub fn frame_bytes(&self) -> u64 {
-        u64::from(self.size.0) * u64::from(self.size.1) * 4
+    /// The bytes of the frame (RGBA8) and its two staging buffers that
+    /// exist, DEV-01's output line.
+    pub fn output_bytes(&self) -> u64 {
+        let frame = self
+            .frame
+            .as_ref()
+            .map_or(0, |_| u64::from(self.size.0) * u64::from(self.size.1) * 4);
+        frame + self.staging.as_ref().map_or(0, Staging::bytes)
     }
 
     fn cache(gpu: &Gpu, label: &str, size: (u32, u32)) -> wgpu::Texture {
@@ -314,13 +340,23 @@ impl ViewStages {
         self.toned = None;
         self.colored = None;
         self.frame = None;
+        self.staging = None;
         self.sampled = Some(Self::cache(gpu, "stage 4 sampled", size));
-        self.frame = Some(gpu.device.create_buffer(&wgpu::BufferDescriptor {
+        self.frame = Some(gpu.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("frame"),
-            size: u64::from(size.0) * u64::from(size.1) * 4,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
+            size: wgpu::Extent3d {
+                width: size.0,
+                height: size.1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R32Uint,
+            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
         }));
+        self.staging = Some(Staging::new(gpu, size));
         self.size = size;
     }
 
@@ -336,8 +372,10 @@ impl ViewStages {
     /// Shows `view` of `src` (its pyramid built) in `frame`: an orientation
     /// (a `u8` for the whole image) or the edit's geometry. Renders the
     /// level-0 tiles it needs into `cache` when it reads level 0 (`key` as
-    /// for [`Level0Cache::ensure`]), then samples. When the cache cannot
-    /// hold them all, it falls back to the pyramid's level 1.
+    /// for [`Level0Cache::ensure`]), then samples, computing each pixel at
+    /// its anchored position ([`ViewSpec::anchored`]). When the cache
+    /// cannot hold them all, it falls back to the pyramid's level 1.
+    /// Returns the view's own sampling.
     #[allow(clippy::too_many_arguments)]
     pub fn show(
         &mut self,
@@ -352,21 +390,27 @@ impl ViewStages {
         let frame = frame.into();
         let pyramid = stages.pyramid().expect("render_pyramid first");
         let transform = pyramid.transform.clone();
-        let mut s = plan_view(src.size(), &pyramid.level_sizes(), frame, view);
+        let levels = pyramid.level_sizes();
+        let mut planner: fn(_, &_, Frame, _) -> Sampling = plan_view;
+        let mut s = planner(src.size(), &levels, frame, view);
         let out = view.out();
         if s.level == 0 {
             let tiles = Level0Cache::tiles_for(s.source_rect(out), src.size());
             match cache.ensure(gpu, stages, src, &transform, key, &tiles) {
                 Ok(()) => {}
                 Err(Level0Error::Full { .. }) => {
-                    let pyramid = stages.pyramid().expect("built");
-                    s = plan_view_without_level0(src.size(), &pyramid.level_sizes(), frame, view);
+                    planner = plan_view_without_level0;
+                    s = planner(src.size(), &levels, frame, view);
                 }
                 Err(Level0Error::Gpu(e)) => return Err(e),
             }
         }
+        let (anchored, offset) = view.anchored();
+        let a = planner(src.size(), &levels, frame, anchored);
+        debug_assert_eq!(a.level, s.level, "the level depends on the zoom only");
         let pyramid = stages.pyramid().expect("built");
-        self.sample_with(gpu, pyramid, (s.level == 0).then_some(&*cache), &s, out);
+        let level0 = (s.level == 0).then_some(&*cache);
+        self.sample_at(gpu, pyramid, level0, &a, offset, out);
         Ok(s)
     }
 
@@ -380,12 +424,27 @@ impl ViewStages {
         s: &Sampling,
         out: (u32, u32),
     ) {
+        self.sample_at(gpu, pyramid, level0, s, (0, 0), out);
+    }
+
+    /// [`Self::sample_with`] where `s` is the anchored view's sampling and
+    /// `offset` the view's whole-pixel offset.
+    fn sample_at(
+        &mut self,
+        gpu: &Gpu,
+        pyramid: &Pyramid,
+        level0: Option<&Level0Cache>,
+        s: &Sampling,
+        offset: (i32, i32),
+        out: (u32, u32),
+    ) {
         self.resize(gpu, out);
         self.latest = Latest::Sampled;
         self.toned_current = false;
         self.sampling = Some(s.clone());
+        self.offset = offset;
         let grid = level0.map_or((0, 0), |c| c.grid());
-        let mut u = SampleUniforms::new(s, out, grid);
+        let mut u = SampleUniforms::new(s, out, grid).with_offset(offset);
         if let Some(m) = self.ratio {
             u = u.with_ratio(m);
         }
@@ -521,6 +580,7 @@ impl ViewStages {
             to_base,
             base_size,
             size: [self.size.0, self.size.1, u32::from(curve), 0],
+            offset: [self.offset.0, self.offset.1, 0, 0],
         };
         gpu.queue
             .write_buffer(&self.tone_uniforms, 0, bytemuck::bytes_of(&u));
@@ -639,10 +699,16 @@ impl ViewStages {
                 if compress { 1.0 } else { 0.0 },
             ],
             size: [self.size.0, self.size.1, EDGE_STEPS, u32::from(dither)],
+            offset: [self.offset.0, self.offset.1, 0, 0],
         };
         gpu.queue
             .write_buffer(&self.output_uniforms, 0, bytemuck::bytes_of(&u));
         let sampled = self.latest_texture().create_view(&Default::default());
+        let frame = self
+            .frame
+            .as_ref()
+            .expect("resized")
+            .create_view(&Default::default());
         let group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("view output"),
             layout: &self.output.layout,
@@ -657,7 +723,7 @@ impl ViewStages {
                 },
                 wgpu::BindGroupEntry {
                     binding: 2,
-                    resource: self.frame.as_ref().expect("resized").as_entire_binding(),
+                    resource: wgpu::BindingResource::TextureView(&frame),
                 },
             ],
         });
@@ -691,14 +757,33 @@ impl ViewStages {
         read_rgba16f(gpu, self.latest_texture(), (0, 0), self.size)
     }
 
-    /// The frame, RGBA8 row by row.
+    /// The view's whole-pixel offset: where the frame's top left is in the
+    /// anchored view ([`ViewSpec::anchored`]); at 1:1, in the shown image.
+    pub fn offset(&self) -> (i32, i32) {
+        self.offset
+    }
+
+    /// The frame, RGBA8 row by row: what Fit sends.
     pub fn read_frame(&self, gpu: &Gpu) -> Result<Vec<[u8; 4]>, GpuError> {
-        let frame = self.frame.as_ref().expect("output first");
-        let buffer = readback(gpu, frame.size());
-        let mut encoder = gpu.device.create_command_encoder(&Default::default());
-        encoder.copy_buffer_to_buffer(frame, 0, &buffer, 0, frame.size());
-        let bytes = map(gpu, encoder, &buffer)?;
+        let whole = Rect {
+            x: 0,
+            y: 0,
+            width: self.size.0,
+            height: self.size.1,
+        };
+        let bytes = self.read_rects(gpu, &[whole])?.remove(0);
         Ok(bytes.as_chunks::<4>().0.to_vec())
+    }
+
+    /// `rects` of the frame, each RGBA8 row by row: at 1:1, the tiles to
+    /// send ([`super::readback::visible_tiles`]'s frame rectangles). Only
+    /// they are copied, through the frame's staging buffers.
+    pub fn read_rects(&self, gpu: &Gpu, rects: &[Rect]) -> Result<Vec<Vec<u8>>, GpuError> {
+        let frame = self.frame.as_ref().expect("output first");
+        self.staging
+            .as_ref()
+            .expect("made with the frame")
+            .read(gpu, frame, rects)
     }
 }
 
