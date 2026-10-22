@@ -102,7 +102,8 @@ fn visible_tiles_are_the_frames_pixels() {
     assert_eq!(view.offset(), (301, 250));
     let tiles = visible_tiles(view.offset(), spec.out(), src.size());
     assert_eq!(tiles.len(), 3 * 3, "partial tiles on every side");
-    // Three times over: more than the two buffers hold, so three rounds.
+    // Three times over: more than the two buffers hold, so more than one
+    // round.
     let rects: Vec<Rect> = (0..3).flat_map(|_| tiles.iter().map(|t| t.frame)).collect();
     let got = view.read_rects(&gpu, &rects).unwrap();
     assert_eq!(got.len(), rects.len());

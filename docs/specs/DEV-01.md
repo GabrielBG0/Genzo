@@ -362,7 +362,7 @@ Works in OkLCh, converted from linear AP1 through XYZ (D65).
    - **RAW photos:** always.
    - **Non-RAW photos:** only when the source gamut is not inside the target. Adobe RGB or ProPhoto RGB into sRGB qualifies, and so does Display P3 into sRGB. An sRGB JPEG into an sRGB frame does not, so its saturated colors stay exact. Colors an edit pushes past the edge are clipped per channel there.
 2. **Clamp** to 0 to 1, then encode with the sRGB transfer function (also used by Display P3).
-3. **Quantize** to 8 bits with deterministic dither: triangular, ±1 code, from an integer hash of the pixel position (PCG), so the CPU reference and every GPU draw the same noise and goldens are stable.
+3. **Quantize** to 8 bits with deterministic dither: triangular, ±1 code, from an integer hash of the pixel position (PCG), drawn at the pixel's anchored position (its place in the shown image at 1:1; see Readback), so the CPU reference and every GPU draw the same noise and goldens are stable.
    - **An unedited non-RAW photo is not dithered** (decided 2026-10-19), so it shows its own codes. Its values come back up to 1.3 codes off through the RGBA16F pyramid: a channel near 0 beside a bright one, like sRGB (2, 250, 0). Dither on top of that reached 2 codes. RAW photos and any edit keep the dither.
 4. **Tag the frame** `rgba8Srgb`, `rgba8DisplayP3`, or the matching JPEG preview format. The webview converts to the monitor (spec v1 color policy).
 
@@ -463,7 +463,7 @@ DEV-01 has no shortcuts of its own; DEV-02 and DEV-12 own the controls. Its inpu
   - Between *start* and *end*, renders are interactive. The settled render follows *end*.
   - A delta without a gesture, such as a typed value or a reset, is a start and an end in one.
   - The engine records one history step per *end* (APP-10).
-- **`SetView`**: the viewport size in device pixels, the zoom (Fit or 1:1), and the visible rectangle in image coordinates after geometry. Panning at 1:1 sends `SetView`, and the engine renders what became visible.
+- **`SetView`**: the viewport size in device pixels, the zoom (Fit or 1:1), and the visible rectangle in image coordinates after geometry. Panning at 1:1 sends `SetView`, and the engine renders what became visible. At 1:1 the engine snaps the origin to whole image pixels: tiles the frontend holds stay valid only across whole-pixel pans (Readback).
 - **`SelectPhoto`**: the photo whose edit the deltas apply to.
 
 ## States

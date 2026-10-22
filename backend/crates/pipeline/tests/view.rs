@@ -5,7 +5,8 @@
 //!   scales and in every orientation; a view the size of a level is an
 //!   exact copy.
 //! - The frame matches `color::output` from the same sampled values, the
-//!   gamut compression and the dither included, within 1 code.
+//!   gamut compression and the dither included, within 1 code; at 1:1 the
+//!   dither is drawn at the pixel's place in the shown image.
 //! - Criterion 8, end to end: unedited sRGB (8 and 16 bit) into an sRGB
 //!   frame and Display P3 into a P3 frame come back within 1 code, from
 //!   images of 2 x 2 blocks so a level 1 texel is one source color.
@@ -16,12 +17,13 @@ use std::sync::{Mutex, MutexGuard};
 use genzo_color::encoding::InputEncoding;
 use genzo_color::output::{Target, pixel};
 use genzo_pipeline::camera_color::{camera_transform, encoded_transform};
+use genzo_pipeline::gpu::level0::Level0Cache;
 use genzo_pipeline::gpu::raw_stages::{Pyramid, RawStages, TileConfig};
 use genzo_pipeline::gpu::synthetic::{blocks, scene_raw};
 use genzo_pipeline::gpu::view::{ViewStages, compresses, dithers};
 use genzo_pipeline::gpu::{AdapterChoice, Gpu, GpuError};
 use genzo_pipeline::raw::RawSource;
-use genzo_pipeline::reference::sampling::{sample, shown};
+use genzo_pipeline::reference::sampling::{ViewSpec, sample, shown};
 
 static ONE_DEVICE: Mutex<()> = Mutex::new(());
 
@@ -115,7 +117,8 @@ fn a_view_the_size_of_a_level_is_a_copy() {
 }
 
 /// The frame against `color::output::pixel` on the GPU's own sampled
-/// values: how many channels differ, and by at most how much.
+/// values, each dithered at its anchored position (the frame's plus the
+/// view's offset): how many channels differ, and by at most how much.
 fn frame_against_cpu(
     gpu: &Gpu,
     view: &mut ViewStages,
@@ -126,10 +129,12 @@ fn frame_against_cpu(
     let frame = view.read_frame(gpu).unwrap();
     let sampled = view.read_sampled(gpu).unwrap();
     let width = view.size().0;
+    let (ox, oy) = view.offset();
     let (mut off, mut worst) = (0, 0);
     for (i, (f, s)) in frame.iter().zip(&sampled).enumerate() {
         let (x, y) = (i as u32 % width, i as u32 / width);
-        let want = pixel(s.map(f64::from), (x, y), target, compress, true);
+        let at = ((x as i32 + ox) as u32, (y as i32 + oy) as u32);
+        let want = pixel(s.map(f64::from), at, target, compress, true);
         for c in 0..3 {
             let d = (i32::from(f[c]) - i32::from(want[c])).abs();
             if d > 0 {
@@ -155,8 +160,21 @@ fn the_frame_matches_the_reference() {
     let mut stages = RawStages::new(&gpu, TileConfig::default());
     let p = pyramid(&gpu, &mut stages, &src);
     let mut view = ViewStages::new(&gpu);
-    for out in [p.size, (40, 37)] {
-        view.sample(&gpu, p, 1, out);
+    let mut cache = Level0Cache::new(&gpu);
+    let one_to_one = ViewSpec::Region {
+        out: (200, 150),
+        zoom: 1.0,
+        origin: (37.0, 21.0),
+    };
+    for out in [p.size, (40, 37), one_to_one.out()] {
+        if out == one_to_one.out() {
+            view.show(&gpu, &mut stages, &mut cache, &src, 1, 1, one_to_one)
+                .unwrap();
+            assert_eq!(view.offset(), (37, 21));
+        } else {
+            let p = stages.pyramid().unwrap();
+            view.sample(&gpu, p, 1, out);
+        }
         for target in [Target::Srgb, Target::DisplayP3] {
             for compress in [false, true] {
                 let (off, worst) = frame_against_cpu(&gpu, &mut view, target, compress);
