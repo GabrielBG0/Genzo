@@ -26,6 +26,7 @@ use genzo_model::frame::Rect;
 use super::base::BaseLayer;
 use super::level0::Level0Cache;
 use super::raw_stages::{RawStages, Rebuild, TileConfig, level0_reach};
+use super::readback::{ViewTile, visible_tiles};
 use super::view::{ViewStages, compresses, dithers};
 use super::{Gpu, GpuError};
 use crate::camera_color::{
@@ -91,6 +92,7 @@ enum From {
 #[derive(Debug, Clone, PartialEq)]
 struct Shown {
     geometry: Geometry,
+    frame: Frame,
     view: ViewSpec,
     ratio: Option<[[f32; 3]; 3]>,
     look: Look,
@@ -149,18 +151,8 @@ impl Develop {
         self.rebuild = None;
         self.layer.clear();
         let src = &photo.src;
-        let (as_shot, kind, curve) = match &src.encoding {
-            Some(e) => (encoded_transform(e), PhotoKind::NonRaw, None),
-            None => {
-                let t = camera_transform(&src.color, None);
-                let (temp, tint) = genzo_color::camera::temperature_from_xy(t.white);
-                let kind = PhotoKind::Raw {
-                    as_shot_temp: temp as f32,
-                    as_shot_tint: tint as f32,
-                };
-                (t, kind, Some(BaseCurve::new(&src.color)))
-            }
-        };
+        let (as_shot, kind) = as_shot(src);
+        let curve = src.encoding.is_none().then(|| BaseCurve::new(&src.color));
         self.key += 1;
         let loaded = self.photo.insert(Loaded {
             photo,
@@ -325,6 +317,7 @@ impl Develop {
         let dither = dithers(pyramid, edited);
         let shown = Shown {
             geometry,
+            frame,
             view,
             ratio,
             look,
@@ -390,6 +383,65 @@ impl Develop {
         self.shown = Some(shown);
         self.reran = reran;
         Ok(reran)
+    }
+}
+
+/// A photo's as-shot transform and its kind, with the as-shot Temp and Tint
+/// for a RAW file (DEV-01, *White balance*): what its defaults need
+/// (`Edit::defaults`). The engine calls it off the render thread, after
+/// decoding.
+pub fn as_shot(src: &RawSource) -> (CameraTransform, PhotoKind) {
+    match &src.encoding {
+        Some(e) => (encoded_transform(e), PhotoKind::NonRaw),
+        None => {
+            let t = camera_transform(&src.color, None);
+            let (temp, tint) = genzo_color::camera::temperature_from_xy(t.white);
+            let kind = PhotoKind::Raw {
+                as_shot_temp: temp as f32,
+                as_shot_tint: tint as f32,
+            };
+            (t, kind)
+        }
+    }
+}
+
+/// What a render sends (DEV-01, *Readback*).
+#[derive(Debug, Clone, PartialEq)]
+pub enum Readback {
+    /// The whole frame, RGBA8 row by row: a Fit view, or the half-size
+    /// preview during a gesture (`half`).
+    Frame {
+        size: (u32, u32),
+        half: bool,
+        pixels: Vec<[u8; 4]>,
+    },
+    /// At 1:1, the visible 256 px tiles of the shown image, each RGBA8 row
+    /// by row.
+    Tiles(Vec<(ViewTile, Vec<u8>)>),
+}
+
+impl Develop {
+    /// Reads back what the last render sends: at 1:1 only the visible
+    /// tiles, otherwise the frame.
+    pub fn read_back(&self, gpu: &Gpu) -> Result<Readback, GpuError> {
+        let (p, s) = (
+            self.photo.as_ref().expect("open a photo first"),
+            self.shown.as_ref().expect("render first"),
+        );
+        if let ViewSpec::Region { zoom, .. } = s.view
+            && zoom == 1.0
+        {
+            let shown = s.frame.pixel_size(p.photo.src.size());
+            let tiles = visible_tiles(self.view.offset(), s.view.out(), shown);
+            let rects: Vec<Rect> = tiles.iter().map(|t| t.frame).collect();
+            let bytes = self.view.read_rects(gpu, &rects)?;
+            return Ok(Readback::Tiles(tiles.into_iter().zip(bytes).collect()));
+        }
+        Ok(Readback::Frame {
+            size: self.view.frame_size(),
+            half: s.half,
+            pixels: self.view.read_frame(gpu)?,
+        })
     }
 }
 

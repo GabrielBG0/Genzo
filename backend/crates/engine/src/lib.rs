@@ -22,6 +22,7 @@ use genzo_pipeline::gpu::thread::RenderThread;
 use genzo_pipeline::gpu::{AdapterChoice, GpuError};
 
 pub mod contract;
+pub mod develop;
 pub mod files;
 pub mod history;
 
@@ -65,6 +66,11 @@ pub enum EngineError {
     NoGpu(String),
     #[error("{0}")]
     Gpu(String),
+    #[error("no photo is open")]
+    NoPhoto,
+    /// A delta the engine refused; the edit keeps its last valid state.
+    #[error("{0}")]
+    Refused(String),
 }
 
 impl From<GpuError> for EngineError {
@@ -92,6 +98,8 @@ pub struct Engine {
     /// Where the autobench report goes (`GENZO_AUTOBENCH`), if the app was
     /// started to benchmark itself.
     autobench: Option<PathBuf>,
+    /// Develop's photos, edits and histories.
+    session: Mutex<develop::Session>,
 }
 
 #[derive(Debug, Default)]
@@ -172,6 +180,7 @@ impl Engine {
             generations: Generations::new(),
             frames: Mutex::new(FrameStore::default()),
             autobench: None,
+            session: Mutex::default(),
         }
     }
 

@@ -9,8 +9,16 @@ use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::JoinHandle;
 
+use std::collections::VecDeque;
+
+use genzo_color::output::Target;
+use genzo_model::edit::{Edit, Phase};
+
+use super::develop::{Develop, DevelopError, Photo, Readback, Reran};
+use super::raw_stages::TileConfig;
 use super::spike::{BayerImage, Frame, SpikeParams, SpikePipeline};
 use super::{AdapterChoice, Gpu, GpuError, GpuInfo};
+use crate::reference::sampling::ViewSpec;
 
 type Reply<T> = Sender<Result<T, GpuError>>;
 
@@ -21,7 +29,42 @@ enum Request {
         bounds: (u32, u32),
         reply: Reply<Option<Frame>>,
     },
+    /// Opens a photo in Develop, as photo `id`.
+    Open {
+        id: u64,
+        photo: Box<Photo>,
+        reply: Reply<()>,
+    },
+    Develop {
+        request: Box<DevelopRequest>,
+        reply: Reply<Option<DevelopFrame>>,
+    },
 }
+
+/// One Develop render: the whole state, never a delta, so a newer request
+/// replacing an older one loses nothing.
+#[derive(Debug, Clone)]
+pub struct DevelopRequest {
+    pub generation: u64,
+    /// The photo it is for; a request for another than the open one is
+    /// dropped.
+    pub photo: u64,
+    pub edit: Edit,
+    pub view: ViewSpec,
+    pub target: Target,
+    pub phase: Phase,
+}
+
+/// What a Develop render sends.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DevelopFrame {
+    pub generation: u64,
+    pub readback: Readback,
+    pub reran: Reran,
+}
+
+/// The receiving end of a submitted Develop render.
+pub type Pending = Receiver<Result<Option<DevelopFrame>, GpuError>>;
 
 /// A handle to the render thread. Dropping it stops the thread.
 #[derive(Debug)]
@@ -75,6 +118,37 @@ impl RenderThread {
         rx.recv().map_err(|_| GpuError::ThreadGone)?
     }
 
+    /// Opens `photo` in Develop as photo `id`, replacing the one open, and
+    /// waits.
+    pub fn open(&self, id: u64, photo: Photo) -> Result<(), GpuError> {
+        let (reply, rx) = mpsc::channel();
+        self.send(Request::Open {
+            id,
+            photo: Box::new(photo),
+            reply,
+        })?;
+        rx.recv().map_err(|_| GpuError::ThreadGone)?
+    }
+
+    /// Queues a Develop render without waiting. The answer is `None` when
+    /// a newer Develop render replaced it before it ran, or it is for a
+    /// photo that is no longer open.
+    pub fn submit(&self, request: DevelopRequest) -> Result<Pending, GpuError> {
+        let (reply, rx) = mpsc::channel();
+        self.send(Request::Develop {
+            request: Box::new(request),
+            reply,
+        })?;
+        Ok(rx)
+    }
+
+    /// [`Self::submit`] and wait.
+    pub fn develop(&self, request: DevelopRequest) -> Result<Option<DevelopFrame>, GpuError> {
+        self.submit(request)?
+            .recv()
+            .map_err(|_| GpuError::ThreadGone)?
+    }
+
     /// Renders and waits for the frame. `None` means a newer render request
     /// replaced this one before it ran.
     pub fn render(
@@ -104,13 +178,49 @@ impl Drop for RenderThread {
 
 fn run(gpu: Gpu, rx: Receiver<Request>) {
     let mut pipeline = SpikePipeline::new(&gpu);
-    while let Ok(first) = rx.recv() {
-        // Drain what is queued, so stale renders can be skipped.
-        let mut batch = vec![first];
+    // Made on the first Develop request, so spike-only use (the benches)
+    // holds no second GPU state.
+    let mut develop: Option<Develop> = None;
+    let mut open: Option<u64> = None;
+    // Requests that arrived while the rest of a rebuild ran.
+    let mut queued: VecDeque<Request> = VecDeque::new();
+    loop {
+        // Between requests: the rest of a white balance rebuild, stopped as
+        // soon as a request comes (DEV-01, Generations). A failed rest
+        // leaves both whites in the pyramid; the next render that moves
+        // finishes it, and one that fails makes the pyramid again.
+        if queued.is_empty()
+            && let Some(d) = develop.as_mut().filter(|d| d.rebuilding())
+        {
+            let _ = guarded(&gpu, || {
+                d.continue_rebuild(&gpu, || match rx.try_recv() {
+                    Ok(r) => {
+                        queued.push_back(r);
+                        true
+                    }
+                    Err(_) => false,
+                })
+                .map_err(develop_error)
+            });
+        }
+        let first = match queued.pop_front() {
+            Some(r) => r,
+            None => match rx.recv() {
+                Ok(r) => r,
+                Err(_) => return,
+            },
+        };
+        // Drain what is queued, so stale renders can be skipped: the newest
+        // of each kind runs.
+        let mut batch: Vec<Request> = vec![first];
+        batch.extend(queued.drain(..));
         batch.extend(rx.try_iter());
         let newest_render = batch
             .iter()
             .rposition(|r| matches!(r, Request::Render { .. }));
+        let newest_develop = batch
+            .iter()
+            .rposition(|r| matches!(r, Request::Develop { .. }));
         for (i, req) in batch.into_iter().enumerate() {
             match req {
                 Request::SetImage(image, reply) => {
@@ -138,8 +248,45 @@ fn run(gpu: Gpu, rx: Receiver<Request>) {
                     }
                     let _ = reply.send(result.map(Some));
                 }
+                Request::Open { id, photo, reply } => {
+                    let d =
+                        develop.get_or_insert_with(|| Develop::new(&gpu, TileConfig::default()));
+                    let result = guarded(&gpu, || d.open(&gpu, *photo).map_err(develop_error));
+                    open = Some(id);
+                    let _ = reply.send(result);
+                }
+                Request::Develop { reply, request }
+                    if Some(i) != newest_develop || open != Some(request.photo) =>
+                {
+                    let _ = reply.send(Ok(None));
+                }
+                Request::Develop { request, reply } => {
+                    let Some(d) = develop.as_mut() else {
+                        let _ = reply.send(Ok(None));
+                        continue;
+                    };
+                    let r = &*request;
+                    let result = guarded(&gpu, || {
+                        let reran = d
+                            .render(&gpu, &r.edit, r.view, r.target, r.phase)
+                            .map_err(develop_error)?;
+                        Ok(DevelopFrame {
+                            generation: r.generation,
+                            readback: d.read_back(&gpu)?,
+                            reran,
+                        })
+                    });
+                    let _ = reply.send(result.map(Some));
+                }
             }
         }
+    }
+}
+
+fn develop_error(e: DevelopError) -> GpuError {
+    match e {
+        DevelopError::Gpu(e) => e,
+        other => GpuError::Request(other.to_string()),
     }
 }
 
