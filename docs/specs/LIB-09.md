@@ -31,7 +31,9 @@ Sources: FEATURES.md (LIB-09), the plan's M1 items (backend item 9, the engine's
 ### Choosing a photo
 
 - **A click on a cell**, or **← and →** while Develop has focus and no text field does, selects the previous or next photo (`SelectPhoto`).
-- The new photo shows its embedded preview within one frame, then its fit render replaces it (DEV-01, *States*: Opening).
+- The new photo shows its embedded preview within one frame, or the neutral `bg` fill with its file name when it has none (DEV-01, *States*: Opening).
+  - A photo Genzo renders: its fit render then replaces that.
+  - An unsupported or damaged one: it stays, with the reason in the status bar and the Develop controls disabled (DEV-01, *States*).
 - A gesture in progress ends first: the photo switch waits for its *end*, which records its step.
 - The view resets to Fit on every switch. Zoom and pan are not kept per photo in M1.
 
@@ -72,10 +74,10 @@ Nothing is stored on disk in M1. The engine holds, for the session:
 |---|---|---|
 | `photos` | list of `{id, path, file_name, capture_time, kind}` | The opened folder's photos, in the strip's order. `kind` says whether the file renders or is unsupported, and why (DEV-01, *States*) |
 | `current` | photo id | The photo in Develop |
-| `direction` | next or previous | The last move, for the prefetch order |
+| `direction` | next or previous | The last move, for the prefetch order. On opening a folder it is next |
 | per photo id | the edit and its history | APP-10, DEV-01 *Data*. Kept across folder switches for the session |
 
-`ListFolderPhotos` returns `photos` with each one's edited flag. A photo's id is stable for the session, so the same file opened again keeps its edit.
+`ListFolderPhotos` returns each photo's `{id, file_name, capture_time, kind, edited}`, where `edited` is the edited dot's flag. A photo's id is stable for the session, so the same file opened again keeps its edit.
 
 ## Edge cases
 
