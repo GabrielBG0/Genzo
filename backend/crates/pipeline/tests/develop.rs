@@ -519,7 +519,11 @@ fn a_photo_opened_from_its_level1_renders_as_a_fresh_one() {
         .render(&gpu, &b, SMALL_FIT, Target::Srgb, Phase::End)
         .unwrap_err();
     assert!(matches!(err, DevelopError::NeedsSource), "{err:?}");
-    d.attach(photo().src);
+    let other = with_camera_profile(scene_raw(800, 600));
+    let err = d.attach(other).unwrap_err();
+    assert!(matches!(err, DevelopError::NotItsInput { .. }), "{err:?}");
+    assert!(!d.decoded());
+    d.attach(photo().src).unwrap();
     assert!(d.decoded());
     let r = d
         .render(&gpu, &b, SMALL_FIT, Target::Srgb, Phase::End)
@@ -543,7 +547,7 @@ fn a_view_that_wants_level0_is_provisional_until_the_input_comes() {
         );
     }
     // The same request again once the input came: drawn from level 0.
-    d.attach(photo().src);
+    d.attach(photo().src).unwrap();
     let r = d
         .render(&gpu, &a, ONE_TO_ONE, Target::Srgb, Phase::End)
         .unwrap();

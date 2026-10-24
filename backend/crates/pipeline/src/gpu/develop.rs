@@ -64,6 +64,10 @@ pub enum DevelopError {
     /// holds it until the input comes.
     #[error("the photo is not decoded yet")]
     NeedsSource,
+    /// An input attached to a photo of another size: the file changed
+    /// since its level 1 was prefetched. The photo keeps waiting.
+    #[error("the decoded photo is {got:?}, its prefetched level 1 {want:?}")]
+    NotItsInput { got: (u32, u32), want: (u32, u32) },
 }
 
 /// A photo to develop: its decoded input and the file's orientation.
@@ -230,10 +234,16 @@ impl Develop {
 
     /// Gives the photo opened from its level 1 its decoded input. The next
     /// render draws a provisional frame again, from level 0.
-    pub fn attach(&mut self, src: RawSource) {
-        let p = self.photo.as_mut().expect("open a photo first");
-        assert_eq!(src.size(), p.info.size, "the open photo's input");
+    pub fn attach(&mut self, src: RawSource) -> Result<(), DevelopError> {
+        let p = self.photo.as_mut().ok_or(DevelopError::NoPhoto)?;
+        if src.size() != p.info.size {
+            return Err(DevelopError::NotItsInput {
+                got: src.size(),
+                want: p.info.size,
+            });
+        }
         p.src = Some(src);
+        Ok(())
     }
 
     /// Whether the open photo has its input.

@@ -167,6 +167,12 @@ fn a_render_that_needs_the_input_waits_for_it() {
         newer.recv_timeout(Duration::from_millis(300)),
         Err(RecvTimeoutError::Timeout)
     );
+    // An input of another size is refused, and the thread goes on.
+    assert!(t.attach(1, photo((500, 400)).src).is_err());
+    assert_eq!(
+        newer.recv_timeout(Duration::from_millis(300)),
+        Err(RecvTimeoutError::Timeout)
+    );
     t.attach(1, photo(size).src).unwrap();
     let f = newer.recv_timeout(WAIT).unwrap().unwrap().unwrap();
     assert_eq!(f.generation, 3);

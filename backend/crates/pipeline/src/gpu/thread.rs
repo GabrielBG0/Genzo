@@ -174,7 +174,8 @@ impl RenderThread {
 
     /// Gives photo `id`, opened from its level 1, its decoded input, and
     /// waits. A held render then runs. Nothing happens when another photo
-    /// is open by then.
+    /// is open by then; an input of another size is refused, and the photo
+    /// keeps waiting.
     pub fn attach(&self, id: u64, src: RawSource) -> Result<(), GpuError> {
         let (reply, rx) = mpsc::channel();
         self.send(Request::Attach {
@@ -329,13 +330,16 @@ fn run(gpu: Gpu, rx: Receiver<Request>) {
                     let _ = reply.send(result);
                 }
                 Request::Attach { id, src, reply } => {
+                    let mut result = Ok(());
                     if let Some(d) = develop.as_mut().filter(|_| open == Some(id)) {
-                        d.attach(*src);
-                        if let Some(h) = held.take() {
+                        result = d.attach(*src).map_err(develop_error);
+                        if result.is_ok()
+                            && let Some(h) = held.take()
+                        {
                             held = develop_render(&gpu, d, h);
                         }
                     }
-                    let _ = reply.send(Ok(()));
+                    let _ = reply.send(result);
                 }
                 Request::Develop { reply, request }
                     if Some(i) != newest_develop || open != Some(request.photo) =>
