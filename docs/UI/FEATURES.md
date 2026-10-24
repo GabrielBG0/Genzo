@@ -63,7 +63,7 @@ Spec template for each feature: **Behavior** (what it does, step by step), **Inp
 - Priority: P0 · Screens: all
 - Scope: Global undo/redo (Ctrl Z, Ctrl Shift Z) across library and develop actions, tied to the History panel in Develop.
 - Open questions: Undo depth and whether library actions (ratings, moves) share the same stack as edits.
-- Spec: _to be written_
+- Spec: [APP-10](../specs/APP-10.md) (M1 part)
 
 ### APP-11 · Preferences and catalog settings
 - Priority: P1 · Screens: not mocked
@@ -159,7 +159,7 @@ Spec template for each feature: **Behavior** (what it does, step by step), **Inp
 ### LIB-09 · Filmstrip
 - Priority: P0 · Screens: all
 - Scope: Strip of the current source with selection ring and edited dot. Present in all modules.
-- Spec: _to be written_
+- Spec: [LIB-09](../specs/LIB-09.md) (M1 part)
 
 ### LIB-10 · Stacks
 - Priority: P2 · Screens: M3
