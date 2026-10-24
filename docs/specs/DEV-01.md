@@ -451,7 +451,18 @@ A software adapter uses the same sizes.
   - At 1:1, the visible tiles go as JPEG at full scale (quality 80) instead of lossless. M0 measured full lossless frames at 111 to 125 ms p95 on Linux; JPEG tiles cut the bytes about twentyfold. The autobench's 1:1 drag case reports it, and the budget table does not gate it.
   - On the software adapter, the interactive frame is a 1280 px proxy.
 - **Settled:** full quality, swapped in about 150 ms after the gesture ends.
-  - White balance re-demosaics, visible area first: at Fit the pyramid is rebuilt tile by tile, starting with the tiles the view shows. At 1:1, the visible level-0 tiles go first.
+  - White balance re-demosaics, visible area first.
+    - **At Fit** the pyramid is rebuilt in place, so no second one is allocated (`RawStages::rebuild_first`, `rebuild_rest`). The first part renders the tiles whose output meets what the view and the base layer read, then levels 2 and up. What they read is `level0_reach`: the texels of the view's sampling with the filter's reach, carried level by level down to level 0. The frame and the base layer are made from that first part. The other tiles follow, then levels 2 and up again.
+    - Right after the first part, the frame equals the frame of a whole rebuild, bit for bit.
+    - Without a crop the view reads the whole image, so the first part is every tile. The gain comes from a crop. On the RTX 3060 at 48 MP, with a crop of a third of each side and a 2560 × 1440 view, the first part takes 8.7 ms and the whole rebuild 31.1 ms.
+    - A newer request stops the rest between tiles (Generations). Another white balance starts a new rebuild; anything else lets the rest resume.
+    - The rebuild allocates nothing that lasts: its peak is the first render's.
+    - **At 1:1** the level-0 tiles are made on demand for the view. A new white is a new cache key, which empties the cache, so the visible tiles go first and their ring after.
+    - **Tests** (`pipeline/tests/rebuild.rs`):
+      - A finished rebuild equals a new pyramid at every level, bit for bit. This holds when it runs in one go and when it is stopped and resumed, for Bayer and X-Trans.
+      - Right after the first part, the frame equals a whole rebuild's frame, with every stage and the dither on. This is checked in a turned, flipped and straightened tight crop at levels 0 to 3, and for the whole image.
+      - The reach is exactly what the texels read, checked per texel at odd sizes.
+      - The rebuild leaves no allocation behind.
   - The frame is lossless: the full frame at Fit, the visible tiles at 1:1.
 - **Generations.** Every request carries a generation number, and requests coalesce latest-wins. A stale frame is dropped, and work in flight for an older generation is cancelled between tiles.
 - **Readback** copies only what is sent: at 1:1, the visible 256 px tiles of the shown image, clipped to the view and the image; at Fit, the whole frame (`gpu::readback`).

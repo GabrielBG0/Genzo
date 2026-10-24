@@ -21,7 +21,8 @@ use genzo_model::frame::Rect;
 use super::{Gpu, GpuError};
 use crate::camera_color::CameraTransform;
 use crate::raw::{Cfa, RawSource};
-use crate::reference::stages::{DESATURATE_FROM, half, luminance_row};
+use crate::reference::sampling::Sampling;
+use crate::reference::stages::{DESATURATE_FROM, half, luminance_row, span};
 use crate::tiles::{TileJob, jobs_in};
 
 const WG: u32 = 16;
@@ -289,6 +290,9 @@ pub struct Pyramid {
     /// A non-RAW image's encoding; None for RAW. Its white balance is a
     /// relative shift in the working space (DEV-01), not a new camera white.
     pub encoding: Option<InputEncoding>,
+    /// Which render or rebuild wrote it last: a [`Rebuild`] resumes only
+    /// the pyramid of its own `rebuild_first`.
+    id: u64,
 }
 
 impl Pyramid {
@@ -811,6 +815,8 @@ pub struct RawStages {
     /// For [`RawStages::render`] only, made on first use.
     readback: Option<wgpu::Buffer>,
     pyramid: Option<Pyramid>,
+    /// The id the next pyramid render or rebuild gets.
+    next_id: u64,
     /// For the memory test: sample the allocator report after each tile's
     /// submit in [`RawStages::render_pyramid`], keeping the largest total.
     #[doc(hidden)]
@@ -820,6 +826,7 @@ pub struct RawStages {
 }
 
 /// The image-wide inputs of a render, uploaded once.
+#[derive(Debug)]
 struct ImageBuffers {
     black: wgpu::Buffer,
     maps: wgpu::Buffer,
@@ -871,6 +878,7 @@ impl RawStages {
             tiles: None,
             readback: None,
             pyramid: None,
+            next_id: 0,
             sample_memory: false,
             peak_allocated: None,
         }
@@ -1435,6 +1443,65 @@ impl TileViews {
     }
 }
 
+/// A white balance rebuild of the held pyramid, in place (DEV-01, Settled):
+/// [`RawStages::rebuild_first`] renders the tiles a view reads, and
+/// [`RawStages::rebuild_rest`] the others. Until it finishes, the pyramid
+/// holds the new white only where the first part reached.
+#[derive(Debug)]
+pub struct Rebuild {
+    image: ImageBuffers,
+    rest: Vec<TileJob>,
+    /// The pyramid's id when it started.
+    id: u64,
+}
+
+impl Rebuild {
+    /// The tiles not rendered yet.
+    pub fn left(&self) -> usize {
+        self.rest.len()
+    }
+}
+
+/// The level-0 pixels (active-area coordinates) a view sampled per `s`
+/// into `out` reads through the pyramid of an image whose level 0 is
+/// `level0`: the texels of [`Sampling::source_rect`], then, level by level
+/// down, every texel the means behind them average. None for a view of
+/// level 0, which the level-0 tiles serve, or one that reads nothing.
+pub fn level0_reach(s: &Sampling, out: (u32, u32), level0: (u32, u32)) -> Option<Rect> {
+    let r = s.source_rect(out);
+    if s.level == 0 || r.width == 0 || r.height == 0 {
+        return None;
+    }
+    let mut sizes = vec![level0];
+    for _ in 0..s.level {
+        sizes.push(half(*sizes.last().expect("level 0")));
+    }
+    let mut x = (r.x, r.x + r.width);
+    let mut y = (r.y, r.y + r.height);
+    // Levels 2 and up: downsample.wgsl's 2 x 2 box, clamped at the edge.
+    for level in (2..=s.level as usize).rev() {
+        let below = sizes[level - 1];
+        let down = |(a, b): (u32, u32), n: u32| ((2 * a).min(n - 1), (2 * b - 1).min(n - 1) + 1);
+        x = down(x, below.0);
+        y = down(y, below.1);
+    }
+    // Level 1: tile_stage4.wgsl's spans, an odd last pixel folded in.
+    let up =
+        |(a, b): (u32, u32), n: u32, src: u32| (span(a, n, src).start, span(b - 1, n, src).end);
+    let x = up(x, sizes[1].0, level0.0);
+    let y = up(y, sizes[1].1, level0.1);
+    Some(Rect {
+        x: x.0,
+        y: y.0,
+        width: x.1 - x.0,
+        height: y.1 - y.0,
+    })
+}
+
+fn overlaps(a: Rect, b: Rect) -> bool {
+    a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height
+}
+
 impl RawStages {
     /// Builds the pyramid of `src` with `transform`: stages 1 to 4 tile by
     /// tile, reduced into level 1, then the levels above. The previous
@@ -1452,8 +1519,7 @@ impl RawStages {
         let jobs = self.prepare(gpu, src);
         let l1 = half(src.size());
         let levels = level_count(l1);
-        let device = &gpu.device;
-        let texture = device.create_texture(&wgpu::TextureDescriptor {
+        let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("pyramid"),
             size: wgpu::Extent3d {
                 width: l1.0,
@@ -1469,22 +1535,124 @@ impl RawStages {
                 | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
-        let mip = |level: u32| {
-            texture.create_view(&wgpu::TextureViewDescriptor {
-                base_mip_level: level,
-                mip_level_count: Some(1),
-                ..Default::default()
-            })
+        let pyramid = Pyramid {
+            texture,
+            size: l1,
+            levels,
+            transform: transform.clone(),
+            encoding: src.encoding.clone(),
+            id: self.take_id(),
         };
         let image = self.upload_image(gpu, src);
+        self.update(gpu, src, &image, &pyramid, &jobs, &mut || false)?;
+        Ok(self.pyramid.insert(pyramid))
+    }
+
+    /// Starts rebuilding the held pyramid of `src` with `transform` (a new
+    /// white balance), in place, so no second pyramid is allocated: the
+    /// tiles whose output meets `first` (level-0 pixels, active-area
+    /// coordinates), then levels 2 and up from the level 1 that holds. A
+    /// view whose [`level0_reach`] lies inside `first` then samples only
+    /// new texels, and reads as it would from a whole new pyramid. The
+    /// other tiles wait for [`RawStages::rebuild_rest`]. On an error the
+    /// pyramid is dropped, since it may hold both whites:
+    /// [`RawStages::render_pyramid`] makes it again.
+    pub fn rebuild_first(
+        &mut self,
+        gpu: &Gpu,
+        src: &RawSource,
+        transform: &CameraTransform,
+        first: Option<Rect>,
+    ) -> Result<Rebuild, GpuError> {
+        let held = self.pyramid.as_ref().expect("render_pyramid first");
+        assert_eq!(
+            held.size,
+            half(src.size()),
+            "a rebuild is of the same image"
+        );
+        let jobs = self.prepare(gpu, src);
+        let (now, rest): (Vec<_>, Vec<_>) = jobs
+            .into_iter()
+            .partition(|j| first.is_some_and(|r| overlaps(j.out, r)));
+        let image = self.upload_image(gpu, src);
+        let mut pyramid = self.pyramid.take().expect("held");
+        pyramid.transform = transform.clone();
+        // Any older Rebuild is now stale.
+        pyramid.id = self.take_id();
+        let id = pyramid.id;
+        // Failed, the pyramid holds both whites and its transform names only
+        // the new one: it goes, and the caller renders it again.
+        self.update(gpu, src, &image, &pyramid, &now, &mut || false)?;
+        self.pyramid = Some(pyramid);
+        Ok(Rebuild { image, rest, id })
+    }
+
+    /// Renders the tiles `rebuild` has left, asking `stop` before each one.
+    /// Stopped, it returns false and `rebuild` keeps the tiles not done:
+    /// work for an older request ends between tiles (DEV-01, Generations).
+    /// Done, it rebuilds levels 2 and up and returns true; the pyramid then
+    /// equals [`RawStages::render_pyramid`]'s with the new white, bit for
+    /// bit. Panics when a render or another rebuild replaced the pyramid
+    /// since `rebuild`'s [`RawStages::rebuild_first`].
+    pub fn rebuild_rest(
+        &mut self,
+        gpu: &Gpu,
+        src: &RawSource,
+        rebuild: &mut Rebuild,
+        mut stop: impl FnMut() -> bool,
+    ) -> Result<bool, GpuError> {
+        let held = self.pyramid.as_ref().expect("render_pyramid first");
+        assert_eq!(
+            held.id, rebuild.id,
+            "a rebuild resumes only the pyramid it started on: a later render or rebuild replaced it"
+        );
+        let pyramid = self.pyramid.take().expect("held");
+        let mut jobs = std::mem::take(&mut rebuild.rest);
+        let result = self.update(gpu, src, &rebuild.image, &pyramid, &jobs, &mut stop);
+        self.pyramid = Some(pyramid);
+        match result {
+            Ok(done) => {
+                rebuild.rest = jobs.split_off(done);
+                Ok(rebuild.rest.is_empty())
+            }
+            Err(e) => {
+                rebuild.rest = jobs;
+                Err(e)
+            }
+        }
+    }
+
+    fn take_id(&mut self) -> u64 {
+        self.next_id += 1;
+        self.next_id
+    }
+
+    /// Stages 1 to 4 for `jobs` into `pyramid`'s level 1 with its
+    /// transform, asking `stop` before each tile, then, when every tile is
+    /// done, levels 2 and up. Returns how many tiles were done.
+    fn update(
+        &mut self,
+        gpu: &Gpu,
+        src: &RawSource,
+        image: &ImageBuffers,
+        pyramid: &Pyramid,
+        jobs: &[TileJob],
+        stop: &mut dyn FnMut() -> bool,
+    ) -> Result<usize, GpuError> {
+        let transform = &pyramid.transform;
+        let l1 = pyramid.size;
+        let device = &gpu.device;
         let m = transform.matrix;
         let mm = transform.multipliers;
         let clip = mm[0].min(mm[1]).min(mm[2]);
         let luma = luminance_row();
-        let level1 = mip(0);
+        let level1 = pyramid.level_view(1);
         let rgb = view(&self.tiles.as_ref().expect("prepared").rgb);
         let mut in_flight = VecDeque::new();
-        for job in &jobs {
+        for (done, job) in jobs.iter().enumerate() {
+            if stop() {
+                return Ok(done);
+            }
             // This tile's upload is staged as soon as it is encoded, so wait
             // for room first.
             if in_flight.len() >= IN_FLIGHT {
@@ -1496,7 +1664,7 @@ impl RawStages {
                     })
                     .map_err(|e| GpuError::Request(e.to_string()))?;
             }
-            let mut encoder = self.encode_tile(gpu, src, &image, job, mm, true);
+            let mut encoder = self.encode_tile(gpu, src, image, job, mm, true);
             // The level 1 texels whose 2 x 2 block starts in this tile; tiles
             // start on even pixels, and an odd last pixel folds into the
             // block before it, in the same tile (tiles::jobs).
@@ -1568,7 +1736,7 @@ impl RawStages {
         // Levels 2 and up.
         let mut encoder = device.create_command_encoder(&Default::default());
         let mut sizes = l1;
-        for level in 1..levels {
+        for level in 2..=pyramid.levels {
             let dst = half(sizes);
             let uniform = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("level sizes"),
@@ -1581,7 +1749,7 @@ impl RawStages {
                 0,
                 bytemuck::cast_slice(&[sizes.0, sizes.1, dst.0, dst.1]),
             );
-            let (src_view, dst_view) = (mip(level - 1), mip(level));
+            let (src_view, dst_view) = (pyramid.level_view(level - 1), pyramid.level_view(level));
             let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("downsample"),
                 layout: &self.passes.downsample.layout,
@@ -1614,13 +1782,7 @@ impl RawStages {
         device
             .poll(wgpu::PollType::wait_indefinitely())
             .map_err(|e| GpuError::Request(e.to_string()))?;
-        Ok(self.pyramid.insert(Pyramid {
-            texture,
-            size: l1,
-            levels,
-            transform: transform.clone(),
-            encoding: src.encoding.clone(),
-        }))
+        Ok(jobs.len())
     }
 }
 
