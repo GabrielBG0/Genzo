@@ -9,16 +9,23 @@
 //!   tiles and then a crop change, a new view or a new drag; a stage that
 //!   turns back into the identity; and the level-0 tiles at 1:1 after a new
 //!   white.
+//! - **A white balance drag while the rest of a rebuild waits** reads only
+//!   the first part's texels: its frame equals the same drag after the rest
+//!   finished, bit for bit, at Fit and at 1:1.
+//! - **A non-RAW photo** (its white balance a relative shift, Embedded, no
+//!   dither while unedited) follows the same rules.
 //! - **During a gesture at Fit** the frame is the half-size preview.
 
 use std::sync::{Mutex, MutexGuard};
 
+use genzo_color::encoding::InputEncoding;
 use genzo_color::output::Target;
 use genzo_model::edit::{Edit, Profile, Treatment, WhiteBalanceMode};
 use genzo_pipeline::gpu::develop::{Develop, Phase, Photo, Reran};
 use genzo_pipeline::gpu::raw_stages::TileConfig;
 use genzo_pipeline::gpu::synthetic::{scene_raw, with_camera_profile};
 use genzo_pipeline::gpu::{AdapterChoice, Gpu, GpuError};
+use genzo_pipeline::raw::RawSource;
 use genzo_pipeline::reference::sampling::ViewSpec;
 
 static ONE_DEVICE: Mutex<()> = Mutex::new(());
@@ -347,4 +354,98 @@ fn a_gesture_at_fit_shows_the_half_size_preview() {
     d.render(&gpu, &moved, ONE_TO_ONE, Target::Srgb, Phase::Update)
         .unwrap();
     assert_eq!(d.view().frame_size(), ONE_TO_ONE.out());
+}
+
+#[test]
+fn a_drag_does_not_wait_for_the_rest() {
+    let Some((_lock, gpu)) = gpu() else { return };
+    for view in [FIT, ONE_TO_ONE] {
+        let mut frames = Vec::new();
+        for finish in [false, true] {
+            let (mut d, defaults) = opened(&gpu);
+            let released = warmer(cropped(toned(defaults)), 4100.0);
+            d.render(&gpu, &released, view, Target::Srgb, Phase::End)
+                .unwrap();
+            assert!(d.rebuilding(), "{view:?}: the crop leaves a rest");
+            let mut asked = 0;
+            d.continue_rebuild(&gpu, || {
+                asked += 1;
+                asked > 2
+            })
+            .unwrap();
+            if finish {
+                assert!(d.continue_rebuild(&gpu, || false).unwrap());
+            }
+            let dragged = warmer(released.clone(), 6600.0);
+            let r = d
+                .render(&gpu, &dragged, view, Target::Srgb, Phase::Update)
+                .unwrap();
+            assert!(!r.finished_rebuild && !r.pyramid, "{view:?}: {r:?}");
+            assert_eq!(d.rebuilding(), !finish);
+            frames.push(frame(&gpu, &d));
+        }
+        let off = frames[0]
+            .iter()
+            .zip(&frames[1])
+            .filter(|(a, b)| a != b)
+            .count();
+        assert_eq!(off, 0, "{view:?}: {off} pixels differ");
+    }
+}
+
+#[test]
+fn a_non_raw_photo_follows_the_same_rules() {
+    let Some((_lock, gpu)) = gpu() else { return };
+    let (w, h) = (900u32, 640u32);
+    let rgba: Vec<u16> = (0..w * h)
+        .flat_map(|i| {
+            let (x, y) = (i % w, i / w);
+            [x * 65535 / w, y * 65535 / h, ((x ^ y) * 37) & 0xffff, 65535].map(|v| v as u16)
+        })
+        .collect();
+    let enc = InputEncoding::srgb();
+    let photo = || Photo {
+        src: RawSource::from_encoded((w, h), &rgba, &enc).unwrap(),
+        orientation: 1,
+    };
+    let fresh = |edit: &Edit| {
+        let mut d = Develop::new(&gpu, TILES);
+        d.open(&gpu, photo()).unwrap();
+        d.render(&gpu, edit, FIT, Target::Srgb, Phase::End).unwrap();
+        frame(&gpu, &d)
+    };
+    let mut d = Develop::new(&gpu, TILES);
+    d.open(&gpu, photo()).unwrap();
+    let defaults = Edit::defaults(d.kind().unwrap());
+    assert_eq!(defaults.profile, Profile::Embedded);
+    d.render(&gpu, &defaults, FIT, Target::Srgb, Phase::End)
+        .unwrap();
+    let mut shifted = cropped(defaults.clone());
+    shifted.white_balance.mode = WhiteBalanceMode::Custom;
+    shifted.white_balance.temp = 35.0;
+    shifted.white_balance.tint = -20.0;
+    shifted.saturation = 15.0;
+    d.render(&gpu, &shifted, FIT, Target::Srgb, Phase::Start)
+        .unwrap();
+    let r = d
+        .render(&gpu, &shifted, FIT, Target::Srgb, Phase::End)
+        .unwrap();
+    assert!(r.pyramid && r.base_layer, "{r:?}");
+    assert_eq!(frame(&gpu, &d), fresh(&shifted), "a relative white");
+    // Back to the defaults: the white is the encoded one again, and the
+    // unedited photo shows its own codes, undithered.
+    let r = d
+        .render(&gpu, &defaults, FIT, Target::Srgb, Phase::End)
+        .unwrap();
+    assert!(r.pyramid && r.output, "{r:?}");
+    assert_eq!(frame(&gpu, &d), fresh(&defaults), "the defaults again");
+    // Setting a control to the value it already has re-runs nothing.
+    let same = Edit {
+        exposure: 0.0,
+        ..defaults.clone()
+    };
+    let r = d
+        .render(&gpu, &same, FIT, Target::Srgb, Phase::End)
+        .unwrap();
+    assert!(!r.output, "{r:?}");
 }

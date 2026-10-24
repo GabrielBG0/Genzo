@@ -60,6 +60,8 @@ pub enum DevelopError {
     /// engine refuses such a delta before it gets here.
     #[error("the crop does not fit the image")]
     CropDoesNotFit,
+    #[error("no photo is open")]
+    NoPhoto,
 }
 
 /// A photo to develop: its decoded input and the file's orientation.
@@ -171,14 +173,16 @@ impl Develop {
                 (t, kind, Some(BaseCurve::new(&src.color)))
             }
         };
-        self.stages.render_pyramid(gpu, src, &as_shot)?;
         self.key += 1;
-        self.photo = Some(Loaded {
+        let loaded = self.photo.insert(Loaded {
             photo,
             kind,
             as_shot,
             curve,
         });
+        // Failed, the photo stays open and the next render tries again.
+        self.stages
+            .render_pyramid(gpu, &loaded.photo.src, &loaded.as_shot)?;
         Ok(())
     }
 
@@ -247,7 +251,7 @@ impl Develop {
         target: Target,
         phase: Phase,
     ) -> Result<Reran, DevelopError> {
-        let p = self.photo.as_ref().expect("open a photo first");
+        let p = self.photo.as_ref().ok_or(DevelopError::NoPhoto)?;
         let size = p.photo.src.size();
         let file = p.photo.orientation;
         let mut geometry = Geometry::from(edit);
@@ -259,6 +263,16 @@ impl Develop {
         let edited = edit.is_edited(&Edit::defaults(p.kind));
         let interactive = phase.interactive();
         let mut reran = Reran::default();
+        if self.stages.pyramid().is_none() {
+            // A failed render or rebuild dropped it (DEV-01, *States*: out of
+            // GPU memory, retried once); the photo's input is still here.
+            self.shown = None;
+            self.layer_for = None;
+            self.rebuild = None;
+            self.stages.render_pyramid(gpu, &p.photo.src, &wanted)?;
+            self.key += 1;
+            reran.pyramid = true;
+        }
         let old = self.shown.clone();
         let moved = old
             .as_ref()
@@ -266,12 +280,16 @@ impl Develop {
 
         // A pending rebuild's first part covers what the last view and base
         // layer read: anything that reads elsewhere waits for the rest.
-        if self.rebuild.is_some() && moved {
-            self.continue_rebuild(gpu, || false)?;
+        if let Some(rebuild) = self.rebuild.as_mut()
+            && moved
+        {
+            self.stages
+                .rebuild_rest(gpu, &p.photo.src, rebuild, || false)?;
+            self.rebuild = None;
             reran.finished_rebuild = true;
         }
 
-        let held = &self.stages.pyramid().expect("opened").transform;
+        let held = &self.stages.pyramid().expect("built above").transform;
         let new_white = !same_white(held, &wanted);
         let mut ratio = None;
         if new_white && interactive {
@@ -279,7 +297,7 @@ impl Develop {
         } else if new_white {
             // The tiles the view and the new base layer read go first.
             let level0 = size;
-            let levels = self.stages.pyramid().expect("opened").level_sizes();
+            let levels = self.stages.pyramid().expect("built above").level_sizes();
             // The view's plan, and the pyramid's in case level 0 does not
             // fit the tile cache (`ViewStages::show` falls back to it).
             let s = plan_view(level0, &levels, frame, view);
@@ -294,25 +312,16 @@ impl Develop {
             .fold(level0_reach(&s, view.out(), level0), union);
             // A newer white replaces a pending rebuild.
             self.rebuild = None;
+            // On an error the pyramid goes, and the next render makes it again.
             let rebuild = self
                 .stages
-                .rebuild_first(
-                    gpu,
-                    &self.photo.as_ref().expect("opened").photo.src,
-                    &wanted,
-                    reach,
-                )
-                .inspect_err(|_| {
-                    // The pyramid went with the error: open the photo again.
-                    self.photo = None;
-                })?;
+                .rebuild_first(gpu, &p.photo.src, &wanted, reach)?;
             self.rebuild = (rebuild.left() > 0).then_some(rebuild);
             self.key += 1;
             reran.pyramid = true;
         }
 
-        let p = self.photo.as_ref().expect("opened");
-        let pyramid = self.stages.pyramid().expect("opened");
+        let pyramid = self.stages.pyramid().expect("built above");
         let white_key = (pyramid.transform.white, pyramid.transform.multipliers);
         let layer_stale = self
             .layer_for
@@ -382,7 +391,7 @@ impl Develop {
             self.view.color(gpu, &look);
             reran.color = true;
         }
-        let pyramid = self.stages.pyramid().expect("opened");
+        let pyramid = self.stages.pyramid().expect("built above");
         let compress = compresses(pyramid, target);
         if half {
             self.view.output_half(gpu, target, compress, dither);
