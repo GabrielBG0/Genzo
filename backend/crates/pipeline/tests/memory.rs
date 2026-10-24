@@ -225,6 +225,87 @@ fn within_budget(
     }
 }
 
+/// A prefetched neighbor of 48 MP: its level 1 renders beside the held
+/// pyramid within the prefetch line, and the switch to it, level 1
+/// uploaded in bands, stays within the pyramid's and the upload's.
+#[test]
+fn a_prefetch_and_its_switch_stay_within_the_budget() {
+    let _lock = ONE_DEVICE.lock().unwrap_or_else(|e| e.into_inner());
+    let gpu = match Gpu::open(AdapterChoice::from_env()) {
+        Ok(gpu) => gpu,
+        Err(GpuError::NoAdapter) if std::env::var("GENZO_REQUIRE_GPU").as_deref() != Ok("1") => {
+            eprintln!("skipped: no GPU adapter");
+            return;
+        }
+        Err(e) => panic!("{e}"),
+    };
+    // The largest tile, and one source for both photos to spare CPU memory:
+    // the neighbor is the same image at another white.
+    let src = linear_source((8064, 6048));
+    let held = camera_transform(&src.color, None);
+    let other = camera_transform(
+        &src.color,
+        Some(genzo_color::camera::xy_from_temperature(4300.0, 0.0)),
+    );
+    let mut stages = RawStages::new(&gpu, TileConfig::default());
+    stages.render_pyramid(&gpu, &src, &held).unwrap();
+    let caps = budget::PYRAMID + budget::TILE_SCRATCH + budget::UPLOAD;
+    let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+    let before = allocated(&gpu);
+
+    stages.sample_memory = true;
+    stages.peak_allocated = None;
+    let mut build = stages.start_level1(&gpu, &src, &other);
+    let scratch = build.gpu_bytes();
+    println!("computed: prefetch {:.1} MB", scratch as f64 / MB);
+    assert!(scratch <= budget::PREFETCH, "prefetch {scratch}");
+    assert!(
+        stages
+            .continue_level1(&gpu, &src, &mut build, || false)
+            .unwrap()
+    );
+    if let (Some(before), Some(peak)) = (before, stages.peak_allocated) {
+        let more = peak.saturating_sub(before);
+        println!(
+            "measured: {:.1} MB more at the peak of the neighbor's build",
+            more as f64 / MB
+        );
+        // The uploads' staging, already in the caps, and the prefetch line.
+        assert!(
+            peak - before <= budget::UPLOAD + budget::PREFETCH,
+            "{more} bytes more"
+        );
+    }
+    let level1 = build.finish();
+    assert_eq!(level1.bytes(), 4032 * 3024 * 8);
+
+    stages.peak_allocated = None;
+    let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+    let before = allocated(&gpu);
+    stages.upload_pyramid(&gpu, &level1).unwrap();
+    let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+    if let (Some(before), Some(after), Some(peak)) =
+        (before, allocated(&gpu), stages.peak_allocated)
+    {
+        println!(
+            "measured: switch {:+.1} MB after, {:+.1} MB at its peak (caps {:.0} MB)",
+            (after as f64 - before as f64) / MB,
+            (peak as f64 - before as f64) / MB,
+            caps as f64 / MB
+        );
+        // The new pyramid replaces the old; its bands' staging comes and
+        // goes within the upload line.
+        assert!(
+            after as f64 <= before as f64 + 2.0 * MB,
+            "{before} then {after}"
+        );
+        assert!(
+            peak <= before + budget::UPLOAD,
+            "{before} then a peak of {peak}"
+        );
+    }
+}
+
 /// The view at the largest size DEV-01 budgets (2560 x 1920): its sampled
 /// cache within the viewport caches' line, its frame and two staging buffers
 /// within the output's, after a 1:1 read of tiles at a pan that clips them.

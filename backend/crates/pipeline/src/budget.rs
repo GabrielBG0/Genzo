@@ -26,9 +26,13 @@ pub const BASE_LAYER: u64 = 20 * MB;
 pub const OUTPUT: u64 = 60 * MB;
 /// Histogram and clipping masks.
 pub const HISTOGRAM: u64 = 10 * MB;
+/// A prefetched neighbor's level 1 while it renders: one tile's texels and
+/// the buffer they are read back through (2 × 512² × 8 B = 4.2 MB for a
+/// 1024 px tile).
+pub const PREFETCH: u64 = 5 * MB;
 
 /// The whole budget's items.
-pub const ITEMS: [u64; 8] = [
+pub const ITEMS: [u64; 9] = [
     PYRAMID,
     TILE_SCRATCH,
     UPLOAD,
@@ -37,6 +41,7 @@ pub const ITEMS: [u64; 8] = [
     BASE_LAYER,
     OUTPUT,
     HISTOGRAM,
+    PREFETCH,
 ];
 
 /// The budget (DEV-01: under 1 GB).
@@ -49,7 +54,7 @@ mod tests {
     #[test]
     fn the_items_add_up_to_the_spec_total() {
         let total: u64 = ITEMS.iter().sum();
-        assert_eq!(total, 694 * MB);
+        assert_eq!(total, 699 * MB);
         assert!(total < LIMIT);
     }
 }

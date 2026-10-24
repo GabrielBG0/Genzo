@@ -419,15 +419,16 @@ Stages 1 to 4 run per tile, so full-resolution intermediates exist only for one 
 | Base layer of Highlights and Shadows while it builds: two planes of 4 bytes per working pixel, 18.9 MB for a square image at 1536 × 1536 (measured the same on NVIDIA, 19.3 MB on WARP with its upload staging in flight); 9.4 MB kept after (owner, 2026-10-20) | 20 MB |
 | Output frame and two persistent readback buffers, RGBA8 | 60 MB |
 | Histogram and clipping masks | 10 MB |
-| **Total** | **694 MB**, under the 1 GB budget with 306 MB to spare |
+| A prefetched neighbor's level 1 while it renders: one tile's texels and their readback buffer, 2 × 512² × 8 B = 4.2 MB for a 1024 px tile (at the build's peak, 11.1 MB above the held state: these 4.2 MB, and the staging of the tiles' uploads, which is the upload line's) | 5 MB |
+| **Total** | **699 MB**, under the 1 GB budget with 301 MB to spare |
 
 A software adapter uses the same sizes.
 
 **Prefetched neighbors** are held in CPU memory, never on the GPU:
-- **What is kept:** their pyramid (levels 1 and up), rendered on the GPU at low priority and read back.
-- **Size:** 131 MB for a 48 MP photo, 33 MB for 12 MP.
-- **The cap:** an LRU of 768 MB. That holds four 48 MP neighbors, two on each side.
-- **On a switch,** the pyramid is uploaded and the photo renders at Fit without decoding.
+- **What is kept:** their level 1 only (owner, 2026-10-24). It is rendered on the GPU tile by tile, beside the current photo's pyramid: each tile's level 1 texels go to a texture of their own and are read back into CPU memory before the next tile. No second pyramid is ever allocated on the GPU. The build stops between tiles for any request and resumes after it (`RawStages::start_level1`, `continue_level1`).
+- **Size:** 98 MB for a 48 MP photo (4032 × 3024 × 8 B), 24 MB for 12 MP.
+- **The cap:** an LRU of 768 MB (`cache::ByteLru`). The four 48 MP neighbors, two on each side, take 390 MB of it.
+- **On a switch,** the current pyramid is freed, the neighbor's level 1 is uploaded in bands of 8 MiB, and levels 2 and up are computed on the GPU (`RawStages::upload_pyramid`). The pyramid then equals a render's bit for bit, and the photo renders at Fit without decoding. That GPU part takes 22.5 ms at 48 MP on the RTX 3060, against the 150 ms of the whole switch; a neighbor's build takes 124 ms in the background.
 - **The decoded input** is kept for the current photo only. It is what 1:1 and a settled white balance need, and for a neighbor it is decoded in the background after the switch.
 - **Who owns it:** LIB-09 and the engine session.
 
@@ -580,7 +581,7 @@ DEV-12 and the M2 catalog use these coordinates; a change here is a schema versi
 | GPU | The viewport stage caches, 128 MB cap | Until the view or an earlier stage changes |
 | GPU | The base layer's coefficients (Highlights and Shadows), 9.4 MB at most | Until another photo is selected, or white balance, the crop, the straighten angle, the quarter turns or the flip change. Not the view, exposure or any other tone control |
 | CPU | The decoded input of the current photo | Until another photo is selected |
-| CPU | The pyramids of the prefetched neighbors, an LRU with a 768 MB cap | The session |
+| CPU | The level 1 of the prefetched neighbors, an LRU with a 768 MB cap | The session |
 | CPU and disk | Embedded previews | The session (the disk tier is the `cache` crate's) |
 
 Nothing is written next to the original files, and nothing is written to them.

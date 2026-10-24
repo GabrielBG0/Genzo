@@ -4,7 +4,8 @@
 // 2^BaselineExposure; each level 1 texel is the mean of its 2 x 2 block, an
 // odd last row or column folded into the last texel, as reference::stages
 // computes it. Level 0 is never stored whole (tile_stage4_full.wgsl keeps
-// tiles of it).
+// tiles of it). A prefetched neighbor's tiles each go to a texture of their
+// own, read back into CPU memory, and are stored from its top left.
 
 @group(0) @binding(3) var level1: texture_storage_2d<rgba16float, write>;
 
@@ -31,5 +32,5 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         }
     }
     let n = f32((xs.y - xs.x) * (ys.y - ys.x));
-    textureStore(level1, vec2<i32>(t), vec4<f32>(sum / n, 1.0));
+    textureStore(level1, vec2<i32>(t) - vec2<i32>(s4.level.zw), vec4<f32>(sum / n, 1.0));
 }

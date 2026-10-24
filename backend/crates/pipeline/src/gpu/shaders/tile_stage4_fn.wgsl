@@ -17,7 +17,9 @@ struct Stage4 {
     // across and down. Level 0: the active-area pixels it writes, x, y,
     // width, height.
     texels: vec4<u32>,
-    // The pyramid: the level 1 size. Level 0: cache tiles across the image,
+    // The pyramid: the level 1 size, then where the output's top left is in
+    // level 1 (0, 0 for the pyramid itself, the tile's first texel for a
+    // tile read back on its own). Level 0: cache tiles across the image,
     // atlas slots across.
     level: vec4<u32>,
 }
