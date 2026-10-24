@@ -290,6 +290,9 @@ pub struct Pyramid {
     /// A non-RAW image's encoding; None for RAW. Its white balance is a
     /// relative shift in the working space (DEV-01), not a new camera white.
     pub encoding: Option<InputEncoding>,
+    /// Which render or rebuild wrote it last: a [`Rebuild`] resumes only
+    /// the pyramid of its own `rebuild_first`.
+    id: u64,
 }
 
 impl Pyramid {
@@ -812,6 +815,8 @@ pub struct RawStages {
     /// For [`RawStages::render`] only, made on first use.
     readback: Option<wgpu::Buffer>,
     pyramid: Option<Pyramid>,
+    /// The id the next pyramid render or rebuild gets.
+    next_id: u64,
     /// For the memory test: sample the allocator report after each tile's
     /// submit in [`RawStages::render_pyramid`], keeping the largest total.
     #[doc(hidden)]
@@ -873,6 +878,7 @@ impl RawStages {
             tiles: None,
             readback: None,
             pyramid: None,
+            next_id: 0,
             sample_memory: false,
             peak_allocated: None,
         }
@@ -1445,6 +1451,8 @@ impl TileViews {
 pub struct Rebuild {
     image: ImageBuffers,
     rest: Vec<TileJob>,
+    /// The pyramid's id when it started.
+    id: u64,
 }
 
 impl Rebuild {
@@ -1533,6 +1541,7 @@ impl RawStages {
             levels,
             transform: transform.clone(),
             encoding: src.encoding.clone(),
+            id: self.take_id(),
         };
         let image = self.upload_image(gpu, src);
         self.update(gpu, src, &image, &pyramid, &jobs, &mut || false)?;
@@ -1545,7 +1554,9 @@ impl RawStages {
     /// coordinates), then levels 2 and up from the level 1 that holds. A
     /// view whose [`level0_reach`] lies inside `first` then samples only
     /// new texels, and reads as it would from a whole new pyramid. The
-    /// other tiles wait for [`RawStages::rebuild_rest`].
+    /// other tiles wait for [`RawStages::rebuild_rest`]. On an error the
+    /// pyramid is dropped, since it may hold both whites:
+    /// [`RawStages::render_pyramid`] makes it again.
     pub fn rebuild_first(
         &mut self,
         gpu: &Gpu,
@@ -1566,10 +1577,14 @@ impl RawStages {
         let image = self.upload_image(gpu, src);
         let mut pyramid = self.pyramid.take().expect("held");
         pyramid.transform = transform.clone();
-        let result = self.update(gpu, src, &image, &pyramid, &now, &mut || false);
+        // Any older Rebuild is now stale.
+        pyramid.id = self.take_id();
+        let id = pyramid.id;
+        // Failed, the pyramid holds both whites and its transform names only
+        // the new one: it goes, and the caller renders it again.
+        self.update(gpu, src, &image, &pyramid, &now, &mut || false)?;
         self.pyramid = Some(pyramid);
-        result?;
-        Ok(Rebuild { image, rest })
+        Ok(Rebuild { image, rest, id })
     }
 
     /// Renders the tiles `rebuild` has left, asking `stop` before each one.
@@ -1577,7 +1592,8 @@ impl RawStages {
     /// work for an older request ends between tiles (DEV-01, Generations).
     /// Done, it rebuilds levels 2 and up and returns true; the pyramid then
     /// equals [`RawStages::render_pyramid`]'s with the new white, bit for
-    /// bit.
+    /// bit. Panics when a render or another rebuild replaced the pyramid
+    /// since `rebuild`'s [`RawStages::rebuild_first`].
     pub fn rebuild_rest(
         &mut self,
         gpu: &Gpu,
@@ -1585,7 +1601,12 @@ impl RawStages {
         rebuild: &mut Rebuild,
         mut stop: impl FnMut() -> bool,
     ) -> Result<bool, GpuError> {
-        let pyramid = self.pyramid.take().expect("render_pyramid first");
+        let held = self.pyramid.as_ref().expect("render_pyramid first");
+        assert_eq!(
+            held.id, rebuild.id,
+            "a rebuild resumes only the pyramid it started on: a later render or rebuild replaced it"
+        );
+        let pyramid = self.pyramid.take().expect("held");
         let mut jobs = std::mem::take(&mut rebuild.rest);
         let result = self.update(gpu, src, &rebuild.image, &pyramid, &jobs, &mut stop);
         self.pyramid = Some(pyramid);
@@ -1599,6 +1620,11 @@ impl RawStages {
                 Err(e)
             }
         }
+    }
+
+    fn take_id(&mut self) -> u64 {
+        self.next_id += 1;
+        self.next_id
     }
 
     /// Stages 1 to 4 for `jobs` into `pyramid`'s level 1 with its

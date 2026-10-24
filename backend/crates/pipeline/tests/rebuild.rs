@@ -12,6 +12,7 @@
 //!   first part is every tile.
 //! - The level-0 reach is exactly the pixels a view's texels read, level by
 //!   level down, per texel, at odd and even sizes.
+//! - A rebuild resumes only the pyramid it started on.
 //! - The rebuild allocates no second pyramid: its peak is the first
 //!   render's, and it leaves nothing behind.
 
@@ -136,6 +137,31 @@ fn a_finished_rebuild_is_a_new_pyramid() {
             }
         }
     }
+}
+
+#[test]
+fn a_stale_rebuild_is_refused() {
+    let Some((_lock, gpu)) = gpu() else { return };
+    let src = with_camera_profile(scene_raw(600, 400));
+    let (old, new) = whites(&src);
+    let mut stages = RawStages::new(&gpu, TILES);
+    stages.render_pyramid(&gpu, &src, &old).unwrap();
+    // Replaced by a render, then by a newer rebuild.
+    let mut by_render = stages.rebuild_first(&gpu, &src, &new, None).unwrap();
+    stages.render_pyramid(&gpu, &src, &old).unwrap();
+    let mut by_rebuild = stages.rebuild_first(&gpu, &src, &new, None).unwrap();
+    let mut current = stages.rebuild_first(&gpu, &src, &old, None).unwrap();
+    for (case, stale) in [("render", &mut by_render), ("rebuild", &mut by_rebuild)] {
+        let refused = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            stages.rebuild_rest(&gpu, &src, stale, || false)
+        }));
+        assert!(refused.is_err(), "a rebuild replaced by a {case} resumed");
+    }
+    assert!(
+        stages
+            .rebuild_rest(&gpu, &src, &mut current, || false)
+            .unwrap()
+    );
 }
 
 /// Every stage on: local tone, contrast, stage 7, Genzo Standard.
