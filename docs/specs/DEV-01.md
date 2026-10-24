@@ -488,7 +488,14 @@ DEV-01 has no shortcuts of its own; DEV-02 and DEV-12 own the controls. Its inpu
 ### The edit struct
 
 The edit struct is defined in `model` and versioned with serde, starting at `schema_version: 1`.
-- Unknown fields are kept on load and written back.
+- Unknown fields are kept on load and written back, at every level of the struct (`model::edit`).
+- **An edit of a newer schema version is refused**, because its known fields may mean something else there. A missing field or a field of the wrong type is refused too.
+- **On load and on every delta, values are clamped** to their ranges:
+  - NaN becomes the field's default.
+  - A profile the photo cannot use becomes its default.
+  - Quarter turns wrap to 0 to 3.
+  - The crop's center and size stay within 0 to 1 and the angle within ±45°. Whether the crop fits the image is the engine's check (`geometry::fit`, Crop).
+- Every f32 survives the JSON round trip bit for bit.
 - An edit equal to the defaults is unedited. The filmstrip's edited dot and the panel dots compare against the defaults.
 - In M1, edits live in the engine's memory for the session (decided); the M2 catalog stores this same struct.
 

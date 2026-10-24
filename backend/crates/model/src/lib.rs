@@ -5,6 +5,7 @@
 
 pub mod api;
 pub mod contract;
+pub mod edit;
 pub mod frame;
 pub mod typescript;
 
