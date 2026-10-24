@@ -4,8 +4,12 @@
 //!
 //! - Uploaded, its pyramid equals [`RawStages::render_pyramid`]'s, bit for
 //!   bit, at every level, Bayer and X-Trans, at odd sizes, built in one go
-//!   or stopped between tiles and resumed.
+//!   or stopped between tiles and resumed, uploaded in one band or in many
+//!   with a short last one.
 //! - The held pyramid is left as it was while a neighbor builds.
+//! - A neighbor's build, interrupted by a rebuild of the held pyramid of
+//!   the other kind of mosaic or another X-Trans phase, still ends equal to
+//!   its render.
 //! - A white balance rebuild of the held pyramid, interrupted by a
 //!   neighbor's build of the other kind of mosaic and size, still ends
 //!   equal to a new pyramid.
@@ -116,10 +120,17 @@ fn an_uploaded_level1_is_the_rendered_pyramid() {
         let white = camera_transform(&src.color, Some(xy_from_temperature(4300.0, -7.0)));
         fresh.render_pyramid(&gpu, &src, &white).unwrap();
         let want = levels(&gpu, &fresh);
-        for (case, stop_every) in [("in one go", None), ("stopped every 7 tiles", Some(7))] {
+        for (case, stop_every, band_rows) in [
+            ("in one go, one band", None, None),
+            ("stopped every 7 tiles, bands of 7 rows", Some(7), Some(7)),
+        ] {
             let what = format!("{name}, {case}");
             let mut stages = RawStages::new(&gpu, FINE);
             let level1 = build(&gpu, &mut stages, &src, stop_every);
+            if let Some(rows) = band_rows {
+                assert_ne!(level1.size.1 % rows, 0, "{what}: a short last band");
+                stages.upload_band = level1.size.0 as usize * 8 * rows as usize;
+            }
             assert_eq!(level1.size, fresh.pyramid().unwrap().size, "{what}");
             assert_eq!(level1.bytes(), want[0].len() as u64 * 8, "{what}");
             let p = stages.upload_pyramid(&gpu, &level1).unwrap();
@@ -188,6 +199,54 @@ fn a_rebuild_interrupted_by_a_neighbor_still_ends_as_a_new_pyramid() {
                 .rebuild_rest(&gpu, &current, &mut rebuild, || false)
                 .unwrap()
         );
+        assert_same(&levels(&gpu, &stages), &want, name);
+    }
+}
+
+#[test]
+fn a_neighbor_interrupted_by_a_rebuild_still_ends_as_its_render() {
+    let Some((_lock, gpu)) = gpu() else { return };
+    for (name, current, neighbor) in [
+        ("an X-Trans neighbor, a Bayer rebuild", bayer(), xtrans()),
+        ("a Bayer neighbor, an X-Trans rebuild", xtrans(), bayer()),
+        (
+            "an X-Trans neighbor, another phase's rebuild",
+            shifted(xtrans()),
+            xtrans(),
+        ),
+    ] {
+        let white = camera_transform(&neighbor.color, Some(xy_from_temperature(4300.0, -7.0)));
+        let mut fresh = RawStages::new(&gpu, FINE);
+        fresh.render_pyramid(&gpu, &neighbor, &white).unwrap();
+        let want = levels(&gpu, &fresh);
+
+        let mut stages = RawStages::new(&gpu, FINE);
+        let old = camera_transform(&current.color, None);
+        let new = camera_transform(&current.color, Some(xy_from_temperature(3400.0, 12.0)));
+        stages.render_pyramid(&gpu, &current, &old).unwrap();
+        let mut b = stages.start_level1(&gpu, &neighbor, &white);
+        let mut asked = 0;
+        assert!(
+            !stages
+                .continue_level1(&gpu, &neighbor, &mut b, || {
+                    asked += 1;
+                    asked > 9
+                })
+                .unwrap()
+        );
+        // The current photo's work in between, as a request would bring.
+        let mut rebuild = stages.rebuild_first(&gpu, &current, &new, None).unwrap();
+        assert!(
+            stages
+                .rebuild_rest(&gpu, &current, &mut rebuild, || false)
+                .unwrap()
+        );
+        assert!(
+            stages
+                .continue_level1(&gpu, &neighbor, &mut b, || false)
+                .unwrap()
+        );
+        stages.upload_pyramid(&gpu, &b.finish()).unwrap();
         assert_same(&levels(&gpu, &stages), &want, name);
     }
 }

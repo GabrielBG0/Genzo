@@ -826,6 +826,11 @@ pub struct RawStages {
     pub sample_memory: bool,
     #[doc(hidden)]
     pub peak_allocated: Option<u64>,
+    /// The most bytes of level 1 [`RawStages::upload_pyramid`] stages at
+    /// once, [`UPLOAD_BAND`]; smaller in tests, so a small image takes many
+    /// bands.
+    #[doc(hidden)]
+    pub upload_band: usize,
 }
 
 /// The image-wide inputs of a render, uploaded once.
@@ -895,6 +900,7 @@ impl RawStages {
             next_id: 0,
             sample_memory: false,
             peak_allocated: None,
+            upload_band: UPLOAD_BAND,
         }
     }
 
@@ -1878,7 +1884,8 @@ impl Level1 {
 /// A [`Level1`] being rendered beside the held pyramid, tile by tile:
 /// [`RawStages::start_level1`], then [`RawStages::continue_level1`] until
 /// it is done. Its GPU memory is one tile's level 1 and the buffer it is
-/// read back through, freed with it.
+/// read back through, freed with it. After an error it is dropped: its
+/// buffer may still be mapped.
 #[derive(Debug)]
 pub struct Level1Build {
     level1: Level1,
@@ -2045,14 +2052,16 @@ impl RawStages {
     /// and up are computed as [`RawStages::render_pyramid`] computes them.
     /// The pyramid then equals render_pyramid's for the same photo and
     /// white, bit for bit, without decoding the photo (DEV-01, Prefetched
-    /// neighbors: on a switch).
+    /// neighbors: on a switch). It has a new id, so a [`Rebuild`] of the
+    /// pyramid it replaced is stale: the caller drops it first, since
+    /// [`RawStages::rebuild_rest`] panics on it.
     pub fn upload_pyramid(&mut self, gpu: &Gpu, level1: &Level1) -> Result<&Pyramid, GpuError> {
         let (w, h) = level1.size;
         let row = w as usize * 8;
         assert_eq!(level1.texels.len(), row * h as usize, "level 1's texels");
         self.free_pyramid(gpu);
         let pyramid = self.new_pyramid(gpu, level1.size, &level1.transform, &level1.encoding);
-        let rows = (UPLOAD_BAND / row).max(1);
+        let rows = (self.upload_band / row).max(1);
         for y in (0..h as usize).step_by(rows) {
             let n = rows.min(h as usize - y);
             gpu.queue.write_texture(

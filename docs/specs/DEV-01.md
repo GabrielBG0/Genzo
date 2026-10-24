@@ -419,7 +419,7 @@ Stages 1 to 4 run per tile, so full-resolution intermediates exist only for one 
 | Base layer of Highlights and Shadows while it builds: two planes of 4 bytes per working pixel, 18.9 MB for a square image at 1536 × 1536 (measured the same on NVIDIA, 19.3 MB on WARP with its upload staging in flight); 9.4 MB kept after (owner, 2026-10-20) | 20 MB |
 | Output frame and two persistent readback buffers, RGBA8 | 60 MB |
 | Histogram and clipping masks | 10 MB |
-| A prefetched neighbor's level 1 while it renders: one tile's texels and their readback buffer, 2 × 512² × 8 B = 4.2 MB for a 1024 px tile (measured 11.1 MB above the held state at the build's peak, its upload staging included) | 5 MB |
+| A prefetched neighbor's level 1 while it renders: one tile's texels and their readback buffer, 2 × 512² × 8 B = 4.2 MB for a 1024 px tile (at the build's peak, 11.1 MB above the held state: these 4.2 MB, and the staging of the tiles' uploads, which is the upload line's) | 5 MB |
 | **Total** | **699 MB**, under the 1 GB budget with 301 MB to spare |
 
 A software adapter uses the same sizes.
