@@ -26,6 +26,7 @@ pub mod develop;
 pub mod files;
 pub mod folder;
 pub mod history;
+pub mod strip;
 
 /// The contract types, re-exported for the shell and the cli.
 pub mod api {
@@ -69,6 +70,8 @@ pub enum EngineError {
     Gpu(String),
     #[error("no photo is open")]
     NoPhoto,
+    #[error("photo {0} is not in the strip")]
+    NotInStrip(u64),
     /// A delta the engine refused; the edit keeps its last valid state.
     #[error("{0}")]
     Refused(String),
@@ -99,8 +102,12 @@ pub struct Engine {
     /// Where the autobench report goes (`GENZO_AUTOBENCH`), if the app was
     /// started to benchmark itself.
     autobench: Option<PathBuf>,
-    /// Develop's photos, edits and histories.
+    /// Develop's photos, edits and histories, and the strip.
     session: Mutex<develop::Session>,
+    /// Held for a whole photo switch, so two cannot interleave.
+    switching: Mutex<()>,
+    /// What opens the strip's files.
+    decoder: Arc<dyn strip::Decode>,
 }
 
 #[derive(Debug, Default)]
@@ -182,7 +189,15 @@ impl Engine {
             frames: Mutex::new(FrameStore::default()),
             autobench: None,
             session: Mutex::default(),
+            switching: Mutex::new(()),
+            decoder: Arc::new(strip::FileDecoder),
         }
+    }
+
+    /// This engine, opening the strip's files with `decoder`.
+    pub fn with_decoder(mut self, decoder: Arc<dyn strip::Decode>) -> Self {
+        self.decoder = decoder;
+        self
     }
 
     pub fn info(&self) -> EngineInfo {
