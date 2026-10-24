@@ -23,7 +23,9 @@ pub const EXTENSIONS: &[&str] = &[
     // Camera RAW and DNG.
     "3fr", "arw", "cr2", "cr3", "crw", "dcr", "dng", "erf", "fff", "iiq", "kdc", "mef", "mos",
     "mrw", "nef", "nrw", "orf", "pef", "raf", "rw2", "rwl", "sr2", "srf", "srw", "x3f",
-    // The rest.
+    // Listed though not rendered: GoPro GPR is unsupported by name (DEV-01,
+    // Stage 0), and shows its reason.
+    "gpr", // The rest.
     "jpg", "jpeg", "heic", "heif", "hif", "tif", "tiff", "png",
 ];
 
@@ -74,6 +76,20 @@ pub fn is_photo(name: &str) -> bool {
         return false;
     };
     EXTENSIONS.contains(&ext.to_ascii_lowercase().as_str())
+}
+
+/// Whether reading `path`'s capture time needed more than its head: for
+/// the corpus test, which counts them.
+#[doc(hidden)]
+pub fn needs_whole_file(path: &Path) -> bool {
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut head = Vec::new();
+    if file.by_ref().take(HEAD).read_to_end(&mut head).is_err() {
+        return false;
+    }
+    capture_time(&head).is_none() && head.len() as u64 == HEAD
 }
 
 fn read_capture_time(path: &Path) -> Option<CaptureTime> {

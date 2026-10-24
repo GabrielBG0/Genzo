@@ -36,10 +36,13 @@ pub fn capture_time(data: &[u8]) -> Option<CaptureTime> {
         FileFormat::Png => from_tiff(crate::png_image::exif_chunk(data)?, true),
         FileFormat::Raf => {
             // The RAF header points to the embedded JPEG (offset at 84,
-            // length at 88, big-endian), whose EXIF holds the camera's.
+            // length at 88, big-endian), whose EXIF holds the camera's. Its
+            // APP1 comes first, so a file's head is enough: the JPEG is cut
+            // at what `data` holds.
             let at = u32::from_be_bytes(data.get(84..88)?.try_into().ok()?) as usize;
             let len = u32::from_be_bytes(data.get(88..92)?.try_into().ok()?) as usize;
-            let jpeg = data.get(at..at.checked_add(len)?)?;
+            let end = at.checked_add(len)?.min(data.len());
+            let jpeg = data.get(at..end)?;
             from_tiff(exif::tiff_payload(crate::jpeg_app1_exif(jpeg)?), true)
         }
         FileFormat::Heif => from_tiff(exif::tiff_payload(&crate::heic::exif(data)?), true),
