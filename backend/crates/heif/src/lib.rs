@@ -347,6 +347,12 @@ pub fn decode(data: &[u8], options: Options) -> Result<Decoded, Error> {
     })
 }
 
+/// The primary image's EXIF block (its TIFF structure), if it has one: the
+/// container's metadata only, no pixels decoded.
+pub fn exif(data: &[u8]) -> Result<Option<Vec<u8>>, Error> {
+    File::open(data, Options { threads: 1 })?.exif()
+}
+
 /// Decodes the file's embedded thumbnail, if it has one. Much faster than a
 /// full decode; used to show first pixels while the full image decodes.
 pub fn decode_thumbnail(data: &[u8]) -> Result<Option<Thumbnail>, Error> {

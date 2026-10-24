@@ -25,6 +25,7 @@ pub mod contract;
 pub mod develop;
 pub mod files;
 pub mod history;
+pub mod folder;
 
 /// The contract types, re-exported for the shell and the cli.
 pub mod api {

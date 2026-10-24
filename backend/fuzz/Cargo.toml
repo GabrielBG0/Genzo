@@ -98,6 +98,15 @@ test = false
 doc = false
 bench = false
 
+# imgio::capture::capture_time: the EXIF capture time of any format, for
+# the filmstrip's order (LIB-09). Seeds: the jpeg, tiff and preview seeds.
+[[bin]]
+name = "capture_time"
+path = "fuzz_targets/capture_time.rs"
+test = false
+doc = false
+bench = false
+
 # An embedded ICC profile into stage 4's curves and matrix
 # (genzo_color::encoding, moxcms underneath). Seeds are written by the color
 # test `write_fuzz_seeds`:
