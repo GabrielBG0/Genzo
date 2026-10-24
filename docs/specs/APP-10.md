@@ -56,7 +56,7 @@ A delta without a gesture is a start and an end in one, so it makes one step (DE
 | Undo | Ctrl Z (macOS: Cmd Z) | Quick actions (APP-03), app menu › Edit (APP-02) |
 | Redo | Ctrl Shift Z (macOS: Cmd Shift Z) | Quick actions, app menu › Edit |
 
-- Both are registered in the shortcut registry, like every command. The menu and the quick actions' tooltips show the shortcut and the label ("Undo Exposure  Ctrl Z").
+- Both are registered in the shortcut registry, like every command. The menu and the quick actions' tooltips show the label and the platform's shortcut: "Undo Exposure  Ctrl Z" on Windows and Linux, "Undo Exposure  ⌘Z" on macOS.
 - **While a text field has focus** (a slider's typed value, a search box), Ctrl Z and Ctrl Shift Z are the field's own undo and redo. The edit's history is not touched.
 
 ## States

@@ -161,7 +161,7 @@ These are open questions, not conflicts. Neither source answers them.
 | Multiple catalogs | Spec | Before M2 schema work | Catalog path handling in engine |
 | Unreadable ICC profiles: keep refusing the file, or fall back to sRGB with a note in the status bar | DEV-01 (decided unsupported for M1, 2026-10-19) | Before M1's exit gate | Unsupported hides the photo's develop controls; a fallback shows it in possibly wrong colors. Needs the corpus count of such files to weigh |
 | Ctrl K: command search or Add keywords | APP-04, MET-02 | Before M2 | Shortcut registry defaults |
-| Undo depth setting (M1 keeps every step, decided); preview cache size and location | APP-10, CAT-03 | Before M2 | Catalog settings |
+| Undo depth setting; preview cache size and location | APP-10, CAT-03 | Before M2 | Catalog settings |
 | Color label sets; editable IPTC fields in v1 | LIB-07, MET-01 | Before M2 | Catalog schema |
 | macOS: mirror the app menu in the system menu bar | APP-02 | Before M2 | macOS users expect a menu bar |
 | Focus metric method for Compare | LIB-03 | Before M2 | It is computed during preview generation |

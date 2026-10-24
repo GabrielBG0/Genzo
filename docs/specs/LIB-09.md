@@ -17,7 +17,7 @@ Sources: FEATURES.md (LIB-09), the plan's M1 items (backend item 9, the engine's
 - **File › Open folder** (APP-02) picks a folder with the system dialog. The engine lists it (`OpenFolder`) and selects the first photo.
 - **That folder only** (owner, 2026-10-24): subfolders are not read. M2's folder tree (CAT-04) covers them.
 - **Which files:** every file whose extension is one Genzo reads: the camera RAW formats, DNG, JPEG, HEIC/HEIF, TIFF and PNG. Hidden files, sidecars (XMP) and other extensions are skipped.
-  - A file in a format Genzo recognizes but cannot render (Nikon High Efficiency without the `jpeg-xs` feature, CMYK JPEG, a non-optional opcode M1 lacks) is listed. It shows its embedded preview and the reason, and its controls are disabled (DEV-01, *States*).
+  - A file in a format Genzo recognizes but cannot render (Nikon High Efficiency without the `jpeg-xs` feature, CMYK JPEG, a non-optional opcode M1 lacks) is listed. It shows its embedded preview, or the neutral cell with the file name when it has none, with the reason; its controls are disabled (DEV-01, *States*).
 - **The order:** by capture time (owner, 2026-10-24): EXIF DateTimeOriginal, with its sub-seconds when present. Ties, and files without a capture time, are ordered by file name with numbers compared as numbers (IMG_2 before IMG_10). Files without a capture time come after the dated ones.
 - Opening another folder replaces the strip. The edits of the photos in the old folder stay in the engine for the session (decided "Edit storage in M1"), so reopening that folder shows them again.
 
