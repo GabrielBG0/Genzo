@@ -211,10 +211,10 @@ fn a_neighbor_prefetches_beside_the_open_photo() {
     let before = t.develop(request(2, 1, &defaults, fit)).unwrap().unwrap();
 
     let b = photo((500, 400));
-    let (white, _) = as_shot(&b.src);
+    let white = Edit::defaults(as_shot(&b.src).1);
     let want = level1(&b);
     let got = t
-        .prefetch(2, b, white)
+        .prefetch(2, b, &white)
         .unwrap()
         .recv_timeout(WAIT)
         .unwrap()
@@ -249,8 +249,8 @@ fn prefetches_no_longer_wanted_are_cancelled() {
     t.open(1, photo((320, 240))).unwrap();
     let queue = |id, size| {
         let p = photo(size);
-        let (white, _) = as_shot(&p.src);
-        t.prefetch(id, p, white).unwrap()
+        let white = Edit::defaults(as_shot(&p.src).1);
+        t.prefetch(id, p, &white).unwrap()
     };
     let two = queue(2, (2400, 1600));
     let three = queue(3, (640, 480));
@@ -281,15 +281,18 @@ fn queued_prefetches_build_one_after_another() {
     warm.white_balance.temp = 4300.0;
     t.open(1, a).unwrap();
     let (b, c) = (photo((1200, 900)), photo((1100, 800)));
-    let (wb, wc) = (as_shot(&b.src).0, as_shot(&c.src).0);
+    let (wb, wc) = (
+        Edit::defaults(as_shot(&b.src).1),
+        Edit::defaults(as_shot(&c.src).1),
+    );
     // Queued while the thread rebuilds the open photo's pyramid, so it
     // takes them in one go; then nothing more is asked. Each build follows
     // the last without waiting for a request.
     let render = t
         .submit(request(1, 1, &warm, ViewSpec::Fit((160, 120))))
         .unwrap();
-    let two = t.prefetch(2, b, wb).unwrap();
-    let three = t.prefetch(3, c, wc).unwrap();
+    let two = t.prefetch(2, b, &wb).unwrap();
+    let three = t.prefetch(3, c, &wc).unwrap();
     t.keep_prefetching(&[2, 3]).unwrap();
     assert!(render.recv_timeout(WAIT).unwrap().unwrap().is_some());
     for (rx, id) in [(two, 2), (three, 3)] {
@@ -304,11 +307,11 @@ fn a_switch_to_a_neighbor_being_built_opens_its_input() {
     let Some(t) = thread() else { return };
     let size = (1600, 1200);
     let p = photo(size);
-    let (white, kind) = as_shot(&p.src);
+    let (_, kind) = as_shot(&p.src);
     let defaults = Edit::defaults(kind);
     let fit = ViewSpec::Fit((240, 180));
     t.open(1, photo((320, 240))).unwrap();
-    let pending = t.prefetch(2, p, white).unwrap();
+    let pending = t.prefetch(2, p, &defaults).unwrap();
     assert!(!t.open_prefetching(9).unwrap(), "nothing queued for 9");
     assert!(t.open_prefetching(2).unwrap());
     assert_eq!(
@@ -335,8 +338,7 @@ fn a_render_does_not_wait_for_a_prefetch() {
     let defaults = Edit::defaults(kind);
     t.open(1, a).unwrap();
     let p = photo((4000, 3000));
-    let (white, _) = as_shot(&p.src);
-    let pending = t.prefetch(2, p, white).unwrap();
+    let pending = t.prefetch(2, p, &defaults).unwrap();
     // The build stops between tiles for the render, and resumes after it.
     let f = t.develop(request(1, 1, &defaults, ViewSpec::Fit((160, 120))));
     assert!(f.unwrap().is_some());
@@ -345,4 +347,63 @@ fn a_render_does_not_wait_for_a_prefetch() {
         "the render waited for the whole build"
     );
     assert!(pending.recv_timeout(WAIT).unwrap().unwrap().is_some());
+}
+
+#[test]
+fn a_neighbor_prefetched_with_its_custom_white_needs_no_rebuild() {
+    let _lock = ONE_DEVICE.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(t) = thread() else { return };
+    let size = (640, 480);
+    let p = photo(size);
+    let (_, kind) = as_shot(&p.src);
+    let mut warm = Edit::defaults(kind);
+    warm.white_balance.mode = WhiteBalanceMode::Custom;
+    warm.white_balance.temp = 4300.0;
+    warm.white_balance.tint = 6.0;
+    let got = t
+        .prefetch(2, p, &warm)
+        .unwrap()
+        .recv_timeout(WAIT)
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    // Opened before its input comes, a settled render of that edit is the
+    // pyramid's own white: it neither waits for the input nor rebuilds.
+    t.open_level1(2, got.info, Arc::new(got.level1)).unwrap();
+    let fit = ViewSpec::Fit((240, 180));
+    let f = t
+        .submit(request(1, 2, &warm, fit))
+        .unwrap()
+        .recv_timeout(WAIT)
+        .expect("not held for the input")
+        .unwrap()
+        .unwrap();
+    assert!(!f.reran.pyramid, "{f:?}");
+    t.open(3, photo(size)).unwrap();
+    let g = t.develop(request(2, 3, &warm, fit)).unwrap().unwrap();
+    assert!(
+        frame_of(&f) == frame_of(&g),
+        "as the photo opened from its input"
+    );
+}
+
+#[test]
+fn dropping_the_thread_stops_its_prefetches() {
+    let _lock = ONE_DEVICE.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(t) = thread() else { return };
+    let (a, b) = (photo((4000, 3000)), photo((3600, 2800)));
+    let white = Edit::defaults(as_shot(&a.src).1);
+    let pending = [
+        t.prefetch(2, a, &white).unwrap(),
+        t.prefetch(3, b, &white).unwrap(),
+    ];
+    // Closing the channel stops a build between tiles: the queued builds
+    // are dropped unanswered, not run to their end.
+    drop(t);
+    for rx in pending {
+        assert!(
+            rx.recv().is_err(),
+            "a build ran on after the thread was dropped"
+        );
+    }
 }

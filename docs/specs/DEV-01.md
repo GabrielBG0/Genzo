@@ -431,7 +431,9 @@ A software adapter uses the same sizes.
 - **On a switch,** the current pyramid is freed, the neighbor's level 1 is uploaded in bands of 8 MiB, and levels 2 and up are computed on the GPU (`RawStages::upload_pyramid`). The pyramid then equals a render's bit for bit, and the photo renders at Fit without decoding. That GPU part takes 22.5 ms at 48 MP on the RTX 3060, against the 150 ms of the whole switch; a neighbor's build takes 124 ms in the background.
 - **The decoded input** is kept for the current photo only. It is what 1:1 and a settled white balance need, and for a neighbor it is decoded in the background after the switch.
 - **On the render thread** (`RenderThread::prefetch`):
-  - Neighbors' level 1 build one at a time, in the order the engine queued them.
+  - Neighbors' level 1 build one at a time, in the order the engine queued them, each with its edit's white balance. `PhotoInfo::white` computes it, the same transform Develop holds the pyramid to, so a switch to a neighbor with a custom white needs no rebuild.
+  - Each queued build holds its photo's decoded input until it is answered, so the engine queues one neighbor at a time.
+  - Dropping the render thread stops a build between tiles.
   - A build runs only while no request waits, and after the rest of the current photo's white balance rebuild. It stops between tiles for any request and resumes after it.
   - `keep_prefetching` cancels the builds of photos that are no longer neighbors, between tiles.
   - A switch to a neighbor still queued or being built opens it from the input its build holds (`open_prefetching`), so it is not decoded again.

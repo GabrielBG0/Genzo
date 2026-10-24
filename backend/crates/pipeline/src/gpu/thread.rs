@@ -17,7 +17,7 @@
 //! photo's input until it is done or cancelled.
 
 use std::sync::Arc;
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
 use std::thread::JoinHandle;
 
 use std::collections::VecDeque;
@@ -227,14 +227,11 @@ impl RenderThread {
         rx.recv().map_err(|_| GpuError::ThreadGone)?
     }
 
-    /// Queues photo `id`'s level 1 with `transform` (its edit's white
-    /// balance), without waiting. Builds run in the order they were queued.
-    pub fn prefetch(
-        &self,
-        id: u64,
-        photo: Photo,
-        transform: CameraTransform,
-    ) -> Result<PendingLevel1, GpuError> {
+    /// Queues photo `id`'s level 1 with `edit`'s white balance
+    /// ([`PhotoInfo::white`]), without waiting. Builds run in the order
+    /// they were queued, and each holds its photo until it is answered.
+    pub fn prefetch(&self, id: u64, photo: Photo, edit: &Edit) -> Result<PendingLevel1, GpuError> {
+        let transform = PhotoInfo::of(&photo).white(edit);
         let (reply, rx) = mpsc::channel();
         self.send(Request::Prefetch(Box::new(Queued {
             id,
@@ -339,7 +336,7 @@ fn run(gpu: Gpu, rx: Receiver<Request>) {
                         queued.push_back(r);
                         true
                     }
-                    Err(_) => false,
+                    Err(e) => e == TryRecvError::Disconnected,
                 })
                 .map_err(develop_error)
             });
@@ -360,10 +357,11 @@ fn run(gpu: Gpu, rx: Receiver<Request>) {
                         queued.push_back(r);
                         true
                     }
-                    Err(_) => false,
+                    Err(e) => e == TryRecvError::Disconnected,
                 })
             });
-            if !matches!(built, Ok(false)) {
+            let stopped = matches!(built, Ok(false));
+            if !stopped {
                 let Queued {
                     id,
                     photo,
@@ -382,7 +380,9 @@ fn run(gpu: Gpu, rx: Receiver<Request>) {
                 });
                 let _ = reply.send(answer);
             }
-            if queued.is_empty() {
+            // Stopped with nothing queued, the channel is closed: the
+            // receive below ends the thread.
+            if !stopped && queued.is_empty() {
                 continue;
             }
         }

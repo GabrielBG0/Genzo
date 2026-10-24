@@ -100,6 +100,24 @@ impl PhotoInfo {
             encoding: photo.src.encoding.clone(),
         }
     }
+
+    /// The transform stages 2 and 4 use for `edit`'s white balance: what
+    /// [`Develop::render`] holds the pyramid to, so a level 1 built with it
+    /// needs no rebuild once opened.
+    pub fn white(&self, edit: &Edit) -> CameraTransform {
+        let wb = &edit.white_balance;
+        if wb.mode == WhiteBalanceMode::AsShot {
+            return as_shot_of(&self.color, self.encoding.as_ref()).0;
+        }
+        let (temp, tint) = (f64::from(wb.temp), f64::from(wb.tint));
+        match &self.encoding {
+            Some(e) => balanced_encoded_transform(e, temp, tint),
+            None => camera_transform(
+                &self.color,
+                Some(genzo_color::camera::xy_from_temperature(temp, tint)),
+            ),
+        }
+    }
 }
 
 /// What the last [`Develop::render`] ran, earliest first.
@@ -332,18 +350,10 @@ impl Develop {
 
     /// The transform stages 2 and 4 use for `edit`'s white balance.
     fn transform(p: &Loaded, edit: &Edit) -> CameraTransform {
-        let wb = &edit.white_balance;
-        if wb.mode == WhiteBalanceMode::AsShot {
+        if edit.white_balance.mode == WhiteBalanceMode::AsShot {
             return p.as_shot.clone();
         }
-        let (temp, tint) = (f64::from(wb.temp), f64::from(wb.tint));
-        match &p.info.encoding {
-            Some(e) => balanced_encoded_transform(e, temp, tint),
-            None => camera_transform(
-                &p.info.color,
-                Some(genzo_color::camera::xy_from_temperature(temp, tint)),
-            ),
-        }
+        p.info.white(edit)
     }
 
     /// Renders `edit` (clamped, `Edit::clamped`) in `view` for `target`,
