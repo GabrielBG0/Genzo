@@ -391,26 +391,48 @@ impl ViewStages {
         frame: impl Into<Frame>,
         view: ViewSpec,
     ) -> Result<Sampling, GpuError> {
+        self.show_with(gpu, stages, cache, Some(src), src.size(), key, frame, view)
+    }
+
+    /// [`Self::show`] of an image of `size` whose input `src` may not be
+    /// decoded yet (DEV-01, *Prefetched neighbors*): without it, level 1
+    /// is upsampled where level 0 would have been read.
+    #[allow(clippy::too_many_arguments)]
+    pub fn show_with(
+        &mut self,
+        gpu: &Gpu,
+        stages: &mut RawStages,
+        cache: &mut Level0Cache,
+        src: Option<&RawSource>,
+        size: (u32, u32),
+        key: u64,
+        frame: impl Into<Frame>,
+        view: ViewSpec,
+    ) -> Result<Sampling, GpuError> {
         let frame = frame.into();
         let pyramid = stages.pyramid().expect("render_pyramid first");
         let transform = pyramid.transform.clone();
         let levels = pyramid.level_sizes();
         let mut planner: fn(_, &_, Frame, _) -> Sampling = plan_view;
-        let mut s = planner(src.size(), &levels, frame, view);
+        let mut s = planner(size, &levels, frame, view);
         let out = view.out();
         if s.level == 0 {
-            let tiles = Level0Cache::tiles_for(s.source_rect(out), src.size());
-            match cache.ensure(gpu, stages, src, &transform, key, &tiles) {
-                Ok(()) => {}
-                Err(Level0Error::Full { .. }) => {
-                    planner = plan_view_without_level0;
-                    s = planner(src.size(), &levels, frame, view);
-                }
-                Err(Level0Error::Gpu(e)) => return Err(e),
+            let tiles = Level0Cache::tiles_for(s.source_rect(out), size);
+            let held = match src {
+                None => false,
+                Some(src) => match cache.ensure(gpu, stages, src, &transform, key, &tiles) {
+                    Ok(()) => true,
+                    Err(Level0Error::Full { .. }) => false,
+                    Err(Level0Error::Gpu(e)) => return Err(e),
+                },
+            };
+            if !held {
+                planner = plan_view_without_level0;
+                s = planner(size, &levels, frame, view);
             }
         }
         let (anchored, offset) = view.anchored();
-        let a = planner(src.size(), &levels, frame, anchored);
+        let a = planner(size, &levels, frame, anchored);
         debug_assert_eq!(a.level, s.level, "the level depends on the zoom only");
         let pyramid = stages.pyramid().expect("built");
         let level0 = (s.level == 0).then_some(&*cache);

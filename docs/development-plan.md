@@ -150,6 +150,7 @@ Parked decisions that have been settled, with the date and what follows from eac
 | Undo depth in M1 | Unlimited for the session; every step is kept until the app closes | 2026-10-24 | A step is a whole edit, a few hundred bytes. The depth setting stays parked for M2 (catalog settings). APP-10 |
 | Open folder in M1 | The chosen folder only, no subfolders; the strip in capture-time order (DateTimeOriginal with sub-seconds), ties and undated files by natural file name, undated after dated | 2026-10-24 | Subfolders come with CAT-04 in M2. LIB-09 |
 | What a prefetched neighbor keeps | Its level 1 only, rendered tile by tile and read back beside the current pyramid; on a switch the old pyramid is freed, level 1 uploaded and levels 2 and up computed on the GPU | 2026-10-24 | No second pyramid on the GPU, so the 1 GB budget holds; 98 MB of CPU memory per 48 MP neighbor. DEV-01 |
+| A switch whose view wants level 0 | Level 1 upsampled at once, marked provisional; rendered again from level 0 when the decoded input comes | 2026-10-24 | A Fit view larger than level 1 (12 MP on a 4K screen), a tight crop or 1:1 keeps the 150 ms switch, and sharpens a moment later. DEV-01, Prefetched neighbors |
 | Prefetch order | The direction of travel: after moving right, next, next + 1, previous, previous − 1; the mirror after moving left; on opening a folder, as after moving right | 2026-10-24 | A switch cancels prefetch for photos no longer neighbors. LIB-09 |
 
 ## Parked decisions, with a deadline

@@ -15,14 +15,22 @@
 //! - **A non-RAW photo** (its white balance a relative shift, Embedded, no
 //!   dither while unedited) follows the same rules.
 //! - **During a gesture at Fit** the frame is the half-size preview.
+//! - **Opened from a prefetched level 1** (DEV-01, *Prefetched
+//!   neighbors*): without its input, a Fit view that level 1 covers, a
+//!   tone change and a white balance drag equal a fresh render's frames,
+//!   bit for bit, and no pyramid is rendered. A settled new white waits for
+//!   the input; a view that wants level 0 is provisional until it comes,
+//!   then equals a fresh render.
 
 use std::sync::{Mutex, MutexGuard};
 
 use genzo_color::encoding::InputEncoding;
 use genzo_color::output::Target;
 use genzo_model::edit::{Edit, Profile, Treatment, WhiteBalanceMode};
-use genzo_pipeline::gpu::develop::{Develop, Phase, Photo, Reran};
-use genzo_pipeline::gpu::raw_stages::TileConfig;
+use genzo_pipeline::gpu::develop::{
+    Develop, DevelopError, Phase, Photo, PhotoInfo, Reran, as_shot,
+};
+use genzo_pipeline::gpu::raw_stages::{Level1, RawStages, TileConfig};
 use genzo_pipeline::gpu::synthetic::{scene_raw, with_camera_profile};
 use genzo_pipeline::gpu::{AdapterChoice, Gpu, GpuError};
 use genzo_pipeline::raw::RawSource;
@@ -448,4 +456,128 @@ fn a_non_raw_photo_follows_the_same_rules() {
         .render(&gpu, &same, FIT, Target::Srgb, Phase::End)
         .unwrap();
     assert!(!r.output, "{r:?}");
+}
+
+/// A Fit view that level 1 of the turned 1030 x 777 photo covers.
+const SMALL_FIT: ViewSpec = ViewSpec::Fit((300, 220));
+
+/// `photo()`'s level 1 with its as-shot white, as prefetch builds it.
+fn level1(gpu: &Gpu) -> Level1 {
+    let p = photo();
+    let (t, _) = as_shot(&p.src);
+    let mut stages = RawStages::new(gpu, TILES);
+    let mut b = stages.start_level1(gpu, &p.src, &t);
+    assert!(
+        stages
+            .continue_level1(gpu, &p.src, &mut b, || false)
+            .unwrap()
+    );
+    b.finish()
+}
+
+/// A `Develop` that opened `photo()` from its level 1, without its input.
+fn from_level1(gpu: &Gpu) -> (Develop, Edit) {
+    let mut d = Develop::new(gpu, TILES);
+    d.open_level1(gpu, PhotoInfo::of(&photo()), &level1(gpu))
+        .unwrap();
+    let defaults = Edit::defaults(d.kind().unwrap());
+    (d, defaults)
+}
+
+#[test]
+fn a_photo_opened_from_its_level1_renders_as_a_fresh_one() {
+    let Some((_lock, gpu)) = gpu() else { return };
+    let (mut d, defaults) = from_level1(&gpu);
+    assert!(!d.decoded());
+    let r = d
+        .render(&gpu, &defaults, SMALL_FIT, Target::Srgb, Phase::End)
+        .unwrap();
+    assert!(!r.pyramid && r.sample, "{r:?}");
+    assert!(!d.provisional());
+    same(&gpu, &d, &defaults, SMALL_FIT, "the defaults from level 1");
+
+    let a = toned(defaults.clone());
+    d.render(&gpu, &a, SMALL_FIT, Target::Srgb, Phase::End)
+        .unwrap();
+    same(&gpu, &d, &a, SMALL_FIT, "a tone change from level 1");
+
+    // A white balance drag is a ratio on the pyramid: no input needed.
+    let b = warmer(a.clone(), 4200.0);
+    let r = d
+        .render(&gpu, &b, SMALL_FIT, Target::Srgb, Phase::Update)
+        .unwrap();
+    assert!(!r.pyramid, "{r:?}");
+    let (mut e, _) = opened(&gpu);
+    e.render(&gpu, &a, SMALL_FIT, Target::Srgb, Phase::End)
+        .unwrap();
+    e.render(&gpu, &b, SMALL_FIT, Target::Srgb, Phase::Update)
+        .unwrap();
+    assert_eq!(frame(&gpu, &d), frame(&gpu, &e), "a drag from level 1");
+
+    // Its release rebuilds the pyramid, which needs the input.
+    let err = d
+        .render(&gpu, &b, SMALL_FIT, Target::Srgb, Phase::End)
+        .unwrap_err();
+    assert!(matches!(err, DevelopError::NeedsSource), "{err:?}");
+    let other = with_camera_profile(scene_raw(800, 600));
+    let err = d.attach(other).unwrap_err();
+    assert!(matches!(err, DevelopError::NotItsInput { .. }), "{err:?}");
+    assert!(!d.decoded());
+    d.attach(photo().src).unwrap();
+    assert!(d.decoded());
+    let r = d
+        .render(&gpu, &b, SMALL_FIT, Target::Srgb, Phase::End)
+        .unwrap();
+    assert!(r.pyramid, "{r:?}");
+    same(&gpu, &d, &b, SMALL_FIT, "the release once the input came");
+}
+
+#[test]
+fn a_view_that_wants_level0_is_provisional_until_the_input_comes() {
+    let Some((_lock, gpu)) = gpu() else { return };
+    let (mut d, defaults) = from_level1(&gpu);
+    let a = toned(defaults.clone());
+    for view in [FIT, ONE_TO_ONE] {
+        d.render(&gpu, &a, view, Target::Srgb, Phase::End).unwrap();
+        assert!(d.provisional(), "{view:?}");
+        assert_ne!(
+            frame(&gpu, &d),
+            fresh(&gpu, &a, view),
+            "{view:?}: level 1 upsampled, not level 0"
+        );
+    }
+    // The same request again once the input came: drawn from level 0.
+    d.attach(photo().src).unwrap();
+    let r = d
+        .render(&gpu, &a, ONE_TO_ONE, Target::Srgb, Phase::End)
+        .unwrap();
+    assert!(r.sample && !r.pyramid, "{r:?}");
+    assert!(!d.provisional());
+    same(&gpu, &d, &a, ONE_TO_ONE, "1:1 once the input came");
+    d.render(&gpu, &a, FIT, Target::Srgb, Phase::End).unwrap();
+    same(&gpu, &d, &a, FIT, "Fit once the input came");
+}
+
+#[test]
+fn a_level1_opened_over_a_photo_drops_its_state() {
+    let Some((_lock, gpu)) = gpu() else { return };
+    let (mut d, defaults) = opened(&gpu);
+    // The held photo leaves a rebuild waiting, a base layer and a frame.
+    let a = warmer(cropped(toned(defaults.clone())), 3900.0);
+    d.render(&gpu, &a, FIT, Target::Srgb, Phase::End).unwrap();
+    assert!(d.rebuilding());
+    d.open_level1(&gpu, PhotoInfo::of(&photo()), &level1(&gpu))
+        .unwrap();
+    assert!(!d.rebuilding() && !d.decoded());
+    let r = d
+        .render(&gpu, &defaults, SMALL_FIT, Target::Srgb, Phase::End)
+        .unwrap();
+    assert!(r.base_layer && r.sample && !r.pyramid, "{r:?}");
+    same(
+        &gpu,
+        &d,
+        &defaults,
+        SMALL_FIT,
+        "a level 1 over a held photo",
+    );
 }
