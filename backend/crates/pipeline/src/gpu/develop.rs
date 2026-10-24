@@ -37,20 +37,8 @@ use crate::raw::RawSource;
 use crate::reference::base::working_size;
 use crate::reference::sampling::{Frame, ViewSpec, plan_view, plan_view_without_level0};
 
-/// Where a gesture is (DEV-01, *Inputs*): between *start* and *end* renders
-/// are interactive. A delta without a gesture is an *end*.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Phase {
-    Start,
-    Update,
-    End,
-}
-
-impl Phase {
-    fn interactive(self) -> bool {
-        self != Phase::End
-    }
-}
+/// The gesture phase is the contract's (`model::edit::Phase`).
+pub use genzo_model::edit::Phase;
 
 #[derive(Debug, thiserror::Error)]
 pub enum DevelopError {

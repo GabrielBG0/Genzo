@@ -112,6 +112,23 @@ pub const EXPOSURE: (f32, f32) = (-5.0, 5.0);
 /// The straighten angle's range, in degrees.
 pub const ANGLE: (f32, f32) = (-45.0, 45.0);
 
+/// Where a gesture is (DEV-01, *Inputs*): between *start* and *end* renders
+/// are interactive, and the *end* records one history step (APP-10). A
+/// delta without a gesture is an *end*.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Phase {
+    Start,
+    Update,
+    End,
+}
+
+impl Phase {
+    /// Whether the render is interactive.
+    pub fn interactive(self) -> bool {
+        self != Phase::End
+    }
+}
+
 /// Why an edit did not load.
 #[derive(Debug)]
 pub enum EditError {
