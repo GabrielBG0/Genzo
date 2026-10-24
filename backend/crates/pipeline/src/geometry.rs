@@ -4,6 +4,8 @@
 //! sampler composes it into its one affine (`reference::sampling::Frame`).
 //! It changes no pixel values.
 
+use genzo_model::edit::Edit;
+
 use crate::reference::sampling::{orientation, shown};
 
 /// The crop on the oriented image (normalized, 0 to 1 on each axis): its
@@ -66,6 +68,25 @@ pub struct Geometry {
     pub quarter_turns: u8,
     pub flip_horizontal: bool,
     pub crop: Crop,
+}
+
+impl From<&Edit> for Geometry {
+    /// The edit's geometry as stored. The engine fits the crop to the image
+    /// ([`fit`]) before it renders.
+    fn from(e: &Edit) -> Self {
+        let c = &e.crop;
+        Self {
+            quarter_turns: e.quarter_turns % 4,
+            flip_horizontal: e.flip_horizontal,
+            crop: Crop {
+                cx: f64::from(c.cx),
+                cy: f64::from(c.cy),
+                w: f64::from(c.w),
+                h: f64::from(c.h),
+                angle: f64::from(c.angle),
+            },
+        }
+    }
 }
 
 impl Default for Geometry {
@@ -215,6 +236,23 @@ pub fn fit(crop: Crop, level0: (u32, u32), o: u8) -> Option<Crop> {
 mod tests {
     use super::*;
     use crate::reference::sampling::orientation;
+
+    #[test]
+    fn the_geometry_is_the_edits() {
+        let mut e = Edit::defaults(genzo_model::edit::PhotoKind::NonRaw);
+        assert_eq!(Geometry::from(&e), Geometry::default());
+        e.quarter_turns = 3;
+        e.flip_horizontal = true;
+        e.crop.cx = 0.25;
+        e.crop.w = 0.375;
+        e.crop.angle = -7.5;
+        let g = Geometry::from(&e);
+        assert_eq!((g.quarter_turns, g.flip_horizontal), (3, true));
+        assert_eq!(
+            (g.crop.cx, g.crop.cy, g.crop.w, g.crop.h, g.crop.angle),
+            (0.25, 0.5, 0.375, 1.0, -7.5)
+        );
+    }
 
     /// Where a crop's corners land in the stored image, normalized, as a
     /// sorted set (a turn or flip changes which corner is which).

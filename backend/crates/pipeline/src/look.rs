@@ -1,11 +1,11 @@
 //! The settings of stages 6 and 7 (DEV-01; the Basic panel, DEV-02) and the
-//! per-photo base curve they apply. Until the contract's edit struct exists
-//! (contract 0.5.0), the engine fills these from its own edit.
+//! per-photo base curve they apply, taken from the edit (`model::edit`).
 
 use genzo_color::tone::{
     CurveError, CurveInputs, CurveTable, ExposureRamp, choose_curve, total_baseline_exposure,
 };
 use genzo_imgio::raw::CameraColor;
+use genzo_model::edit::{self, Edit, Treatment};
 
 /// The camera profile (DEV-01, *Data*).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -71,6 +71,35 @@ impl Look {
     }
 }
 
+impl From<edit::Profile> for Profile {
+    fn from(p: edit::Profile) -> Self {
+        match p {
+            edit::Profile::GenzoStandard => Self::GenzoStandard,
+            edit::Profile::GenzoLinear => Self::GenzoLinear,
+            edit::Profile::Embedded => Self::Embedded,
+        }
+    }
+}
+
+impl From<&Edit> for Look {
+    /// The edit's stage 6 and 7 settings; its white balance and geometry
+    /// go elsewhere (stages 2 and 4, `Geometry`).
+    fn from(e: &Edit) -> Self {
+        Self {
+            profile: e.profile.into(),
+            monochrome: e.treatment == Treatment::Monochrome,
+            exposure: e.exposure,
+            contrast: e.contrast,
+            highlights: e.highlights,
+            shadows: e.shadows,
+            whites: e.whites,
+            blacks: e.blacks,
+            vibrance: e.vibrance,
+            saturation: e.saturation,
+        }
+    }
+}
+
 /// The base curve of one photo (DEV-02): its curve table and what the ramp's
 /// black needs. The table depends only on the file, so it is built once.
 #[derive(Debug, Clone, PartialEq)]
@@ -124,6 +153,40 @@ mod tests {
     use genzo_color::tone::{CurveTable, ToneCurve};
 
     use super::*;
+
+    #[test]
+    fn the_look_is_the_edits() {
+        let mut e = Edit::defaults(edit::PhotoKind::NonRaw);
+        assert_eq!(Look::from(&e), Look::with_profile(Profile::Embedded));
+        e.profile = edit::Profile::GenzoLinear;
+        e.treatment = Treatment::Monochrome;
+        let values = [0.5, 10.0, -20.0, 30.0, -40.0, 50.0, -60.0, 70.0];
+        [
+            e.exposure,
+            e.contrast,
+            e.highlights,
+            e.shadows,
+            e.whites,
+            e.blacks,
+            e.vibrance,
+            e.saturation,
+        ] = values;
+        let l = Look::from(&e);
+        assert_eq!((l.profile, l.monochrome), (Profile::GenzoLinear, true));
+        assert_eq!(
+            [
+                l.exposure,
+                l.contrast,
+                l.highlights,
+                l.shadows,
+                l.whites,
+                l.blacks,
+                l.vibrance,
+                l.saturation,
+            ],
+            values
+        );
+    }
 
     #[test]
     fn the_base_curve_follows_the_file() {

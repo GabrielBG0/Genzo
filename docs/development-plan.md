@@ -327,7 +327,7 @@ These come from `docs/m0-results.md` and decide how the steps below are built:
    - Vibrance, saturation.
    - Crop, angle, 90° rotation and flip.
 
-   Edits and their history live in memory for the session (decided). The struct is already the format the M2 catalog stores.
+   Edits and their history live in memory for the session (decided). The struct is already the format the M2 catalog stores. It is `model::edit`, with its load rules in DEV-01, Data: clamped, and a newer schema refused. Contract 0.5.0 exports it to TypeScript.
 2. `imgio`: one normalized decode output (pixel buffer, Bayer, X-Trans or linear, levels, matrices, orientation, embedded preview, opcode list). The pipeline never sees a file format.
    - **ProRAW and other linear DNG:** wire `dng::decode_linear` into `imgio::decode`. Carry AsShotNeutral, AnalogBalance and BaselineExposure; stages 2 and 4 apply them, the decoder never does (DEV-01). Read and keep the gain table map, but do not apply it (decided).
    - **Camera RAW and CFA DNG** through rawler, Bayer and X-Trans. Levels as arrays.
@@ -345,7 +345,7 @@ These come from `docs/m0-results.md` and decide how the steps below are built:
    - The Markesteijn port gets a literal CPU port of darktable's code as its reference, as RCD did in M0.
 5. `pipeline`, the rest of the M1 stages:
    - The core of stages 6 and 7 (exposure, tone, vibrance, saturation), the B&W treatment, crop and rotate, and the output transform.
-   - Re-runs start at the changed stage. Interactive and settled quality levels.
+   - Re-runs start at the changed stage. Interactive and settled quality levels. `gpu::develop::Develop` runs both for one photo (DEV-01, Re-runs); the engine session drives it from step 9.
    - White balance applied after the cached demosaic while dragging; the settled render re-demosaics.
    - Generation numbers, latest-wins coalescing and cancellation.
 6. `pipeline`, what reaches the viewport:

@@ -6,6 +6,7 @@
 //! unsafe code) is needed.
 
 pub mod base;
+pub mod develop;
 pub mod level0;
 pub mod raw_stages;
 pub mod readback;

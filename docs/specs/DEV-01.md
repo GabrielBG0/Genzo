@@ -464,6 +464,15 @@ A software adapter uses the same sizes.
       - The reach is exactly what the texels read, checked per texel at odd sizes.
       - The rebuild leaves no allocation behind.
   - The frame is lossless: the full frame at Fit, the visible tiles at 1:1.
+- **One photo's GPU state** (`gpu::develop::Develop`) takes the whole edit, the view, the target and the gesture phase, and runs this table. Each render reports what it ran (`Reran`), and `tests/develop.rs` holds each row of the table to it.
+  - A stage that turns back into the identity is skipped. The stage before it re-runs so that it becomes the latest cache: stage 6 when stage 7 goes, the sampling when stage 6 goes.
+  - **A rebuild's rest runs between requests** (`Develop::continue_rebuild`) and stops between tiles. Until it finishes, the pyramid holds both whites, and its transform names only the new one. A render that changes the view or the geometry could read past the first part, so it finishes the rest first. A tone or color change reads the same texels, and a white balance drag with the same view reads them too, so neither waits. A newer settled white starts a new rebuild in place of the pending one. A white balance drag during a stopped rest gives the same frame as after the rest, bit for bit, at Fit and at 1:1 (`tests/develop.rs`).
+  - **Known cost:** a crop or view change right after a white balance release finishes the whole rest before its first frame. At 48 MP on the RTX 3060 that is about 22 ms (31.1 − 8.7). The follow-up is to render only the tiles the new reach needs, since `rebuild_first` already works from a reach.
+  - **A failed render** (out of GPU memory, DEV-01 *States*) keeps the photo's input. The next render makes the pyramid again. No test covers this path, because a GPU error cannot be forced.
+  - The base layer follows the white and the geometry when a gesture ends. During a crop or white balance drag it keeps its last ones.
+  - The level-0 tiles get a new cache key with every new white.
+  - Settled frames after mixed sequences of changes and gestures equal a fresh render of the final edit, bit for bit. Mutation checks confirm the test catches a rest not finished before a new crop, and a stage turning back into the identity.
+  - **Not in `Develop` yet:** the software adapter's 1280 px interactive proxy, and the JPEG encoding of the preview and the tiles, which are engine work.
 - **Generations.** Every request carries a generation number, and requests coalesce latest-wins. A stale frame is dropped, and work in flight for an older generation is cancelled between tiles.
 - **Readback** copies only what is sent: at 1:1, the visible 256 px tiles of the shown image, clipped to the view and the image; at Fit, the whole frame (`gpu::readback`).
   - **Staging:** two buffers made with the frame and kept for as long as its size, each holding the whole frame with its rows padded to 256 bytes. wgpu cannot copy into a mapped buffer, so "kept mapped across frames" is not possible as written: a buffer is mapped for the read and unmapped before the next copy into it. Each tile is one texture-to-buffer copy (the frame is an R32Uint texture of packed RGBA8), starting at a multiple of 512 bytes: D3D12 without unrestricted copy pitches (the windows-2022 runner's WARP) needs that, and wgpu otherwise copies through an intermediate buffer of its own, 17.6 MB more for a 2560 × 1920 view's tiles. The tiles go into the first buffer and spill into the second; more than both hold takes another round.
@@ -499,7 +508,14 @@ DEV-01 has no shortcuts of its own; DEV-02 and DEV-12 own the controls. Its inpu
 ### The edit struct
 
 The edit struct is defined in `model` and versioned with serde, starting at `schema_version: 1`.
-- Unknown fields are kept on load and written back.
+- Unknown fields are kept on load and written back, at every level of the struct (`model::edit`).
+- **An edit of a newer schema version is refused** (owner, 2026-10-24), because its known fields may mean something else there. A missing field or a field of the wrong type is refused too.
+- **On load and on every delta, values are clamped** to their ranges:
+  - NaN becomes the field's default.
+  - A profile the photo cannot use becomes its default.
+  - Quarter turns wrap to 0 to 3 (owner, 2026-10-24): 6 is 2.
+  - The crop's center and size stay within 0 to 1 and the angle within ±45°. Whether the crop fits the image is the engine's check (`geometry::fit`, Crop).
+- Every f32 survives the JSON round trip bit for bit.
 - An edit equal to the defaults is unedited. The filmstrip's edited dot and the panel dots compare against the defaults.
 - In M1, edits live in the engine's memory for the session (decided); the M2 catalog stores this same struct.
 
