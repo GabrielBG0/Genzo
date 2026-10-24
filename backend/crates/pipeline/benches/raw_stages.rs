@@ -157,5 +157,41 @@ fn rebuild(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, stages, pyramid, rebuild);
+/// A prefetched neighbor at 48 MP (DEV-01, Prefetched neighbors): its
+/// level 1 rendered tile by tile and read back beside the held pyramid,
+/// and the switch's GPU part, that level 1 uploaded and levels 2 and up
+/// computed. The switch is held to 150 ms with its Fit render (plan,
+/// performance budgets). Measured on the RTX 3060 (2026-10-24): 124 ms
+/// for the level 1, 22.5 ms for the switch.
+fn prefetch(c: &mut Criterion) {
+    let Ok(gpu) = Gpu::open(AdapterChoice::from_env()) else {
+        eprintln!("skipped: no GPU adapter");
+        return;
+    };
+    let src = scene_raw(8064, 6048);
+    let mut t = camera_transform(&src.color, None);
+    t.multipliers = [2.0, 1.0, 1.5];
+    let mut stages = RawStages::new(&gpu, TileConfig::default());
+    stages.render_pyramid(&gpu, &src, &t).unwrap();
+    let mut build = || {
+        let mut b = stages.start_level1(&gpu, &src, &t);
+        assert!(
+            stages
+                .continue_level1(&gpu, &src, &mut b, || false)
+                .unwrap()
+        );
+        b.finish()
+    };
+    let level1 = build();
+    let mut group = c.benchmark_group(format!("prefetch 48MP on {}", gpu.info.name));
+    group.sample_size(10);
+    group.bench_function("neighbor's level 1, read back", |b| b.iter(&mut build));
+    group.bench_function("switch: level 1 uploaded, levels 2 and up", |b| {
+        b.iter(|| {
+            stages.upload_pyramid(&gpu, &level1).unwrap();
+        })
+    });
+    group.finish();
+}
+criterion_group!(benches, stages, pyramid, rebuild, prefetch);
 criterion_main!(benches);

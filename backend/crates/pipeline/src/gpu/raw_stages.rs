@@ -121,7 +121,7 @@ struct TileUniforms {
 }
 
 #[repr(C)]
-#[derive(Clone, Copy, Pod, Zeroable)]
+#[derive(Debug, Clone, Copy, Pod, Zeroable)]
 struct XImageUniforms {
     hex: [[i32; 4]; 36],
     sgreen: [i32; 4],
@@ -252,6 +252,10 @@ struct Stage4Uniforms {
 /// tile; DEV-01's upload line counts two).
 const IN_FLIGHT: usize = 2;
 
+/// The most bytes of level 1 [`RawStages::upload_pyramid`] stages at once:
+/// with the raw tile texture beside it, within DEV-01's upload line.
+const UPLOAD_BAND: usize = 8 << 20;
+
 /// How many pyramid levels a first level of `size` gets: down to the first
 /// whose long edge is 256 px or less.
 pub fn level_count(size: (u32, u32)) -> u32 {
@@ -323,8 +327,7 @@ impl Pyramid {
         })
     }
 
-    /// Reads `level` back as RGB, row by row: for tests, and for keeping a
-    /// prefetched photo's pyramid in CPU memory.
+    /// Reads `level` back as RGB, row by row: for tests.
     pub fn read_level(&self, gpu: &Gpu, level: u32) -> Result<Vec<[f32; 3]>, GpuError> {
         assert!((1..=self.levels).contains(&level), "level {level}");
         let (w, h) = self.level_size(level);
@@ -833,6 +836,17 @@ struct ImageBuffers {
     gains: wgpu::Buffer,
     deltas: [u32; 4],
     map_count: u32,
+    /// The X-Trans hexagons, for the shared uniform: rewritten before each
+    /// run of tiles, since another image's work may have replaced them.
+    xt: Option<XImageUniforms>,
+}
+
+impl ImageBuffers {
+    fn restore(&self, gpu: &Gpu, xt_image: &wgpu::Buffer) {
+        if let Some(u) = &self.xt {
+            gpu.queue.write_buffer(xt_image, 0, bytemuck::bytes_of(u));
+        }
+    }
 }
 
 impl RawStages {
@@ -1048,6 +1062,7 @@ impl RawStages {
     }
 
     fn upload_image(&self, gpu: &Gpu, src: &RawSource) -> ImageBuffers {
+        let mut xt = None;
         if let Some(Cfa::XTrans(x)) = src.cfa {
             let (hex, sgreen) = xtrans_hexagons(&x);
             let mut u = XImageUniforms {
@@ -1063,6 +1078,7 @@ impl RawStages {
             }
             gpu.queue
                 .write_buffer(&self.xt_image, 0, bytemuck::bytes_of(&u));
+            xt = Some(u);
         }
         let lin = &src.linearization;
         // A non-RAW image's curves take the levels' place (tile_stage1.wgsl).
@@ -1120,6 +1136,7 @@ impl RawStages {
             gains: buffer("gains", bytemuck::cast_slice(&gains)),
             deltas,
             map_count: maps.len() as u32,
+            xt,
         }
     }
 
@@ -1512,37 +1529,9 @@ impl RawStages {
         src: &RawSource,
         transform: &CameraTransform,
     ) -> Result<&Pyramid, GpuError> {
-        if self.pyramid.take().is_some() {
-            // wgpu frees a dropped texture once no submitted work uses it.
-            let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
-        }
+        self.free_pyramid(gpu);
         let jobs = self.prepare(gpu, src);
-        let l1 = half(src.size());
-        let levels = level_count(l1);
-        let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("pyramid"),
-            size: wgpu::Extent3d {
-                width: l1.0,
-                height: l1.1,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: levels,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba16Float,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING
-                | wgpu::TextureUsages::STORAGE_BINDING
-                | wgpu::TextureUsages::COPY_SRC,
-            view_formats: &[],
-        });
-        let pyramid = Pyramid {
-            texture,
-            size: l1,
-            levels,
-            transform: transform.clone(),
-            encoding: src.encoding.clone(),
-            id: self.take_id(),
-        };
+        let pyramid = self.new_pyramid(gpu, half(src.size()), transform, &src.encoding);
         let image = self.upload_image(gpu, src);
         self.update(gpu, src, &image, &pyramid, &jobs, &mut || false)?;
         Ok(self.pyramid.insert(pyramid))
@@ -1606,6 +1595,8 @@ impl RawStages {
             held.id, rebuild.id,
             "a rebuild resumes only the pyramid it started on: a later render or rebuild replaced it"
         );
+        // Other work, a neighbor's level 1, may have refitted the tiles.
+        self.prepare(gpu, src);
         let pyramid = self.pyramid.take().expect("held");
         let mut jobs = std::mem::take(&mut rebuild.rest);
         let result = self.update(gpu, src, &rebuild.image, &pyramid, &jobs, &mut stop);
@@ -1627,6 +1618,50 @@ impl RawStages {
         self.next_id
     }
 
+    /// Frees the held pyramid, so two are never in GPU memory at once.
+    fn free_pyramid(&mut self, gpu: &Gpu) {
+        if self.pyramid.take().is_some() {
+            // wgpu frees a dropped texture once no submitted work uses it.
+            let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+        }
+    }
+
+    /// A new pyramid whose level 1 is `size`, with a new id.
+    fn new_pyramid(
+        &mut self,
+        gpu: &Gpu,
+        size: (u32, u32),
+        transform: &CameraTransform,
+        encoding: &Option<InputEncoding>,
+    ) -> Pyramid {
+        let levels = level_count(size);
+        let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("pyramid"),
+            size: wgpu::Extent3d {
+                width: size.0,
+                height: size.1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: levels,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba16Float,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::STORAGE_BINDING
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        Pyramid {
+            texture,
+            size,
+            levels,
+            transform: transform.clone(),
+            encoding: encoding.clone(),
+            id: self.take_id(),
+        }
+    }
+
     /// Stages 1 to 4 for `jobs` into `pyramid`'s level 1 with its
     /// transform, asking `stop` before each tile, then, when every tile is
     /// done, levels 2 and up. Returns how many tiles were done.
@@ -1639,15 +1674,10 @@ impl RawStages {
         jobs: &[TileJob],
         stop: &mut dyn FnMut() -> bool,
     ) -> Result<usize, GpuError> {
+        image.restore(gpu, &self.xt_image);
         let transform = &pyramid.transform;
-        let l1 = pyramid.size;
         let device = &gpu.device;
-        let m = transform.matrix;
-        let mm = transform.multipliers;
-        let clip = mm[0].min(mm[1]).min(mm[2]);
-        let luma = luminance_row();
         let level1 = pyramid.level_view(1);
-        let rgb = view(&self.tiles.as_ref().expect("prepared").rgb);
         let mut in_flight = VecDeque::new();
         for (done, job) in jobs.iter().enumerate() {
             if stop() {
@@ -1664,78 +1694,119 @@ impl RawStages {
                     })
                     .map_err(|e| GpuError::Request(e.to_string()))?;
             }
-            let mut encoder = self.encode_tile(gpu, src, image, job, mm, true);
-            // The level 1 texels whose 2 x 2 block starts in this tile; tiles
-            // start on even pixels, and an odd last pixel folds into the
-            // block before it, in the same tile (tiles::jobs).
-            let first = (job.out.x / 2, job.out.y / 2);
-            let end = (
-                (job.out.x + job.out.width).div_ceil(2).min(l1.0),
-                (job.out.y + job.out.height).div_ceil(2).min(l1.1),
+            let mut encoder = self.encode_tile(gpu, src, image, job, transform.multipliers, true);
+            self.encode_stage4(
+                gpu,
+                &mut encoder,
+                transform,
+                job,
+                pyramid.size,
+                &level1,
+                false,
             );
-            let count = (end.0 - first.0, end.1 - first.1);
-            let u = Stage4Uniforms {
-                m: m.map(|r| [r[0], r[1], r[2], 0.0]),
-                luma: [luma[0], luma[1], luma[2], 0.0],
-                params: [
-                    transform.exposure,
-                    clip,
-                    DESATURATE_FROM,
-                    if transform.highlight_desaturation {
-                        1.0
-                    } else {
-                        0.0
-                    },
-                ],
-                texels: [first.0, first.1, count.0, count.1],
-                level: [l1.0, l1.1, 0, 0],
-            };
-            gpu.queue
-                .write_buffer(&self.stage4_uniforms, 0, bytemuck::bytes_of(&u));
-            let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("stage 4"),
-                layout: &self.passes.stage4.layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: self.uniforms.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: self.stage4_uniforms.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: wgpu::BindingResource::TextureView(&rgb),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 3,
-                        resource: wgpu::BindingResource::TextureView(&level1),
-                    },
-                ],
-            });
-            {
-                let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                    label: Some("stage 4"),
-                    timestamp_writes: None,
-                });
-                cpass.set_pipeline(&self.passes.stage4.pipeline);
-                cpass.set_bind_group(0, &group, &[]);
-                cpass.dispatch_workgroups(count.0.div_ceil(WG), count.1.div_ceil(WG), 1);
-            }
             in_flight.push_back(gpu.queue.submit([encoder.finish()]));
-            if self.sample_memory {
-                // The uploads still staged count here: their submissions
-                // have not finished.
-                if let Some(r) = device.generate_allocator_report() {
-                    let peak = self.peak_allocated.get_or_insert(0);
-                    *peak = (*peak).max(r.total_allocated_bytes);
-                }
-            }
+            self.sample_allocated(gpu);
         }
-        // Levels 2 and up.
+        self.downsample(gpu, pyramid)?;
+        Ok(jobs.len())
+    }
+
+    /// For the memory test: the allocator's total after a submit, while
+    /// the uploads it staged still count.
+    fn sample_allocated(&mut self, gpu: &Gpu) {
+        if self.sample_memory
+            && let Some(r) = gpu.device.generate_allocator_report()
+        {
+            let peak = self.peak_allocated.get_or_insert(0);
+            *peak = (*peak).max(r.total_allocated_bytes);
+        }
+    }
+
+    /// Encodes stage 4 for `job` into `dst`: the level 1 texels whose 2 x 2
+    /// block starts in the tile, of a level 1 of `size`, stored at their
+    /// place in the level, or from `dst`'s top left when `from_origin`.
+    /// Returns the first of them and how many across and down.
+    #[allow(clippy::too_many_arguments)]
+    fn encode_stage4(
+        &self,
+        gpu: &Gpu,
+        encoder: &mut wgpu::CommandEncoder,
+        transform: &CameraTransform,
+        job: &TileJob,
+        size: (u32, u32),
+        dst: &wgpu::TextureView,
+        from_origin: bool,
+    ) -> ((u32, u32), (u32, u32)) {
+        let m = transform.matrix;
+        let mm = transform.multipliers;
+        let clip = mm[0].min(mm[1]).min(mm[2]);
+        let luma = luminance_row();
+        let rgb = view(&self.tiles.as_ref().expect("prepared").rgb);
+        // Tiles start on even pixels, and an odd last pixel folds into the
+        // block before it, in the same tile (tiles::jobs).
+        let first = (job.out.x / 2, job.out.y / 2);
+        let end = (
+            (job.out.x + job.out.width).div_ceil(2).min(size.0),
+            (job.out.y + job.out.height).div_ceil(2).min(size.1),
+        );
+        let count = (end.0 - first.0, end.1 - first.1);
+        let origin = if from_origin { first } else { (0, 0) };
+        let u = Stage4Uniforms {
+            m: m.map(|r| [r[0], r[1], r[2], 0.0]),
+            luma: [luma[0], luma[1], luma[2], 0.0],
+            params: [
+                transform.exposure,
+                clip,
+                DESATURATE_FROM,
+                if transform.highlight_desaturation {
+                    1.0
+                } else {
+                    0.0
+                },
+            ],
+            texels: [first.0, first.1, count.0, count.1],
+            level: [size.0, size.1, origin.0, origin.1],
+        };
+        gpu.queue
+            .write_buffer(&self.stage4_uniforms, 0, bytemuck::bytes_of(&u));
+        let group = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("stage 4"),
+            layout: &self.passes.stage4.layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: self.uniforms.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: self.stage4_uniforms.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&rgb),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(dst),
+                },
+            ],
+        });
+        let mut cpass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("stage 4"),
+            timestamp_writes: None,
+        });
+        cpass.set_pipeline(&self.passes.stage4.pipeline);
+        cpass.set_bind_group(0, &group, &[]);
+        cpass.dispatch_workgroups(count.0.div_ceil(WG), count.1.div_ceil(WG), 1);
+        (first, count)
+    }
+
+    /// Levels 2 and up of `pyramid` from its level 1, each texel the mean of
+    /// the 2 x 2 block below it; waits for the GPU.
+    fn downsample(&self, gpu: &Gpu, pyramid: &Pyramid) -> Result<(), GpuError> {
+        let device = &gpu.device;
         let mut encoder = device.create_command_encoder(&Default::default());
-        let mut sizes = l1;
+        let mut sizes = pyramid.size;
         for level in 2..=pyramid.levels {
             let dst = half(sizes);
             let uniform = device.create_buffer(&wgpu::BufferDescriptor {
@@ -1782,7 +1853,240 @@ impl RawStages {
         device
             .poll(wgpu::PollType::wait_indefinitely())
             .map_err(|e| GpuError::Request(e.to_string()))?;
-        Ok(jobs.len())
+        Ok(())
+    }
+}
+
+/// A photo's level 1 in CPU memory, RGBA16F row by row without padding:
+/// what a prefetched neighbor keeps (DEV-01, Prefetched neighbors).
+/// [`RawStages::upload_pyramid`] makes its pyramid from it.
+#[derive(Debug, Clone)]
+pub struct Level1 {
+    pub size: (u32, u32),
+    /// What stages 2 and 4 used, as [`Pyramid::transform`].
+    pub transform: CameraTransform,
+    pub encoding: Option<InputEncoding>,
+    pub texels: Vec<u8>,
+}
+
+impl Level1 {
+    pub fn bytes(&self) -> u64 {
+        self.texels.len() as u64
+    }
+}
+
+/// A [`Level1`] being rendered beside the held pyramid, tile by tile:
+/// [`RawStages::start_level1`], then [`RawStages::continue_level1`] until
+/// it is done. Its GPU memory is one tile's level 1 and the buffer it is
+/// read back through, freed with it.
+#[derive(Debug)]
+pub struct Level1Build {
+    level1: Level1,
+    image: ImageBuffers,
+    rest: Vec<TileJob>,
+    scratch: wgpu::Texture,
+    readback: wgpu::Buffer,
+}
+
+impl Level1Build {
+    /// The tiles not rendered yet.
+    pub fn left(&self) -> usize {
+        self.rest.len()
+    }
+
+    /// The bytes of its GPU memory: one tile's level 1 and its readback.
+    pub fn gpu_bytes(&self) -> u64 {
+        let (w, h) = (self.scratch.width(), self.scratch.height());
+        u64::from(w) * u64::from(h) * 8 + self.readback.size()
+    }
+
+    /// The level 1. Panics when tiles are left.
+    pub fn finish(self) -> Level1 {
+        assert!(self.rest.is_empty(), "{} tiles left", self.rest.len());
+        self.level1
+    }
+}
+
+impl RawStages {
+    /// Starts rendering `src`'s level 1 with `transform` into CPU memory,
+    /// leaving the held pyramid as it is: a prefetched neighbor's (DEV-01,
+    /// Prefetched neighbors). Renders no tile yet.
+    pub fn start_level1(
+        &mut self,
+        gpu: &Gpu,
+        src: &RawSource,
+        transform: &CameraTransform,
+    ) -> Level1Build {
+        let jobs = self.prepare(gpu, src);
+        let size = half(src.size());
+        // The most texels one tile writes, an odd last pixel folded in.
+        let most = jobs.iter().fold((1, 1), |(a, b), j| {
+            (
+                a.max(j.out.width.div_ceil(2)),
+                b.max(j.out.height.div_ceil(2)),
+            )
+        });
+        let scratch = gpu.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("level 1 tile"),
+            size: wgpu::Extent3d {
+                width: most.0,
+                height: most.1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba16Float,
+            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let readback = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("level 1 tile readback"),
+            size: u64::from(padded_row(most.0, 8)) * u64::from(most.1),
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        Level1Build {
+            level1: Level1 {
+                size,
+                transform: transform.clone(),
+                encoding: src.encoding.clone(),
+                texels: vec![0; size.0 as usize * size.1 as usize * 8],
+            },
+            image: self.upload_image(gpu, src),
+            rest: jobs,
+            scratch,
+            readback,
+        }
+    }
+
+    /// Renders the tiles `build` has left, each read back into its level 1
+    /// before the next, asking `stop` before each one. Stopped, it returns
+    /// false and `build` keeps the tiles not done: the render thread's
+    /// requests come first (DEV-01, Generations). Done, it returns true;
+    /// the level 1 then equals [`RawStages::render_pyramid`]'s, bit for bit.
+    /// The held pyramid, and a [`Rebuild`] of it, are left as they were.
+    pub fn continue_level1(
+        &mut self,
+        gpu: &Gpu,
+        src: &RawSource,
+        build: &mut Level1Build,
+        mut stop: impl FnMut() -> bool,
+    ) -> Result<bool, GpuError> {
+        assert_eq!(build.level1.size, half(src.size()), "the build's image");
+        // Work on the held pyramid in between may have refitted the tiles.
+        self.prepare(gpu, src);
+        build.image.restore(gpu, &self.xt_image);
+        let dst = view(&build.scratch);
+        let size = build.level1.size;
+        while let Some(job) = build.rest.first() {
+            if stop() {
+                return Ok(false);
+            }
+            let transform = &build.level1.transform;
+            let mut encoder =
+                self.encode_tile(gpu, src, &build.image, job, transform.multipliers, true);
+            let (first, count) =
+                self.encode_stage4(gpu, &mut encoder, transform, job, size, &dst, true);
+            let row = padded_row(count.0, 8);
+            encoder.copy_texture_to_buffer(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &build.scratch,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &build.readback,
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(row),
+                        rows_per_image: Some(count.1),
+                    },
+                },
+                wgpu::Extent3d {
+                    width: count.0,
+                    height: count.1,
+                    depth_or_array_layers: 1,
+                },
+            );
+            gpu.queue.submit([encoder.finish()]);
+            self.sample_allocated(gpu);
+            let (tx, rx) = mpsc::channel();
+            build.readback.map_async(wgpu::MapMode::Read, .., move |r| {
+                let _ = tx.send(r);
+            });
+            gpu.device
+                .poll(wgpu::PollType::wait_indefinitely())
+                .map_err(|e| GpuError::Readback(e.to_string()))?;
+            rx.recv()
+                .map_err(|e| GpuError::Readback(e.to_string()))?
+                .map_err(|e| GpuError::Readback(e.to_string()))?;
+            {
+                let mapped = build
+                    .readback
+                    .get_mapped_range(..)
+                    .map_err(|e| GpuError::Readback(e.to_string()))?;
+                let line = count.0 as usize * 8;
+                for y in 0..count.1 as usize {
+                    let from = y * row as usize;
+                    let to = ((first.1 as usize + y) * size.0 as usize + first.0 as usize) * 8;
+                    build.level1.texels[to..to + line].copy_from_slice(&mapped[from..from + line]);
+                }
+            }
+            build.readback.unmap();
+            build.rest.remove(0);
+        }
+        Ok(true)
+    }
+
+    /// Makes the pyramid from `level1`, freeing the held one first: level 1
+    /// is written in bands of at most [`UPLOAD_BAND`] bytes, then levels 2
+    /// and up are computed as [`RawStages::render_pyramid`] computes them.
+    /// The pyramid then equals render_pyramid's for the same photo and
+    /// white, bit for bit, without decoding the photo (DEV-01, Prefetched
+    /// neighbors: on a switch).
+    pub fn upload_pyramid(&mut self, gpu: &Gpu, level1: &Level1) -> Result<&Pyramid, GpuError> {
+        let (w, h) = level1.size;
+        let row = w as usize * 8;
+        assert_eq!(level1.texels.len(), row * h as usize, "level 1's texels");
+        self.free_pyramid(gpu);
+        let pyramid = self.new_pyramid(gpu, level1.size, &level1.transform, &level1.encoding);
+        let rows = (UPLOAD_BAND / row).max(1);
+        for y in (0..h as usize).step_by(rows) {
+            let n = rows.min(h as usize - y);
+            gpu.queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &pyramid.texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d {
+                        x: 0,
+                        y: y as u32,
+                        z: 0,
+                    },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                &level1.texels[y * row..(y + n) * row],
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(row as u32),
+                    rows_per_image: Some(n as u32),
+                },
+                wgpu::Extent3d {
+                    width: w,
+                    height: n as u32,
+                    depth_or_array_layers: 1,
+                },
+            );
+            // Each band's staging is freed before the next is written.
+            gpu.queue.submit([]);
+            self.sample_allocated(gpu);
+            gpu.device
+                .poll(wgpu::PollType::wait_indefinitely())
+                .map_err(|e| GpuError::Request(e.to_string()))?;
+        }
+        self.downsample(gpu, &pyramid)?;
+        Ok(self.pyramid.insert(pyramid))
     }
 }
 
