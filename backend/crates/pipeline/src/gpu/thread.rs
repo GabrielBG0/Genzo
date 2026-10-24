@@ -4,6 +4,11 @@
 //! channel, so nothing else ever blocks the render thread. Renders are
 //! coalesced latest-wins: when several are queued, only the newest runs and
 //! the others are answered with `None`.
+//!
+//! A photo opened from its prefetched level 1 has no input until
+//! [`RenderThread::attach`] brings it (DEV-01, *Prefetched neighbors*). A
+//! Develop render that needs it is held until then, and still answered
+//! `None` if a newer one replaces it first.
 
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -14,10 +19,11 @@ use std::collections::VecDeque;
 use genzo_color::output::Target;
 use genzo_model::edit::{Edit, Phase};
 
-use super::develop::{Develop, DevelopError, Photo, Readback, Reran};
-use super::raw_stages::TileConfig;
+use super::develop::{Develop, DevelopError, Photo, PhotoInfo, Readback, Reran};
+use super::raw_stages::{Level1, TileConfig};
 use super::spike::{BayerImage, Frame, SpikeParams, SpikePipeline};
 use super::{AdapterChoice, Gpu, GpuError, GpuInfo};
+use crate::raw::RawSource;
 use crate::reference::sampling::ViewSpec;
 
 type Reply<T> = Sender<Result<T, GpuError>>;
@@ -33,6 +39,19 @@ enum Request {
     Open {
         id: u64,
         photo: Box<Photo>,
+        reply: Reply<()>,
+    },
+    /// Opens a photo from its prefetched level 1, as photo `id`.
+    OpenLevel1 {
+        id: u64,
+        info: Box<PhotoInfo>,
+        level1: Arc<Level1>,
+        reply: Reply<()>,
+    },
+    /// The input of photo `id`, opened from its level 1.
+    Attach {
+        id: u64,
+        src: Box<RawSource>,
         reply: Reply<()>,
     },
     Develop {
@@ -61,6 +80,10 @@ pub struct DevelopFrame {
     pub generation: u64,
     pub readback: Readback,
     pub reran: Reran,
+    /// Drawn from level 1 where level 0 was wanted, the photo's input not
+    /// attached yet ([`Develop::provisional`]): the caller renders it again
+    /// after [`RenderThread::attach`].
+    pub provisional: bool,
 }
 
 /// The receiving end of a submitted Develop render.
@@ -130,6 +153,38 @@ impl RenderThread {
         rx.recv().map_err(|_| GpuError::ThreadGone)?
     }
 
+    /// Opens a photo from its prefetched `level1` as photo `id`, replacing
+    /// the one open, and waits. Renders that need its input wait for
+    /// [`Self::attach`].
+    pub fn open_level1(
+        &self,
+        id: u64,
+        info: PhotoInfo,
+        level1: Arc<Level1>,
+    ) -> Result<(), GpuError> {
+        let (reply, rx) = mpsc::channel();
+        self.send(Request::OpenLevel1 {
+            id,
+            info: Box::new(info),
+            level1,
+            reply,
+        })?;
+        rx.recv().map_err(|_| GpuError::ThreadGone)?
+    }
+
+    /// Gives photo `id`, opened from its level 1, its decoded input, and
+    /// waits. A held render then runs. Nothing happens when another photo
+    /// is open by then.
+    pub fn attach(&self, id: u64, src: RawSource) -> Result<(), GpuError> {
+        let (reply, rx) = mpsc::channel();
+        self.send(Request::Attach {
+            id,
+            src: Box::new(src),
+            reply,
+        })?;
+        rx.recv().map_err(|_| GpuError::ThreadGone)?
+    }
+
     /// Queues a Develop render without waiting. The answer is `None` when
     /// a newer Develop render replaced it before it ran, or it is for a
     /// photo that is no longer open.
@@ -184,6 +239,8 @@ fn run(gpu: Gpu, rx: Receiver<Request>) {
     let mut open: Option<u64> = None;
     // Requests that arrived while the rest of a rebuild ran.
     let mut queued: VecDeque<Request> = VecDeque::new();
+    // The newest Develop render, held until the open photo's input comes.
+    let mut held: Option<Held> = None;
     loop {
         // Between requests: the rest of a white balance rebuild, stopped as
         // soon as a request comes (DEV-01, Generations). A failed rest
@@ -249,11 +306,36 @@ fn run(gpu: Gpu, rx: Receiver<Request>) {
                     let _ = reply.send(result.map(Some));
                 }
                 Request::Open { id, photo, reply } => {
+                    drop_held(&mut held);
                     let d =
                         develop.get_or_insert_with(|| Develop::new(&gpu, TileConfig::default()));
                     let result = guarded(&gpu, || d.open(&gpu, *photo).map_err(develop_error));
                     open = Some(id);
                     let _ = reply.send(result);
+                }
+                Request::OpenLevel1 {
+                    id,
+                    info,
+                    level1,
+                    reply,
+                } => {
+                    drop_held(&mut held);
+                    let d =
+                        develop.get_or_insert_with(|| Develop::new(&gpu, TileConfig::default()));
+                    let result = guarded(&gpu, || {
+                        d.open_level1(&gpu, *info, &level1).map_err(develop_error)
+                    });
+                    open = Some(id);
+                    let _ = reply.send(result);
+                }
+                Request::Attach { id, src, reply } => {
+                    if let Some(d) = develop.as_mut().filter(|_| open == Some(id)) {
+                        d.attach(*src);
+                        if let Some(h) = held.take() {
+                            held = develop_render(&gpu, d, h);
+                        }
+                    }
+                    let _ = reply.send(Ok(()));
                 }
                 Request::Develop { reply, request }
                     if Some(i) != newest_develop || open != Some(request.photo) =>
@@ -261,24 +343,52 @@ fn run(gpu: Gpu, rx: Receiver<Request>) {
                     let _ = reply.send(Ok(None));
                 }
                 Request::Develop { request, reply } => {
+                    drop_held(&mut held);
                     let Some(d) = develop.as_mut() else {
                         let _ = reply.send(Ok(None));
                         continue;
                     };
-                    let r = &*request;
-                    let result = guarded(&gpu, || {
-                        let reran = d
-                            .render(&gpu, &r.edit, r.view, r.target, r.phase)
-                            .map_err(develop_error)?;
-                        Ok(DevelopFrame {
-                            generation: r.generation,
-                            readback: d.read_back(&gpu)?,
-                            reran,
-                        })
-                    });
-                    let _ = reply.send(result.map(Some));
+                    held = develop_render(&gpu, d, Held { request, reply });
                 }
             }
+        }
+    }
+}
+
+/// A Develop render waiting for the open photo's input.
+struct Held {
+    request: Box<DevelopRequest>,
+    reply: Reply<Option<DevelopFrame>>,
+}
+
+/// A held render that a newer request replaced: answered `None`.
+fn drop_held(held: &mut Option<Held>) {
+    if let Some(h) = held.take() {
+        let _ = h.reply.send(Ok(None));
+    }
+}
+
+/// Runs a Develop render and answers it, or gives it back to be held when
+/// it needs the photo's input.
+fn develop_render(gpu: &Gpu, d: &mut Develop, h: Held) -> Option<Held> {
+    let r = &*h.request;
+    let result = guarded(gpu, || {
+        let reran = match d.render(gpu, &r.edit, r.view, r.target, r.phase) {
+            Err(DevelopError::NeedsSource) => return Ok(None),
+            reran => reran.map_err(develop_error)?,
+        };
+        Ok(Some(DevelopFrame {
+            generation: r.generation,
+            readback: d.read_back(gpu)?,
+            reran,
+            provisional: d.provisional(),
+        }))
+    });
+    match result {
+        Ok(None) => Some(h),
+        result => {
+            let _ = h.reply.send(result);
+            None
         }
     }
 }

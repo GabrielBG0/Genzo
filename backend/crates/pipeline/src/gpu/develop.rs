@@ -16,16 +16,24 @@
 //!   finishes the pyramid holds both whites, so a render that would read
 //!   past the first part (another view or geometry) finishes it first.
 //!
+//! - **Opened from a prefetched level 1** ([`Develop::open_level1`]), a
+//!   photo has no input until [`Develop::attach`] gives it one. Meanwhile a
+//!   view that wants level 0 upsamples level 1 and is provisional, and a
+//!   render that needs the input (a settled new white, the pyramid made
+//!   again) fails with [`DevelopError::NeedsSource`].
+//!
 //! [`Develop::reran`] says what the last render ran, so tests can hold it
 //! to DEV-01's re-run table. Only the render thread holds it.
 
+use genzo_color::encoding::InputEncoding;
 use genzo_color::output::Target;
+use genzo_imgio::raw::CameraColor;
 use genzo_model::edit::{Edit, PhotoKind, WhiteBalanceMode};
 use genzo_model::frame::Rect;
 
 use super::base::BaseLayer;
 use super::level0::Level0Cache;
-use super::raw_stages::{RawStages, Rebuild, TileConfig, level0_reach};
+use super::raw_stages::{Level1, RawStages, Rebuild, TileConfig, level0_reach};
 use super::readback::{ViewTile, visible_tiles};
 use super::view::{ViewStages, compresses, dithers};
 use super::{Gpu, GpuError};
@@ -51,6 +59,11 @@ pub enum DevelopError {
     CropDoesNotFit,
     #[error("no photo is open")]
     NoPhoto,
+    /// The render needs the photo's input, which is not attached yet: a
+    /// settled new white, or the pyramid made again. The render thread
+    /// holds it until the input comes.
+    #[error("the photo is not decoded yet")]
+    NeedsSource,
 }
 
 /// A photo to develop: its decoded input and the file's orientation.
@@ -59,6 +72,30 @@ pub struct Photo {
     pub src: RawSource,
     /// EXIF, 1 to 8.
     pub orientation: u8,
+}
+
+/// What Develop keeps of a photo besides its input's samples: enough to
+/// show it from a prefetched level 1 before it is decoded (DEV-01,
+/// *Prefetched neighbors*).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PhotoInfo {
+    /// Level 0's size, [`RawSource::size`].
+    pub size: (u32, u32),
+    /// EXIF, 1 to 8.
+    pub orientation: u8,
+    color: CameraColor,
+    encoding: Option<InputEncoding>,
+}
+
+impl PhotoInfo {
+    pub fn of(photo: &Photo) -> Self {
+        Self {
+            size: photo.src.size(),
+            orientation: photo.orientation,
+            color: photo.src.color.clone(),
+            encoding: photo.src.encoding.clone(),
+        }
+    }
 }
 
 /// What the last [`Develop::render`] ran, earliest first.
@@ -99,6 +136,8 @@ struct Shown {
     target: Target,
     half: bool,
     dither: bool,
+    /// Drawn from level 1 where level 0 was wanted, the input not attached.
+    provisional: bool,
 }
 
 /// One photo's GPU state.
@@ -120,10 +159,26 @@ pub struct Develop {
 
 #[derive(Debug)]
 struct Loaded {
-    photo: Photo,
+    info: PhotoInfo,
+    /// None while a photo opened from its level 1 waits for its input.
+    src: Option<RawSource>,
     kind: PhotoKind,
     as_shot: CameraTransform,
     curve: Option<BaseCurve>,
+}
+
+impl Loaded {
+    fn new(info: PhotoInfo, src: Option<RawSource>) -> Self {
+        let (as_shot, kind) = as_shot_of(&info.color, info.encoding.as_ref());
+        let curve = info.encoding.is_none().then(|| BaseCurve::new(&info.color));
+        Self {
+            info,
+            src,
+            kind,
+            as_shot,
+            curve,
+        }
+    }
 }
 
 impl Develop {
@@ -145,25 +200,61 @@ impl Develop {
     /// Opens `photo` in place of the one held: its pyramid with the as-shot
     /// white. Its defaults are `Edit::defaults(develop.kind())`.
     pub fn open(&mut self, gpu: &Gpu, photo: Photo) -> Result<(), DevelopError> {
+        self.close();
+        let info = PhotoInfo::of(&photo);
+        let loaded = self.photo.insert(Loaded::new(info, Some(photo.src)));
+        // Failed, the photo stays open and the next render tries again.
+        let src = loaded.src.as_ref().expect("given");
+        self.stages.render_pyramid(gpu, src, &loaded.as_shot)?;
+        Ok(())
+    }
+
+    /// Opens a photo from its prefetched `level1` in place of the one held,
+    /// without its input (DEV-01, *Prefetched neighbors*): the pyramid is
+    /// uploaded, with level 1's white. [`Develop::attach`] gives it its
+    /// input later.
+    pub fn open_level1(
+        &mut self,
+        gpu: &Gpu,
+        info: PhotoInfo,
+        level1: &Level1,
+    ) -> Result<(), DevelopError> {
+        // A pending rebuild goes before the upload makes it stale.
+        self.close();
+        self.photo = Some(Loaded::new(info, None));
+        // Failed, the photo stays open and makes its pyramid once its
+        // input comes.
+        self.stages.upload_pyramid(gpu, level1)?;
+        Ok(())
+    }
+
+    /// Gives the photo opened from its level 1 its decoded input. The next
+    /// render draws a provisional frame again, from level 0.
+    pub fn attach(&mut self, src: RawSource) {
+        let p = self.photo.as_mut().expect("open a photo first");
+        assert_eq!(src.size(), p.info.size, "the open photo's input");
+        p.src = Some(src);
+    }
+
+    /// Whether the open photo has its input.
+    pub fn decoded(&self) -> bool {
+        self.photo.as_ref().is_some_and(|p| p.src.is_some())
+    }
+
+    /// Whether the last frame was drawn from level 1 where level 0 was
+    /// wanted, because the input was not attached: it renders again once
+    /// it is.
+    pub fn provisional(&self) -> bool {
+        self.shown.as_ref().is_some_and(|s| s.provisional)
+    }
+
+    fn close(&mut self) {
         self.photo = None;
         self.shown = None;
         self.layer_for = None;
         self.rebuild = None;
         self.layer.clear();
-        let src = &photo.src;
-        let (as_shot, kind) = as_shot(src);
-        let curve = src.encoding.is_none().then(|| BaseCurve::new(&src.color));
         self.key += 1;
-        let loaded = self.photo.insert(Loaded {
-            photo,
-            kind,
-            as_shot,
-            curve,
-        });
-        // Failed, the photo stays open and the next render tries again.
-        self.stages
-            .render_pyramid(gpu, &loaded.photo.src, &loaded.as_shot)?;
-        Ok(())
     }
 
     /// The open photo's kind, for its defaults and ranges.
@@ -196,7 +287,8 @@ impl Develop {
         let (Some(rebuild), Some(p)) = (self.rebuild.as_mut(), self.photo.as_ref()) else {
             return Ok(true);
         };
-        let done = self.stages.rebuild_rest(gpu, &p.photo.src, rebuild, stop)?;
+        let src = p.src.as_ref().expect("a rebuild has its input");
+        let done = self.stages.rebuild_rest(gpu, src, rebuild, stop)?;
         if done {
             self.rebuild = None;
         }
@@ -210,10 +302,10 @@ impl Develop {
             return p.as_shot.clone();
         }
         let (temp, tint) = (f64::from(wb.temp), f64::from(wb.tint));
-        match &p.photo.src.encoding {
+        match &p.info.encoding {
             Some(e) => balanced_encoded_transform(e, temp, tint),
             None => camera_transform(
-                &p.photo.src.color,
+                &p.info.color,
                 Some(genzo_color::camera::xy_from_temperature(temp, tint)),
             ),
         }
@@ -232,8 +324,8 @@ impl Develop {
         phase: Phase,
     ) -> Result<Reran, DevelopError> {
         let p = self.photo.as_ref().ok_or(DevelopError::NoPhoto)?;
-        let size = p.photo.src.size();
-        let file = p.photo.orientation;
+        let size = p.info.size;
+        let file = p.info.orientation;
         let mut geometry = Geometry::from(edit);
         geometry.crop = fit(geometry.crop, size, geometry.orientation(file))
             .ok_or(DevelopError::CropDoesNotFit)?;
@@ -245,11 +337,13 @@ impl Develop {
         let mut reran = Reran::default();
         if self.stages.pyramid().is_none() {
             // A failed render or rebuild dropped it (DEV-01, *States*: out of
-            // GPU memory, retried once); the photo's input is still here.
+            // GPU memory, retried once); the photo's input is still here,
+            // or is waited for.
+            let src = p.src.as_ref().ok_or(DevelopError::NeedsSource)?;
             self.shown = None;
             self.layer_for = None;
             self.rebuild = None;
-            self.stages.render_pyramid(gpu, &p.photo.src, &wanted)?;
+            self.stages.render_pyramid(gpu, src, &wanted)?;
             self.key += 1;
             reran.pyramid = true;
         }
@@ -263,8 +357,8 @@ impl Develop {
         if let Some(rebuild) = self.rebuild.as_mut()
             && moved
         {
-            self.stages
-                .rebuild_rest(gpu, &p.photo.src, rebuild, || false)?;
+            let src = p.src.as_ref().expect("a rebuild has its input");
+            self.stages.rebuild_rest(gpu, src, rebuild, || false)?;
             self.rebuild = None;
             reran.finished_rebuild = true;
         }
@@ -275,6 +369,7 @@ impl Develop {
         if new_white && interactive {
             ratio = drag_ratio(held, &wanted);
         } else if new_white {
+            let src = p.src.as_ref().ok_or(DevelopError::NeedsSource)?;
             // The tiles the view and the new base layer read go first.
             let level0 = size;
             let levels = self.stages.pyramid().expect("built above").level_sizes();
@@ -293,9 +388,7 @@ impl Develop {
             // A newer white replaces a pending rebuild.
             self.rebuild = None;
             // On an error the pyramid goes, and the next render makes it again.
-            let rebuild = self
-                .stages
-                .rebuild_first(gpu, &p.photo.src, &wanted, reach)?;
+            let rebuild = self.stages.rebuild_first(gpu, src, &wanted, reach)?;
             self.rebuild = (rebuild.left() > 0).then_some(rebuild);
             self.key += 1;
             reran.pyramid = true;
@@ -315,6 +408,8 @@ impl Develop {
 
         let half = interactive && matches!(view, ViewSpec::Fit(_));
         let dither = dithers(pyramid, edited);
+        let provisional =
+            p.src.is_none() && plan_view(size, &pyramid.level_sizes(), frame, view).level == 0;
         let shown = Shown {
             geometry,
             frame,
@@ -324,11 +419,12 @@ impl Develop {
             target,
             half,
             dither,
+            provisional,
         };
         let mut from = match &old {
             _ if reran.pyramid || reran.base_layer || reran.finished_rebuild => From::Sample,
             None => From::Sample,
-            Some(s) if moved || s.ratio != ratio => From::Sample,
+            Some(s) if moved || s.ratio != ratio || s.provisional != provisional => From::Sample,
             Some(s) if tone_inputs(&s.look) != tone_inputs(&look) => From::Tone,
             Some(s) if color_inputs(&s.look) != color_inputs(&look) => From::Color,
             Some(s) if s.target != target || s.half != half || s.dither != dither => From::Output,
@@ -349,11 +445,12 @@ impl Develop {
 
         if from <= From::Sample {
             self.view.set_ratio(ratio);
-            self.view.show(
+            self.view.show_with(
                 gpu,
                 &mut self.stages,
                 &mut self.cache,
-                &p.photo.src,
+                p.src.as_ref(),
+                size,
                 self.key,
                 frame,
                 view,
@@ -391,10 +488,17 @@ impl Develop {
 /// (`Edit::defaults`). The engine calls it off the render thread, after
 /// decoding.
 pub fn as_shot(src: &RawSource) -> (CameraTransform, PhotoKind) {
-    match &src.encoding {
+    as_shot_of(&src.color, src.encoding.as_ref())
+}
+
+fn as_shot_of(
+    color: &CameraColor,
+    encoding: Option<&InputEncoding>,
+) -> (CameraTransform, PhotoKind) {
+    match encoding {
         Some(e) => (encoded_transform(e), PhotoKind::NonRaw),
         None => {
-            let t = camera_transform(&src.color, None);
+            let t = camera_transform(color, None);
             let (temp, tint) = genzo_color::camera::temperature_from_xy(t.white);
             let kind = PhotoKind::Raw {
                 as_shot_temp: temp as f32,
@@ -431,7 +535,7 @@ impl Develop {
         if let ViewSpec::Region { zoom, .. } = s.view
             && zoom == 1.0
         {
-            let shown = s.frame.pixel_size(p.photo.src.size());
+            let shown = s.frame.pixel_size(p.info.size);
             let tiles = visible_tiles(self.view.offset(), s.view.out(), shown);
             let rects: Vec<Rect> = tiles.iter().map(|t| t.frame).collect();
             let bytes = self.view.read_rects(gpu, &rects)?;

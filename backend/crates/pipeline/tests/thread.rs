@@ -1,14 +1,18 @@
 //! Develop on the render thread (`gpu::thread`): latest-wins coalescing of
-//! Develop renders, and renders for a photo that is no longer open.
+//! Develop renders, renders for a photo that is no longer open, and renders
+//! held until the input of a photo opened from its level 1 comes.
 
-use std::sync::Mutex;
+use std::sync::mpsc::RecvTimeoutError;
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use genzo_color::output::Target;
 use genzo_model::edit::{Edit, Phase, WhiteBalanceMode};
-use genzo_pipeline::gpu::develop::{Photo, Readback};
+use genzo_pipeline::gpu::develop::{Photo, PhotoInfo, Readback, as_shot};
+use genzo_pipeline::gpu::raw_stages::{Level1, RawStages, TileConfig};
 use genzo_pipeline::gpu::synthetic::{scene_raw, with_camera_profile};
 use genzo_pipeline::gpu::thread::{DevelopRequest, RenderThread};
-use genzo_pipeline::gpu::{AdapterChoice, GpuError};
+use genzo_pipeline::gpu::{AdapterChoice, Gpu, GpuError};
 use genzo_pipeline::reference::sampling::ViewSpec;
 
 static ONE_DEVICE: Mutex<()> = Mutex::new(());
@@ -107,4 +111,76 @@ fn a_render_for_a_photo_no_longer_open_is_dropped() {
         }
         r => panic!("{r:?}"),
     }
+}
+
+/// Long enough for any answer that should come.
+const WAIT: Duration = Duration::from_secs(30);
+
+fn level1(p: &Photo) -> Level1 {
+    let gpu = Gpu::open(AdapterChoice::from_env()).unwrap();
+    let (t, _) = as_shot(&p.src);
+    let mut stages = RawStages::new(&gpu, TileConfig::default());
+    let mut b = stages.start_level1(&gpu, &p.src, &t);
+    assert!(
+        stages
+            .continue_level1(&gpu, &p.src, &mut b, || false)
+            .unwrap()
+    );
+    b.finish()
+}
+
+#[test]
+fn a_render_that_needs_the_input_waits_for_it() {
+    let _lock = ONE_DEVICE.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(t) = thread() else { return };
+    let size = (640, 480);
+    let p = photo(size);
+    let (_, kind) = as_shot(&p.src);
+    let defaults = Edit::defaults(kind);
+    let fit = ViewSpec::Fit((240, 180));
+    t.open_level1(1, PhotoInfo::of(&p), Arc::new(level1(&p)))
+        .unwrap();
+    let f = t.develop(request(1, 1, &defaults, fit)).unwrap().unwrap();
+    assert!(!f.provisional && !f.reran.pyramid, "{f:?}");
+
+    // Settled new whites wait for the input; the newer replaces the older.
+    let warmer = |temp| {
+        let mut e = defaults.clone();
+        e.white_balance.mode = WhiteBalanceMode::Custom;
+        e.white_balance.temp = temp;
+        e
+    };
+    let older = t.submit(request(2, 1, &warmer(4000.0), fit)).unwrap();
+    assert_eq!(
+        older.recv_timeout(Duration::from_millis(300)),
+        Err(RecvTimeoutError::Timeout)
+    );
+    let newer = t.submit(request(3, 1, &warmer(4500.0), fit)).unwrap();
+    assert_eq!(older.recv_timeout(WAIT).unwrap().unwrap(), None);
+    assert_eq!(
+        newer.recv_timeout(Duration::from_millis(300)),
+        Err(RecvTimeoutError::Timeout)
+    );
+    // Another photo's input is not this one's.
+    t.attach(2, photo((500, 400)).src).unwrap();
+    assert_eq!(
+        newer.recv_timeout(Duration::from_millis(300)),
+        Err(RecvTimeoutError::Timeout)
+    );
+    t.attach(1, photo(size).src).unwrap();
+    let f = newer.recv_timeout(WAIT).unwrap().unwrap().unwrap();
+    assert_eq!(f.generation, 3);
+    assert!(f.reran.pyramid, "{f:?}");
+
+    // A held render is dropped when another photo opens.
+    let q = photo((500, 400));
+    t.open_level1(2, PhotoInfo::of(&q), Arc::new(level1(&q)))
+        .unwrap();
+    let held = t.submit(request(4, 2, &warmer(5000.0), fit)).unwrap();
+    assert_eq!(
+        held.recv_timeout(Duration::from_millis(300)),
+        Err(RecvTimeoutError::Timeout)
+    );
+    t.open(3, photo((320, 240))).unwrap();
+    assert_eq!(held.recv_timeout(WAIT).unwrap().unwrap(), None);
 }
