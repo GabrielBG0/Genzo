@@ -329,6 +329,17 @@ fn a_switch_to_a_neighbor_being_built_opens_its_input() {
     assert!(frame_of(&f) == frame_of(&g), "as the photo opened again");
 }
 
+/// Whether `pending` is still unanswered: what a test checks right before
+/// acting, so a build that finished while the test thread was paused makes
+/// the attempt inconclusive instead of failing it.
+fn unanswered<T>(pending: &mpsc::Receiver<T>) -> bool {
+    matches!(pending.try_recv(), Err(mpsc::TryRecvError::Empty))
+}
+
+/// Attempts at a test that races a build, before it fails as never
+/// conclusive.
+const ATTEMPTS: usize = 3;
+
 #[test]
 fn a_render_does_not_wait_for_a_prefetch() {
     let _lock = ONE_DEVICE.lock().unwrap_or_else(|e| e.into_inner());
@@ -337,16 +348,24 @@ fn a_render_does_not_wait_for_a_prefetch() {
     let (_, kind) = as_shot(&a.src);
     let defaults = Edit::defaults(kind);
     t.open(1, a).unwrap();
-    let p = photo((4000, 3000));
-    let pending = t.prefetch(2, p, &defaults).unwrap();
-    // The build stops between tiles for the render, and resumes after it.
-    let f = t.develop(request(1, 1, &defaults, ViewSpec::Fit((160, 120))));
-    assert!(f.unwrap().is_some());
-    assert!(
-        matches!(pending.try_recv(), Err(mpsc::TryRecvError::Empty)),
-        "the render waited for the whole build"
-    );
-    assert!(pending.recv_timeout(WAIT).unwrap().unwrap().is_some());
+    for attempt in 0..ATTEMPTS {
+        let pending = t.prefetch(2, photo((4000, 3000)), &defaults).unwrap();
+        if !unanswered(&pending) {
+            eprintln!("attempt {attempt}: the build finished first, inconclusive");
+            continue;
+        }
+        // The build stops between tiles for the render, and resumes after it.
+        let view = ViewSpec::Fit((160 + attempt as u32, 120));
+        let f = t.develop(request(attempt as u64 + 1, 1, &defaults, view));
+        assert!(f.unwrap().is_some());
+        assert!(
+            unanswered(&pending),
+            "the render waited for the whole build"
+        );
+        assert!(pending.recv_timeout(WAIT).unwrap().unwrap().is_some());
+        return;
+    }
+    panic!("no attempt was conclusive");
 }
 
 #[test]
@@ -390,20 +409,28 @@ fn a_neighbor_prefetched_with_its_custom_white_needs_no_rebuild() {
 #[test]
 fn dropping_the_thread_stops_its_prefetches() {
     let _lock = ONE_DEVICE.lock().unwrap_or_else(|e| e.into_inner());
-    let Some(t) = thread() else { return };
-    let (a, b) = (photo((4000, 3000)), photo((3600, 2800)));
-    let white = Edit::defaults(as_shot(&a.src).1);
-    let pending = [
-        t.prefetch(2, a, &white).unwrap(),
-        t.prefetch(3, b, &white).unwrap(),
-    ];
-    // Closing the channel stops a build between tiles: the queued builds
-    // are dropped unanswered, not run to their end.
-    drop(t);
-    for rx in pending {
-        assert!(
-            rx.recv().is_err(),
-            "a build ran on after the thread was dropped"
-        );
+    for attempt in 0..ATTEMPTS {
+        let Some(t) = thread() else { return };
+        let (a, b) = (photo((4000, 3000)), photo((3600, 2800)));
+        let white = Edit::defaults(as_shot(&a.src).1);
+        let pending = [
+            t.prefetch(2, a, &white).unwrap(),
+            t.prefetch(3, b, &white).unwrap(),
+        ];
+        if !pending.iter().all(unanswered) {
+            eprintln!("attempt {attempt}: a build finished first, inconclusive");
+            continue;
+        }
+        // Closing the channel stops a build between tiles: the queued
+        // builds are dropped unanswered, not run to their end.
+        drop(t);
+        for rx in pending {
+            assert!(
+                rx.recv().is_err(),
+                "a build ran on after the thread was dropped"
+            );
+        }
+        return;
     }
+    panic!("no attempt was conclusive");
 }
