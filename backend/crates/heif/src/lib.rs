@@ -347,6 +347,12 @@ pub fn decode(data: &[u8], options: Options) -> Result<Decoded, Error> {
     })
 }
 
+/// The primary image's EXIF block (its TIFF structure), if it has one: the
+/// container's metadata only, no pixels decoded.
+pub fn exif(data: &[u8]) -> Result<Option<Vec<u8>>, Error> {
+    File::open(data, Options { threads: 1 })?.exif()
+}
+
 /// Decodes the file's embedded thumbnail, if it has one. Much faster than a
 /// full decode; used to show first pixels while the full image decodes.
 pub fn decode_thumbnail(data: &[u8]) -> Result<Option<Thumbnail>, Error> {
@@ -384,6 +390,20 @@ mod tests {
             .join("vendor/libheif/tests/data")
             .join(name);
         std::fs::read(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+    }
+
+    #[test]
+    fn exif_comes_from_the_container() {
+        // This sample carries an EXIF item; its block is a TIFF structure.
+        let block = exif(&sample("conformance_window_padding.heic"))
+            .unwrap()
+            .expect("an EXIF block");
+        assert!(
+            block.starts_with(b"II* ") || block.starts_with(b"MM *"),
+            "{:?}",
+            &block[..8]
+        );
+        assert_eq!(exif(&sample("rainbow-451x461.heic")).unwrap(), None);
     }
 
     #[test]

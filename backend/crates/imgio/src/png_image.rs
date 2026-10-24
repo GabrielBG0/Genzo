@@ -137,7 +137,7 @@ fn chunks(data: &[u8]) -> impl Iterator<Item = (&[u8], &[u8])> {
 }
 
 /// The body of the eXIf chunk, if the file has one.
-fn exif_chunk(data: &[u8]) -> Option<&[u8]> {
+pub(crate) fn exif_chunk(data: &[u8]) -> Option<&[u8]> {
     chunks(data)
         .find(|(kind, _)| *kind == b"eXIf")
         .map(|(_, body)| body)

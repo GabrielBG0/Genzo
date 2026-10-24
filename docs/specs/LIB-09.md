@@ -81,7 +81,7 @@ Nothing is stored on disk in M1. The engine holds, for the session:
 
 ## Edge cases
 
-- **Thousands of files:** the strip's cells are virtualized, and capture times are read from EXIF only, in parallel, without decoding pixels.
+- **Thousands of files:** the strip's cells are virtualized, and capture times are read from EXIF only, in parallel, without decoding pixels: from each file's first MiB, and past it only for formats whose metadata can lie anywhere (TIFF-based RAW, HEIF, PNG).
 - **Two files with the same capture time and name** (a RAW and a JPEG of one shot, `IMG_1.CR3` and `IMG_1.JPG`): both are listed, ordered by extension. M2's stacking decides whether they pair.
 - **A file whose EXIF is damaged:** no capture time, so it sorts after the dated ones by name. It opens as usual, or shows as damaged (DEV-01, *States*).
 - **The current photo is the first or last:** ← (or →) does nothing at that end. The strip does not wrap.

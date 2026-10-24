@@ -9,6 +9,7 @@
 
 #[cfg(feature = "raw")]
 mod camera;
+pub mod capture;
 #[cfg(feature = "dng")]
 pub mod dng;
 mod exif;
@@ -350,7 +351,7 @@ pub fn decode_preview(data: &[u8]) -> Result<Option<Preview>, DecodeError> {
 fn preview_hints(data: &[u8], format: FileFormat) -> preview::FileHints {
     let tiff: Option<&[u8]> = match format {
         FileFormat::Tiff | FileFormat::Orf | FileFormat::Rw2 => Some(data),
-        FileFormat::Cr3 => cr3_cmt1(data),
+        FileFormat::Cr3 => cr3_box(data, b"CMT1"),
         FileFormat::Jpeg => jpeg_app1_exif(data).map(exif::tiff_payload),
         _ => None,
     };
@@ -363,11 +364,12 @@ fn preview_hints(data: &[u8], format: FileFormat) -> preview::FileHints {
     }
 }
 
-/// The TIFF structure in a CR3's CMT1 box (IFD0 of the camera's EXIF),
-/// found by its box type in the file's head.
-fn cr3_cmt1(data: &[u8]) -> Option<&[u8]> {
+/// The TIFF structure in one of a CR3's CMT boxes (CMT1 is IFD0 of the
+/// camera's EXIF, CMT2 its EXIF IFD), found by its box type in the file's
+/// head.
+fn cr3_box<'a>(data: &'a [u8], kind: &[u8; 4]) -> Option<&'a [u8]> {
     let head = &data[..data.len().min(1 << 20)];
-    let at = memchr::memmem::find(head, b"CMT1")?;
+    let at = memchr::memmem::find(head, kind)?;
     let box_start = at.checked_sub(4)?;
     let size = u32::from_be_bytes(data.get(box_start..at)?.try_into().ok()?) as usize;
     data.get(at + 4..box_start.checked_add(size)?)

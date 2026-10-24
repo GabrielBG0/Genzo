@@ -142,3 +142,14 @@ mod tests {
         assert!(err.to_string().contains("not included in this build"));
     }
 }
+
+/// The file's EXIF block (its TIFF structure), from the container only.
+#[cfg(feature = "heic")]
+pub(crate) fn exif(data: &[u8]) -> Option<Vec<u8>> {
+    genzo_heif::exif(data).ok().flatten()
+}
+
+#[cfg(not(feature = "heic"))]
+pub(crate) fn exif(_data: &[u8]) -> Option<Vec<u8>> {
+    None
+}
