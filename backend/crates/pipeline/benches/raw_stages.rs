@@ -14,11 +14,15 @@
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use genzo_color::encoding::InputEncoding;
+use genzo_model::frame::Rect;
 use genzo_pipeline::camera_color::{camera_transform, encoded_transform};
-use genzo_pipeline::gpu::raw_stages::{RawStages, TileConfig, Until};
+use genzo_pipeline::geometry::{Crop, Geometry, fit};
+use genzo_pipeline::gpu::base::BaseLayer;
+use genzo_pipeline::gpu::raw_stages::{RawStages, TileConfig, Until, level0_reach};
 use genzo_pipeline::gpu::synthetic::{scene_raw, scene_xtrans_raw};
 use genzo_pipeline::gpu::{AdapterChoice, Gpu};
 use genzo_pipeline::raw::RawSource;
+use genzo_pipeline::reference::sampling::{Frame, ViewSpec, plan_view_without_level0};
 
 fn stages(c: &mut Criterion) {
     let Ok(gpu) = Gpu::open(AdapterChoice::from_env()) else {
@@ -94,5 +98,64 @@ fn pyramid(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, stages, pyramid);
+/// The settled white balance at Fit (DEV-01, Settled): the pyramid rebuilt
+/// in place, the first part (the tiles a 2560 x 1440 Fit view of a crop a
+/// third of each side and its base layer read) against the whole rebuild,
+/// at 48 MP. Without a crop the first part is every tile.
+fn rebuild(c: &mut Criterion) {
+    let Ok(gpu) = Gpu::open(AdapterChoice::from_env()) else {
+        eprintln!("skipped: no GPU adapter");
+        return;
+    };
+    let src = scene_raw(8064, 6048);
+    let size = src.size();
+    let old = camera_transform(&src.color, None);
+    let mut new = old.clone();
+    new.multipliers = [2.0, 1.0, 1.5];
+    let mut stages = RawStages::new(&gpu, TileConfig::default());
+    stages.render_pyramid(&gpu, &src, &old).unwrap();
+    let crop = Crop {
+        cx: 0.5,
+        cy: 0.5,
+        w: 1.0 / 3.0,
+        h: 1.0 / 3.0,
+        angle: 0.0,
+    };
+    let g = Geometry {
+        crop: fit(crop, size, 1).expect("fits"),
+        ..Geometry::default()
+    };
+    let frame = Frame::of(&g, 1);
+    let out = (2560, 1440);
+    let p = stages.pyramid().unwrap();
+    let s = plan_view_without_level0(size, &p.level_sizes(), frame, ViewSpec::Fit(out));
+    let mut layer = BaseLayer::new(&gpu);
+    layer.build(&gpu, p, size, frame);
+    let [a, b] = [
+        level0_reach(&s, out, size),
+        level0_reach(layer.sampling().unwrap(), layer.size(), size),
+    ]
+    .map(|r| r.expect("a pyramid level"));
+    let (x, y) = (a.x.min(b.x), a.y.min(b.y));
+    let reach = Rect {
+        x,
+        y,
+        width: (a.x + a.width).max(b.x + b.width) - x,
+        height: (a.y + a.height).max(b.y + b.height) - y,
+    };
+    let mut group = c.benchmark_group(format!("white balance rebuild 48MP on {}", gpu.info.name));
+    group.sample_size(10);
+    group.bench_function("first part, crop of a third", |b| {
+        b.iter(|| stages.rebuild_first(&gpu, &src, &new, Some(reach)).unwrap())
+    });
+    group.bench_function("whole", |b| {
+        b.iter(|| {
+            let mut r = stages.rebuild_first(&gpu, &src, &new, None).unwrap();
+            stages.rebuild_rest(&gpu, &src, &mut r, || false).unwrap()
+        })
+    });
+    group.finish();
+}
+
+criterion_group!(benches, stages, pyramid, rebuild);
 criterion_main!(benches);
