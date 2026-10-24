@@ -129,6 +129,120 @@ impl Phase {
     }
 }
 
+/// A field of the edit a reset can name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Param {
+    Profile,
+    Treatment,
+    WhiteBalance,
+    Exposure,
+    Contrast,
+    Highlights,
+    Shadows,
+    Whites,
+    Blacks,
+    Vibrance,
+    Saturation,
+    /// The crop and its angle.
+    Crop,
+    /// The quarter turns and the flip.
+    Orientation,
+}
+
+impl Param {
+    /// The control's name as the panels show it (APP-10's step labels).
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Profile => "Profile",
+            Self::Treatment => "Treatment",
+            Self::WhiteBalance => "White balance",
+            Self::Exposure => "Exposure",
+            Self::Contrast => "Contrast",
+            Self::Highlights => "Highlights",
+            Self::Shadows => "Shadows",
+            Self::Whites => "Whites",
+            Self::Blacks => "Blacks",
+            Self::Vibrance => "Vibrance",
+            Self::Saturation => "Saturation",
+            Self::Crop => "Crop",
+            Self::Orientation => "Rotate",
+        }
+    }
+}
+
+/// One change an edit delta carries (DEV-01, *Inputs*: `ApplyEditDelta`).
+/// The engine clamps every value, fits the crop to the image and refuses a
+/// crop that cannot fit (DEV-01, *Crop*).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum Change {
+    Profile(Profile),
+    Treatment(Treatment),
+    /// Temp and Tint, a preset or a pick: the whole white balance.
+    WhiteBalance {
+        mode: WhiteBalanceMode,
+        temp: f32,
+        tint: f32,
+    },
+    Exposure(f32),
+    Contrast(f32),
+    Highlights(f32),
+    Shadows(f32),
+    Whites(f32),
+    Blacks(f32),
+    Vibrance(f32),
+    Saturation(f32),
+    /// The crop rectangle and its angle, on the oriented image.
+    Crop {
+        cx: f32,
+        cy: f32,
+        w: f32,
+        h: f32,
+        angle: f32,
+    },
+    /// A quarter turn, clockwise or not; the crop keeps its region.
+    Turn {
+        clockwise: bool,
+    },
+    /// A horizontal flip; the crop keeps its region.
+    Flip,
+    /// One field back to the photo's default.
+    Reset(Param),
+    /// The whole edit back to the photo's defaults.
+    ResetAll,
+}
+
+impl Change {
+    /// The field it changes, None for Reset all.
+    pub fn param(&self) -> Option<Param> {
+        Some(match self {
+            Self::Profile(_) => Param::Profile,
+            Self::Treatment(_) => Param::Treatment,
+            Self::WhiteBalance { .. } => Param::WhiteBalance,
+            Self::Exposure(_) => Param::Exposure,
+            Self::Contrast(_) => Param::Contrast,
+            Self::Highlights(_) => Param::Highlights,
+            Self::Shadows(_) => Param::Shadows,
+            Self::Whites(_) => Param::Whites,
+            Self::Blacks(_) => Param::Blacks,
+            Self::Vibrance(_) => Param::Vibrance,
+            Self::Saturation(_) => Param::Saturation,
+            Self::Crop { .. } => Param::Crop,
+            Self::Turn { .. } | Self::Flip => Param::Orientation,
+            Self::Reset(p) => *p,
+            Self::ResetAll => return None,
+        })
+    }
+
+    /// The history step's label (APP-10).
+    pub fn label(&self) -> String {
+        match self {
+            Self::ResetAll => "Reset all".into(),
+            Self::Reset(p) => format!("Reset {}", p.label()),
+            c => c.param().expect("a field").label().into(),
+        }
+    }
+}
+
 /// Why an edit did not load.
 #[derive(Debug)]
 pub enum EditError {
