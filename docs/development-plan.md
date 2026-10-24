@@ -345,7 +345,7 @@ These come from `docs/m0-results.md` and decide how the steps below are built:
    - The Markesteijn port gets a literal CPU port of darktable's code as its reference, as RCD did in M0.
 5. `pipeline`, the rest of the M1 stages:
    - The core of stages 6 and 7 (exposure, tone, vibrance, saturation), the B&W treatment, crop and rotate, and the output transform.
-   - Re-runs start at the changed stage. Interactive and settled quality levels.
+   - Re-runs start at the changed stage. Interactive and settled quality levels. `gpu::develop::Develop` runs both for one photo (DEV-01, Re-runs); the engine session drives it from step 9.
    - White balance applied after the cached demosaic while dragging; the settled render re-demosaics.
    - Generation numbers, latest-wins coalescing and cancellation.
 6. `pipeline`, what reaches the viewport:
