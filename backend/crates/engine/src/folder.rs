@@ -13,7 +13,7 @@ use std::cmp::Ordering;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use genzo_imgio::capture::{CaptureTime, capture_time};
+use genzo_imgio::capture::{CaptureTime, can_lie_past_the_head, capture_time};
 use rayon::prelude::*;
 
 use crate::EngineError;
@@ -89,7 +89,13 @@ pub fn needs_whole_file(path: &Path) -> bool {
     if file.by_ref().take(HEAD).read_to_end(&mut head).is_err() {
         return false;
     }
-    capture_time(&head).is_none() && head.len() as u64 == HEAD
+    capture_time(&head).is_none() && worth_the_rest(&head)
+}
+
+/// Whether to read past the head that held no capture time: when there is
+/// a rest, and the format can keep its metadata there.
+fn worth_the_rest(head: &[u8]) -> bool {
+    head.len() as u64 == HEAD && can_lie_past_the_head(head)
 }
 
 fn read_capture_time(path: &Path) -> Option<CaptureTime> {
@@ -99,8 +105,7 @@ fn read_capture_time(path: &Path) -> Option<CaptureTime> {
     if let Some(t) = capture_time(&head) {
         return Some(t);
     }
-    // Past the head: read the rest only when there is a rest.
-    if (head.len() as u64) < HEAD {
+    if !worth_the_rest(&head) {
         return None;
     }
     file.read_to_end(&mut head).ok()?;

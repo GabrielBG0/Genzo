@@ -33,7 +33,10 @@ pub fn capture_time(data: &[u8]) -> Option<CaptureTime> {
         FileFormat::Tiff | FileFormat::Orf | FileFormat::Rw2 => from_tiff(data, true),
         // A CR3's CMT2 box is the EXIF IFD as a TIFF structure of its own.
         FileFormat::Cr3 => from_tiff(crate::cr3_box(data, b"CMT2")?, false),
-        FileFormat::Png => from_tiff(crate::png_image::exif_chunk(data)?, true),
+        FileFormat::Png => from_tiff(
+            exif::tiff_payload(crate::png_image::exif_chunk(data)?),
+            true,
+        ),
         FileFormat::Raf => {
             // The RAF header points to the embedded JPEG (offset at 84,
             // length at 88, big-endian), whose EXIF holds the camera's. Its
@@ -47,6 +50,24 @@ pub fn capture_time(data: &[u8]) -> Option<CaptureTime> {
         }
         FileFormat::Heif => from_tiff(exif::tiff_payload(&crate::heic::exif(data)?), true),
     }
+}
+
+/// Whether a file of `head`'s format can keep its capture time past its
+/// head, so a reader that found none there should read the rest: TIFF
+/// structures point anywhere, a HEIF's EXIF item and a PNG's eXIf chunk
+/// can follow the pixels. A JPEG's APP1 comes first, a CR3's CMT2 box is
+/// searched in the first MiB only, and a RAF's JPEG starts in its header.
+pub fn can_lie_past_the_head(head: &[u8]) -> bool {
+    matches!(
+        sniff(head),
+        Some(
+            FileFormat::Tiff
+                | FileFormat::Orf
+                | FileFormat::Rw2
+                | FileFormat::Heif
+                | FileFormat::Png
+        )
+    )
 }
 
 /// The capture time in a TIFF structure: in the IFD IFD0's ExifIFD tag
@@ -191,6 +212,39 @@ mod tests {
         ] {
             assert_eq!(parse(text, None), None, "{}", String::from_utf8_lossy(text));
         }
+    }
+
+    #[test]
+    fn a_png_exif_chunk_reads_with_or_without_its_prefix() {
+        let chunk = |kind: &[u8; 4], body: &[u8]| {
+            let mut c = (body.len() as u32).to_be_bytes().to_vec();
+            c.extend(kind);
+            c.extend(body);
+            c.extend([0; 4]); // CRC, unchecked here
+            c
+        };
+        let exif = tiff(b"2024:07:19 18:03:42\0", None, false);
+        for prefix in [&b""[..], b"Exif\0\0"] {
+            let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+            png.extend(chunk(b"IHDR", &[0; 13]));
+            png.extend(chunk(b"IDAT", &[0; 8]));
+            // After the pixels, where some writers put it.
+            png.extend(chunk(b"eXIf", &[prefix, &exif].concat()));
+            png.extend(chunk(b"IEND", &[]));
+            let c = capture_time(&png).expect("dated");
+            assert_eq!((c.year, c.second), (2024, 42), "prefix {prefix:?}");
+            assert!(can_lie_past_the_head(&png));
+        }
+    }
+
+    #[test]
+    fn only_formats_with_metadata_anywhere_read_past_the_head() {
+        let t = tiff(b"2024:07:19 18:03:42\0", None, false);
+        assert!(can_lie_past_the_head(&t));
+        assert!(!can_lie_past_the_head(b"\xFF\xD8\xFF\xE0 a JPEG"));
+        assert!(!can_lie_past_the_head(b"\0\0\0\x18ftypcrx "));
+        assert!(!can_lie_past_the_head(b"FUJIFILMCCD-RAW 0201"));
+        assert!(!can_lie_past_the_head(b"not a photo"));
     }
 
     #[test]
