@@ -393,6 +393,20 @@ mod tests {
     }
 
     #[test]
+    fn exif_comes_from_the_container() {
+        // This sample carries an EXIF item; its block is a TIFF structure.
+        let block = exif(&sample("conformance_window_padding.heic"))
+            .unwrap()
+            .expect("an EXIF block");
+        assert!(
+            block.starts_with(b"II* ") || block.starts_with(b"MM *"),
+            "{:?}",
+            &block[..8]
+        );
+        assert_eq!(exif(&sample("rainbow-451x461.heic")).unwrap(), None);
+    }
+
+    #[test]
     fn links_the_bundled_libheif() {
         assert_eq!(linked_version(), LIBHEIF_VERSION);
     }
