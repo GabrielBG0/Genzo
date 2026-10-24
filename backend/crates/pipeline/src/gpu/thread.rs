@@ -9,6 +9,12 @@
 //! [`RenderThread::attach`] brings it (DEV-01, *Prefetched neighbors*). A
 //! Develop render that needs it is held until then, and still answered
 //! `None` if a newer one replaces it first.
+//!
+//! **Prefetch** (DEV-01, *Prefetched neighbors*): neighbors' level 1 are
+//! built in the order they were queued, one at a time, only while no
+//! request waits and after the rest of the open photo's rebuild. A build
+//! stops between tiles for any request and resumes after it. Each holds its
+//! photo's input until it is done or cancelled.
 
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -20,9 +26,10 @@ use genzo_color::output::Target;
 use genzo_model::edit::{Edit, Phase};
 
 use super::develop::{Develop, DevelopError, Photo, PhotoInfo, Readback, Reran};
-use super::raw_stages::{Level1, TileConfig};
+use super::raw_stages::{Level1, Level1Build, TileConfig};
 use super::spike::{BayerImage, Frame, SpikeParams, SpikePipeline};
 use super::{AdapterChoice, Gpu, GpuError, GpuInfo};
+use crate::camera_color::CameraTransform;
 use crate::raw::RawSource;
 use crate::reference::sampling::ViewSpec;
 
@@ -58,7 +65,41 @@ enum Request {
         request: Box<DevelopRequest>,
         reply: Reply<Option<DevelopFrame>>,
     },
+    /// Queues photo `id`'s level 1.
+    Prefetch(Box<Queued>),
+    /// Cancels the queued level 1 of every photo not in `keep`.
+    KeepPrefetching {
+        keep: Vec<u64>,
+        reply: Reply<()>,
+    },
+    /// Opens photo `id` from its queued prefetch's input.
+    OpenPrefetching {
+        id: u64,
+        reply: Reply<bool>,
+    },
 }
+
+/// A neighbor's level 1, queued or being built.
+struct Queued {
+    id: u64,
+    photo: Photo,
+    transform: CameraTransform,
+    reply: Reply<Option<Prefetched>>,
+    /// Started on its first turn.
+    build: Option<Level1Build>,
+}
+
+/// A prefetched neighbor: what [`RenderThread::open_level1`] takes.
+#[derive(Debug)]
+pub struct Prefetched {
+    pub id: u64,
+    pub info: PhotoInfo,
+    pub level1: Level1,
+}
+
+/// The receiving end of a queued prefetch: `None` when it was cancelled,
+/// or its photo opened from its input instead.
+pub type PendingLevel1 = Receiver<Result<Option<Prefetched>, GpuError>>;
 
 /// One Develop render: the whole state, never a delta, so a newer request
 /// replacing an older one loses nothing.
@@ -186,6 +227,46 @@ impl RenderThread {
         rx.recv().map_err(|_| GpuError::ThreadGone)?
     }
 
+    /// Queues photo `id`'s level 1 with `transform` (its edit's white
+    /// balance), without waiting. Builds run in the order they were queued.
+    pub fn prefetch(
+        &self,
+        id: u64,
+        photo: Photo,
+        transform: CameraTransform,
+    ) -> Result<PendingLevel1, GpuError> {
+        let (reply, rx) = mpsc::channel();
+        self.send(Request::Prefetch(Box::new(Queued {
+            id,
+            photo,
+            transform,
+            reply,
+            build: None,
+        })))?;
+        Ok(rx)
+    }
+
+    /// Cancels the prefetch of every photo not in `keep`, between tiles,
+    /// and waits. Each is answered `None`.
+    pub fn keep_prefetching(&self, keep: &[u64]) -> Result<(), GpuError> {
+        let (reply, rx) = mpsc::channel();
+        self.send(Request::KeepPrefetching {
+            keep: keep.to_vec(),
+            reply,
+        })?;
+        rx.recv().map_err(|_| GpuError::ThreadGone)?
+    }
+
+    /// Opens photo `id` in Develop from the input its queued prefetch holds,
+    /// so a switch to a neighbor being built does not decode it again, and
+    /// waits. The prefetch is answered `None`. False when none is queued:
+    /// the caller opens it another way.
+    pub fn open_prefetching(&self, id: u64) -> Result<bool, GpuError> {
+        let (reply, rx) = mpsc::channel();
+        self.send(Request::OpenPrefetching { id, reply })?;
+        rx.recv().map_err(|_| GpuError::ThreadGone)?
+    }
+
     /// Queues a Develop render without waiting. The answer is `None` when
     /// a newer Develop render replaced it before it ran, or it is for a
     /// photo that is no longer open.
@@ -242,6 +323,8 @@ fn run(gpu: Gpu, rx: Receiver<Request>) {
     let mut queued: VecDeque<Request> = VecDeque::new();
     // The newest Develop render, held until the open photo's input comes.
     let mut held: Option<Held> = None;
+    // Neighbors' level 1, first in first built.
+    let mut prefetch: VecDeque<Box<Queued>> = VecDeque::new();
     loop {
         // Between requests: the rest of a white balance rebuild, stopped as
         // soon as a request comes (DEV-01, Generations). A failed rest
@@ -260,6 +343,48 @@ fn run(gpu: Gpu, rx: Receiver<Request>) {
                 })
                 .map_err(develop_error)
             });
+        }
+        // Then a neighbor's level 1, stopped the same way.
+        if queued.is_empty()
+            && let Some(q) = prefetch.front_mut()
+        {
+            let d = develop.get_or_insert_with(|| Develop::new(&gpu, TileConfig::default()));
+            let built = guarded(&gpu, || {
+                let src = &q.photo.src;
+                let build = match &mut q.build {
+                    Some(b) => b,
+                    None => q.build.insert(d.start_level1(&gpu, src, &q.transform)),
+                };
+                d.continue_level1(&gpu, src, build, || match rx.try_recv() {
+                    Ok(r) => {
+                        queued.push_back(r);
+                        true
+                    }
+                    Err(_) => false,
+                })
+            });
+            if !matches!(built, Ok(false)) {
+                let Queued {
+                    id,
+                    photo,
+                    reply,
+                    build,
+                    ..
+                } = *prefetch.pop_front().expect("front");
+                // After an error the build is dropped: its buffer may still
+                // be mapped.
+                let answer = built.map(|_| {
+                    Some(Prefetched {
+                        id,
+                        info: PhotoInfo::of(&photo),
+                        level1: build.expect("started").finish(),
+                    })
+                });
+                let _ = reply.send(answer);
+            }
+            if queued.is_empty() {
+                continue;
+            }
         }
         let first = match queued.pop_front() {
             Some(r) => r,
@@ -345,6 +470,29 @@ fn run(gpu: Gpu, rx: Receiver<Request>) {
                     if Some(i) != newest_develop || open != Some(request.photo) =>
                 {
                     let _ = reply.send(Ok(None));
+                }
+                Request::Prefetch(q) => prefetch.push_back(q),
+                Request::KeepPrefetching { keep, reply } => {
+                    let (kept, gone) = prefetch.drain(..).partition(|q| keep.contains(&q.id));
+                    prefetch = kept;
+                    for q in gone {
+                        let _ = q.reply.send(Ok(None));
+                    }
+                    let _ = reply.send(Ok(()));
+                }
+                Request::OpenPrefetching { id, reply } => {
+                    let Some(i) = prefetch.iter().position(|q| q.id == id) else {
+                        let _ = reply.send(Ok(false));
+                        continue;
+                    };
+                    let q = prefetch.remove(i).expect("found");
+                    let _ = q.reply.send(Ok(None));
+                    drop_held(&mut held);
+                    let d =
+                        develop.get_or_insert_with(|| Develop::new(&gpu, TileConfig::default()));
+                    let result = guarded(&gpu, || d.open(&gpu, q.photo).map_err(develop_error));
+                    open = Some(id);
+                    let _ = reply.send(result.map(|()| true));
                 }
                 Request::Develop { request, reply } => {
                     drop_held(&mut held);

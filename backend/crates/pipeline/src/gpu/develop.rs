@@ -33,7 +33,7 @@ use genzo_model::frame::Rect;
 
 use super::base::BaseLayer;
 use super::level0::Level0Cache;
-use super::raw_stages::{Level1, RawStages, Rebuild, TileConfig, level0_reach};
+use super::raw_stages::{Level1, Level1Build, RawStages, Rebuild, TileConfig, level0_reach};
 use super::readback::{ViewTile, visible_tiles};
 use super::view::{ViewStages, compresses, dithers};
 use super::{Gpu, GpuError};
@@ -256,6 +256,31 @@ impl Develop {
     /// it is.
     pub fn provisional(&self) -> bool {
         self.shown.as_ref().is_some_and(|s| s.provisional)
+    }
+
+    /// Starts a prefetched neighbor's level 1 with `transform`, beside the
+    /// open photo's pyramid, on the same tile stages
+    /// ([`RawStages::start_level1`]).
+    pub fn start_level1(
+        &mut self,
+        gpu: &Gpu,
+        src: &RawSource,
+        transform: &CameraTransform,
+    ) -> Level1Build {
+        self.stages.start_level1(gpu, src, transform)
+    }
+
+    /// Runs `build`'s tiles, asking `stop` before each one
+    /// ([`RawStages::continue_level1`]). The open photo's state is left as
+    /// it was.
+    pub fn continue_level1(
+        &mut self,
+        gpu: &Gpu,
+        src: &RawSource,
+        build: &mut Level1Build,
+        stop: impl FnMut() -> bool,
+    ) -> Result<bool, GpuError> {
+        self.stages.continue_level1(gpu, src, build, stop)
     }
 
     fn close(&mut self) {

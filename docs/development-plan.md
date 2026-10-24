@@ -360,7 +360,7 @@ These come from `docs/m0-results.md` and decide how the steps below are built:
    - The settled render does the visible area first. A white balance rebuilds the pyramid in place: first the tiles the view and the base layer read, then the rest, which stops between tiles for a newer request (DEV-01, Settled). The engine wires the order and the stop with generations in step 9. Measure the settled frame's transfer (11 MB raw, about 40 ms on Linux) and compress it if the pause after release shows.
 7. `pipeline`: the histogram, and clipping masks for J.
 8. `cache`: an in-memory LRU of each prefetched neighbor's level 1 in CPU memory (never on the GPU, so the 1 GB budget holds), and a disk tier for embedded previews. `jobs`: a priority scheduler, rayon for CPU work and tokio for IO.
-   - Done in the pipeline: `cache::ByteLru`, a neighbor's level 1 rendered and read back tile by tile, and its upload on a switch, equal to a render bit for bit (DEV-01, Prefetched neighbors). The engine's scheduler, in the direction of travel, comes with step 9.
+   - Done in the pipeline: `cache::ByteLru`, a neighbor's level 1 rendered and read back tile by tile, and its upload on a switch, equal to a render bit for bit (DEV-01, Prefetched neighbors). On the render thread: a photo opened from its level 1 before it is decoded, and the neighbors' builds queued, cancelled between tiles, and opened from their input when a switch reaches one being built. The engine's scheduler, in the direction of travel, comes with step 9.
 9. `engine`: an "open folder" session.
    - Show the embedded preview within one frame. A file Genzo cannot decode shows its embedded preview and says why.
    - Prefetch two neighbors on each side into the CPU cache.

@@ -2,7 +2,7 @@
 //! Develop renders, renders for a photo that is no longer open, and renders
 //! held until the input of a photo opened from its level 1 comes.
 
-use std::sync::mpsc::RecvTimeoutError;
+use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -11,7 +11,7 @@ use genzo_model::edit::{Edit, Phase, WhiteBalanceMode};
 use genzo_pipeline::gpu::develop::{Photo, PhotoInfo, Readback, as_shot};
 use genzo_pipeline::gpu::raw_stages::{Level1, RawStages, TileConfig};
 use genzo_pipeline::gpu::synthetic::{scene_raw, with_camera_profile};
-use genzo_pipeline::gpu::thread::{DevelopRequest, RenderThread};
+use genzo_pipeline::gpu::thread::{DevelopFrame, DevelopRequest, RenderThread};
 use genzo_pipeline::gpu::{AdapterChoice, Gpu, GpuError};
 use genzo_pipeline::reference::sampling::ViewSpec;
 
@@ -189,4 +189,160 @@ fn a_render_that_needs_the_input_waits_for_it() {
     );
     t.open(3, photo((320, 240))).unwrap();
     assert_eq!(held.recv_timeout(WAIT).unwrap().unwrap(), None);
+}
+
+fn frame_of(f: &DevelopFrame) -> &[[u8; 4]] {
+    match &f.readback {
+        Readback::Frame { pixels, .. } => pixels,
+        r => panic!("{r:?}"),
+    }
+}
+
+#[test]
+fn a_neighbor_prefetches_beside_the_open_photo() {
+    let _lock = ONE_DEVICE.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(t) = thread() else { return };
+    let a = photo((640, 480));
+    let (_, kind) = as_shot(&a.src);
+    let defaults = Edit::defaults(kind);
+    let (fit, other) = (ViewSpec::Fit((240, 180)), ViewSpec::Fit((200, 150)));
+    t.open(1, a).unwrap();
+    t.develop(request(1, 1, &defaults, other)).unwrap().unwrap();
+    let before = t.develop(request(2, 1, &defaults, fit)).unwrap().unwrap();
+
+    let b = photo((500, 400));
+    let (white, _) = as_shot(&b.src);
+    let want = level1(&b);
+    let got = t
+        .prefetch(2, b, white)
+        .unwrap()
+        .recv_timeout(WAIT)
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert_eq!(got.id, 2);
+    assert_eq!(got.info, PhotoInfo::of(&photo((500, 400))));
+    assert!(got.level1.texels == want.texels, "the level 1, bit for bit");
+
+    // The open photo's pyramid is as it was: sampled again, the same frame.
+    t.develop(request(3, 1, &defaults, other)).unwrap().unwrap();
+    let after = t.develop(request(4, 1, &defaults, fit)).unwrap().unwrap();
+    assert!(after.reran.sample, "{after:?}");
+    assert!(frame_of(&before) == frame_of(&after), "the open photo");
+
+    // A switch to it renders as the photo opened from its input.
+    t.open_level1(2, got.info, Arc::new(got.level1)).unwrap();
+    let switched = t.develop(request(5, 2, &defaults, fit)).unwrap().unwrap();
+    assert!(!switched.reran.pyramid && !switched.provisional);
+    t.open(3, photo((500, 400))).unwrap();
+    let opened = t.develop(request(6, 3, &defaults, fit)).unwrap().unwrap();
+    assert!(
+        frame_of(&switched) == frame_of(&opened),
+        "the switch's frame"
+    );
+}
+
+#[test]
+fn prefetches_no_longer_wanted_are_cancelled() {
+    let _lock = ONE_DEVICE.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(t) = thread() else { return };
+    t.open(1, photo((320, 240))).unwrap();
+    let queue = |id, size| {
+        let p = photo(size);
+        let (white, _) = as_shot(&p.src);
+        t.prefetch(id, p, white).unwrap()
+    };
+    let two = queue(2, (2400, 1600));
+    let three = queue(3, (640, 480));
+    let four = queue(4, (500, 400));
+    t.keep_prefetching(&[3]).unwrap();
+    // The first may have finished before the cancel came.
+    let two = two.recv_timeout(WAIT).unwrap().unwrap();
+    eprintln!(
+        "the first: {}",
+        if two.is_some() { "built" } else { "cancelled" }
+    );
+    assert_eq!(
+        four.recv_timeout(WAIT).unwrap().unwrap().map(|p| p.id),
+        None
+    );
+    let three = three.recv_timeout(WAIT).unwrap().unwrap().unwrap();
+    assert!(three.level1.texels == level1(&photo((640, 480))).texels);
+}
+
+#[test]
+fn queued_prefetches_build_one_after_another() {
+    let _lock = ONE_DEVICE.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(t) = thread() else { return };
+    let a = photo((4000, 3000));
+    let (_, kind) = as_shot(&a.src);
+    let mut warm = Edit::defaults(kind);
+    warm.white_balance.mode = WhiteBalanceMode::Custom;
+    warm.white_balance.temp = 4300.0;
+    t.open(1, a).unwrap();
+    let (b, c) = (photo((1200, 900)), photo((1100, 800)));
+    let (wb, wc) = (as_shot(&b.src).0, as_shot(&c.src).0);
+    // Queued while the thread rebuilds the open photo's pyramid, so it
+    // takes them in one go; then nothing more is asked. Each build follows
+    // the last without waiting for a request.
+    let render = t
+        .submit(request(1, 1, &warm, ViewSpec::Fit((160, 120))))
+        .unwrap();
+    let two = t.prefetch(2, b, wb).unwrap();
+    let three = t.prefetch(3, c, wc).unwrap();
+    t.keep_prefetching(&[2, 3]).unwrap();
+    assert!(render.recv_timeout(WAIT).unwrap().unwrap().is_some());
+    for (rx, id) in [(two, 2), (three, 3)] {
+        let got = rx.recv_timeout(WAIT).unwrap().unwrap().map(|p| p.id);
+        assert_eq!(got, Some(id));
+    }
+}
+
+#[test]
+fn a_switch_to_a_neighbor_being_built_opens_its_input() {
+    let _lock = ONE_DEVICE.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(t) = thread() else { return };
+    let size = (1600, 1200);
+    let p = photo(size);
+    let (white, kind) = as_shot(&p.src);
+    let defaults = Edit::defaults(kind);
+    let fit = ViewSpec::Fit((240, 180));
+    t.open(1, photo((320, 240))).unwrap();
+    let pending = t.prefetch(2, p, white).unwrap();
+    assert!(!t.open_prefetching(9).unwrap(), "nothing queued for 9");
+    assert!(t.open_prefetching(2).unwrap());
+    assert_eq!(
+        pending.recv_timeout(WAIT).unwrap().unwrap().map(|p| p.id),
+        None
+    );
+    let f = t.develop(request(1, 2, &defaults, fit)).unwrap().unwrap();
+    // Opened from its input: a settled white needs nothing more.
+    let mut warm = defaults.clone();
+    warm.white_balance.mode = WhiteBalanceMode::Custom;
+    warm.white_balance.temp = 4300.0;
+    assert!(t.develop(request(2, 2, &warm, fit)).unwrap().is_some());
+    t.open(3, photo(size)).unwrap();
+    let g = t.develop(request(3, 3, &defaults, fit)).unwrap().unwrap();
+    assert!(frame_of(&f) == frame_of(&g), "as the photo opened again");
+}
+
+#[test]
+fn a_render_does_not_wait_for_a_prefetch() {
+    let _lock = ONE_DEVICE.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(t) = thread() else { return };
+    let a = photo((320, 240));
+    let (_, kind) = as_shot(&a.src);
+    let defaults = Edit::defaults(kind);
+    t.open(1, a).unwrap();
+    let p = photo((4000, 3000));
+    let (white, _) = as_shot(&p.src);
+    let pending = t.prefetch(2, p, white).unwrap();
+    // The build stops between tiles for the render, and resumes after it.
+    let f = t.develop(request(1, 1, &defaults, ViewSpec::Fit((160, 120))));
+    assert!(f.unwrap().is_some());
+    assert!(
+        matches!(pending.try_recv(), Err(mpsc::TryRecvError::Empty)),
+        "the render waited for the whole build"
+    );
+    assert!(pending.recv_timeout(WAIT).unwrap().unwrap().is_some());
 }
