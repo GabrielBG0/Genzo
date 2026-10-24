@@ -365,7 +365,7 @@ These come from `docs/m0-results.md` and decide how the steps below are built:
    - Show the embedded preview within one frame. A file Genzo cannot decode shows its embedded preview and says why.
    - Prefetch two neighbors on each side into the CPU cache.
    - Own the edit document and its undo and redo, per photo (decided), in memory for the session.
-   - Done: the session itself (`engine::strip`). Photo ids stable by canonical path across folder switches, `open_folder` selecting the first photo, `select_photo` and `step` keeping the direction of travel, and a switch that decodes and opens through an injectable decoder. Criterion 6 of LIB-09 is tested. Still to come: the prefetch worker, its cache and the fast switch from a neighbor's level 1, and `cli bench open`.
+   - Done: the session itself (`engine::strip`). Photo ids stable by canonical path across folder switches, `open_folder` selecting the first photo, `select_photo` and `step` keeping the direction of travel, and a switch that decodes and opens through an injectable decoder. Criterion 6 of LIB-09 is tested. Still to come: the prefetch worker, its cache and the fast switch from a neighbor's level 1, and `cli bench open` (next PR); the embedded preview on a switch, each strip photo's `kind`, and LIB-09's criterion 3, unsupported files with their reason (after it).
 10. `export`: basic JPEG with size and quality, through the same GPU pipeline, tiled, with an embedded sRGB profile.
 11. `cli`: `open`, `render`, `export`, `bench open` (first pixels, fit render, neighbor switch) and the golden-image tests.
 
