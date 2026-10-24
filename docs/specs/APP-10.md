@@ -30,7 +30,7 @@ A delta without a gesture is a start and an end in one, so it makes one step (DE
 
 **A change that leaves the edit as it was makes no step.** That covers a drag that ends where it started and a value clamped back to the current one. The edit is compared after clamping (DEV-01, *Data*).
 
-**Labels** are the control's name as the panel shows it ("Exposure", "Temp", "Crop", "Rotate", "Reset all", "White balance: Daylight"). A delta that changes several fields at once, such as a pick or a preset, has one label. The app menu shows them ("Undo Exposure"), and so will the M3 History panel.
+**Labels** are the control's name as the panel shows it: "Exposure", "Crop", "Rotate" (a turn or a flip), "Reset Exposure", "Reset all". Everything that sets the white balance, whether Temp, Tint, a preset or a pick, is "White balance", because one delta sets the whole of it. A delta that changes several fields at once has one label. The app menu shows them ("Undo Exposure"), and so will the M3 History panel.
 
 ### Undo and redo
 
