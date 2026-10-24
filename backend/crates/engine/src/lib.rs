@@ -24,8 +24,8 @@ use genzo_pipeline::gpu::{AdapterChoice, GpuError};
 pub mod contract;
 pub mod develop;
 pub mod files;
-pub mod history;
 pub mod folder;
+pub mod history;
 
 /// The contract types, re-exported for the shell and the cli.
 pub mod api {
