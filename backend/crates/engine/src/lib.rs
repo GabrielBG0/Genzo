@@ -23,12 +23,15 @@ use genzo_pipeline::gpu::{AdapterChoice, GpuError};
 
 pub mod contract;
 pub mod files;
+pub mod history;
 
 /// The contract types, re-exported for the shell and the cli.
 pub mod api {
     pub use genzo_model::CONTRACT_VERSION;
     pub use genzo_model::api::*;
     pub use genzo_model::contract::ContractVersion;
+    /// The edit struct and its changes (DEV-01, *Data*; APP-10).
+    pub use genzo_model::edit;
     pub use genzo_model::frame::{
         PixelFormat, Rect, TILE_HEADER_LEN, TILE_MAGIC, TILE_SIZE, TileDecodeError, TileHeader,
     };
