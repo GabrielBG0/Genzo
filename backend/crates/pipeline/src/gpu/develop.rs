@@ -33,7 +33,7 @@ use genzo_model::frame::Rect;
 
 use super::base::BaseLayer;
 use super::level0::Level0Cache;
-use super::raw_stages::{Level1, RawStages, Rebuild, TileConfig, level0_reach};
+use super::raw_stages::{Level1, Level1Build, RawStages, Rebuild, TileConfig, level0_reach};
 use super::readback::{ViewTile, visible_tiles};
 use super::view::{ViewStages, compresses, dithers};
 use super::{Gpu, GpuError};
@@ -98,6 +98,24 @@ impl PhotoInfo {
             orientation: photo.orientation,
             color: photo.src.color.clone(),
             encoding: photo.src.encoding.clone(),
+        }
+    }
+
+    /// The transform stages 2 and 4 use for `edit`'s white balance: what
+    /// [`Develop::render`] holds the pyramid to, so a level 1 built with it
+    /// needs no rebuild once opened.
+    pub fn white(&self, edit: &Edit) -> CameraTransform {
+        let wb = &edit.white_balance;
+        if wb.mode == WhiteBalanceMode::AsShot {
+            return as_shot_of(&self.color, self.encoding.as_ref()).0;
+        }
+        let (temp, tint) = (f64::from(wb.temp), f64::from(wb.tint));
+        match &self.encoding {
+            Some(e) => balanced_encoded_transform(e, temp, tint),
+            None => camera_transform(
+                &self.color,
+                Some(genzo_color::camera::xy_from_temperature(temp, tint)),
+            ),
         }
     }
 }
@@ -258,6 +276,31 @@ impl Develop {
         self.shown.as_ref().is_some_and(|s| s.provisional)
     }
 
+    /// Starts a prefetched neighbor's level 1 with `transform`, beside the
+    /// open photo's pyramid, on the same tile stages
+    /// ([`RawStages::start_level1`]).
+    pub fn start_level1(
+        &mut self,
+        gpu: &Gpu,
+        src: &RawSource,
+        transform: &CameraTransform,
+    ) -> Level1Build {
+        self.stages.start_level1(gpu, src, transform)
+    }
+
+    /// Runs `build`'s tiles, asking `stop` before each one
+    /// ([`RawStages::continue_level1`]). The open photo's state is left as
+    /// it was.
+    pub fn continue_level1(
+        &mut self,
+        gpu: &Gpu,
+        src: &RawSource,
+        build: &mut Level1Build,
+        stop: impl FnMut() -> bool,
+    ) -> Result<bool, GpuError> {
+        self.stages.continue_level1(gpu, src, build, stop)
+    }
+
     fn close(&mut self) {
         self.photo = None;
         self.shown = None;
@@ -307,18 +350,10 @@ impl Develop {
 
     /// The transform stages 2 and 4 use for `edit`'s white balance.
     fn transform(p: &Loaded, edit: &Edit) -> CameraTransform {
-        let wb = &edit.white_balance;
-        if wb.mode == WhiteBalanceMode::AsShot {
+        if edit.white_balance.mode == WhiteBalanceMode::AsShot {
             return p.as_shot.clone();
         }
-        let (temp, tint) = (f64::from(wb.temp), f64::from(wb.tint));
-        match &p.info.encoding {
-            Some(e) => balanced_encoded_transform(e, temp, tint),
-            None => camera_transform(
-                &p.info.color,
-                Some(genzo_color::camera::xy_from_temperature(temp, tint)),
-            ),
-        }
+        p.info.white(edit)
     }
 
     /// Renders `edit` (clamped, `Edit::clamped`) in `view` for `target`,
