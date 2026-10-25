@@ -23,7 +23,9 @@ use genzo_pipeline::raw::RawSource;
 use crate::develop::{Applied, ViewSpec};
 use crate::folder::{FolderPhoto, list_folder};
 use crate::history::PhotoEdits;
+use crate::prefetch::{Worker, neighbors};
 use crate::{Engine, EngineError};
+use genzo_model::edit::Edit;
 
 /// What opens a photo's file: its decoded input and its orientation.
 /// Injected so tests can see which files are decoded, and when.
@@ -131,7 +133,14 @@ impl Engine {
             }
             s.strip.photos.first().map(|(id, _)| *id)
         };
-        let first = first.map(|id| self.switch_to(id));
+        let first = match first {
+            Some(id) => Some(self.switch_to(id)),
+            // Nothing to prefetch around.
+            None => {
+                self.replan(None);
+                None
+            }
+        };
         Ok(Opened {
             strip: self.strip(),
             first,
@@ -193,7 +202,7 @@ impl Engine {
     /// The switch itself; the caller holds `switching`.
     fn switch_to(&self, id: u64) -> Result<Applied, EngineError> {
         let gpu = self.gpu()?;
-        let path = {
+        let (path, edit) = {
             let mut s = self.session.lock().expect("session");
             let index = s
                 .strip
@@ -214,20 +223,111 @@ impl Engine {
                 ViewSpec::Fit(out) | ViewSpec::Region { out, .. } => out,
             };
             s.view = ViewSpec::Fit(out);
-            s.strip.photos[index].1.path.clone()
+            let edit = s.edits.get(&id).map(|p| p.current().clone());
+            (s.strip.photos[index].1.path.clone(), edit)
         };
-        let (src, orientation) = self.decode_off_thread(path)?;
-        {
-            let (_, kind) = as_shot(&src);
-            let size = src.size();
-            let mut s = self.session.lock().expect("session");
-            s.edits
-                .entry(id)
-                .or_insert_with(|| PhotoEdits::new(kind, size, orientation));
+        // A neighbor prefetched for its edit: shown from its level 1 at
+        // once, its input decoded after, before any neighbor.
+        if let Some(c) = edit.and_then(|e| self.prefetch.cached(id, &e)) {
+            gpu.open_level1(id, c.info.clone(), c.level1.clone())?;
+            self.session.lock().expect("session").open = Some(id);
+            self.replan(Some((id, path)));
+            return self.render(false, Phase::End);
         }
-        gpu.open(id, Photo { src, orientation })?;
+        // One being built: opened from the input its build holds.
+        if !gpu.open_prefetching(id)? {
+            let (src, orientation) = match self.decode_off_thread(path) {
+                Ok(d) => d,
+                Err(e) => {
+                    self.prefetch.failed(id);
+                    self.replan(None);
+                    return Err(e);
+                }
+            };
+            {
+                let (_, kind) = as_shot(&src);
+                let size = src.size();
+                let mut s = self.session.lock().expect("session");
+                s.edits
+                    .entry(id)
+                    .or_insert_with(|| PhotoEdits::new(kind, size, orientation));
+            }
+            gpu.open(id, Photo { src, orientation })?;
+        }
         self.session.lock().expect("session").open = Some(id);
+        self.replan(None);
         self.render(false, Phase::End)
+    }
+
+    /// Plans the current photo's neighbors after a switch: `attach` first,
+    /// then those not cached for their edit, in the direction of travel.
+    /// Cancels the builds of the photos no longer neighbors.
+    fn replan(&self, attach: Option<(u64, PathBuf)>) {
+        let Some(gpu) = self.gpu.clone() else {
+            return;
+        };
+        let around: Vec<(u64, PathBuf, Option<Edit>)> = {
+            let s = self.session.lock().expect("session");
+            match s.strip.current {
+                None => Vec::new(),
+                Some(i) => neighbors(s.strip.photos.len(), i, s.strip.direction)
+                    .into_iter()
+                    .map(|j| {
+                        let (id, p) = &s.strip.photos[j];
+                        let edit = s.edits.get(id).map(|e| e.current().clone());
+                        (*id, p.path.clone(), edit)
+                    })
+                    .collect(),
+            }
+        };
+        let around = around
+            .into_iter()
+            .map(|(id, path, edit)| {
+                let cached = edit.is_some_and(|e| self.prefetch.cached(id, &e).is_some());
+                (id, path, cached)
+            })
+            .collect();
+        let wanted = self.prefetch.replan(attach, around);
+        let _ = gpu.keep_prefetching(&wanted);
+        let mut worker = self.worker.lock().expect("worker");
+        if worker.is_none() {
+            let w = Worker {
+                shared: self.prefetch.clone(),
+                gpu,
+                session: self.session.clone(),
+                generations: self.generations.clone(),
+                decoder: self.decoder.clone(),
+            };
+            *worker = std::thread::Builder::new()
+                .name("genzo-prefetch".into())
+                .spawn(move || w.run())
+                .ok();
+        }
+    }
+
+    /// Waits until the prefetch has nothing left to do: for the tests and
+    /// `cli bench open`.
+    #[doc(hidden)]
+    pub fn wait_prefetch_idle(&self) {
+        self.prefetch.wait_idle();
+    }
+
+    /// The strip's photos whose level 1 is cached: for the tests.
+    #[doc(hidden)]
+    pub fn prefetched(&self) -> Vec<u64> {
+        let s = self.session.lock().expect("session");
+        s.strip
+            .photos
+            .iter()
+            .map(|(id, _)| *id)
+            .filter(|id| self.prefetch.is_cached(*id))
+            .collect()
+    }
+
+    /// The render from level 0 of a photo whose last frame was
+    /// provisional, once its input came, if there is one not taken yet.
+    pub fn take_sharpened(&self) -> Option<Applied> {
+        self.prefetch.take_sharpened()
     }
 
     /// Runs the decoder on the rayon pool and waits for it.

@@ -45,6 +45,12 @@ Sources: FEATURES.md (LIB-09), the plan's M1 items (backend item 9, the engine's
 - **The order follows the direction of travel** (owner, 2026-10-24). After moving right: next, next + 1, previous, previous − 1. After moving left, the mirror. On opening a folder, as after moving right.
 - **A switch cancels prefetch work for photos that are no longer neighbors**, between tiles. A neighbor already cached is not decoded again.
 - **Switching to a prefetched neighbor** renders at Fit from its cached pyramid, without decoding. Budget: under 150 ms (plan, M1 budgets; `cli bench open`). Its decoded input, which 1:1 and a settled white balance need, is decoded in the background after the switch (DEV-01).
+- **How the engine runs it** (`engine::prefetch`):
+  - One worker thread, one photo at a time. It decodes the photo, has the render thread build its level 1 with its edit's white balance, waits for that, and keeps it in the cache. A queued build holds its decoded input, so only one is queued at a time.
+  - After a switch to a cached neighbor, that photo's input is first in the worker's queue. It can still wait behind the task the worker is already running, if that neighbor is still wanted: one decode, or one build. If its last frame was provisional (a view that wants level 0) and nothing newer was asked for, and no gesture is in progress, the engine renders it again from level 0. Until contract 0.5.0 makes that an event, the caller takes the frame with `take_sharpened`.
+  - **A cached level 1 counts only while it fits the photo's edit**, the same test the render thread holds the pyramid to (`PhotoInfo::level1_fits`). A neighbor whose white balance changed since its build is dropped and built again.
+  - A switch to a neighbor whose build is queued or running opens it from the input that build holds. A neighbor whose decode finishes after a switch made it no longer a neighbor, or made it current, is not built.
+  - **Known gap:** a switch to a photo the worker is decoding at that moment decodes it a second time, on the switch. The worker's copy is then dropped.
 
 ## Inputs and shortcuts
 
@@ -96,7 +102,7 @@ Nothing is stored on disk in M1. The engine holds, for the session:
 1. **Listing:** a folder with RAW, DNG, JPEG, HEIC, TIFF and PNG files, XMP sidecars, a hidden file, a subfolder and an unknown extension lists exactly the image files directly inside it (engine test, a temporary folder of corpus copies).
 2. **Order:** files with capture times sort by time with sub-seconds, ties and undated files by natural file name, undated after dated (engine test, synthetic EXIF).
 3. **Unsupported files** are listed, with their reason, and their controls are disabled (engine test with a Nikon HE file where the corpus has one, else a synthetic one).
-4. **Prefetch order** follows the direction of travel, and a switch cancels the work for photos that are no longer neighbors (engine test with a fake decoder that records its calls).
+4. **Prefetch order** follows the direction of travel, and a switch cancels the work for photos that are no longer neighbors (engine test with a fake decoder that records its calls, `tests/prefetch.rs`).
 5. **Switching to a prefetched neighbor** renders at Fit without decoding, under 150 ms on the reference desktop (`cli bench open`, recorded in `docs/m1-results.md`).
 6. **The edited dot** follows the edit: set by an edit, cleared by undoing back to the defaults, kept across a folder switch and back (engine test, `tests/strip.rs`).
 7. **Frontend** (Vitest and Playwright against the fake engine): the ring, the dot, ← and →, the empty and no-photos states, and visible-first thumbnails, compared with the handoff's Filmstrip.

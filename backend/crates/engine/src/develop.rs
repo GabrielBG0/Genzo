@@ -10,11 +10,13 @@
 //! the shell's commands come with it.
 
 use std::collections::HashMap;
-use std::sync::mpsc;
+use std::sync::{Mutex, mpsc};
+
+use genzo_jobs::Generations;
 
 use genzo_model::edit::{Change, Edit, Phase};
 use genzo_pipeline::gpu::develop::{Photo, as_shot};
-use genzo_pipeline::gpu::thread::{DevelopFrame, DevelopRequest};
+use genzo_pipeline::gpu::thread::{DevelopFrame, DevelopRequest, RenderThread};
 use genzo_pipeline::raw::RawSource;
 
 use crate::history::{PhotoEdits, Refused};
@@ -33,6 +35,11 @@ pub(crate) struct Session {
     pub(crate) view: ViewSpec,
     target: Target,
     pub(crate) strip: crate::strip::StripSession,
+    /// The generation of the last Develop render issued.
+    pub(crate) issued: u64,
+    /// The generation of the last Develop frame, if it came back
+    /// provisional: drawn from level 1 before the photo's input came.
+    pub(crate) provisional: Option<u64>,
 }
 
 impl Default for Session {
@@ -44,6 +51,8 @@ impl Default for Session {
             view: ViewSpec::Fit((1280, 960)),
             target: Target::Srgb,
             strip: Default::default(),
+            issued: 0,
+            provisional: None,
         }
     }
 }
@@ -187,28 +196,64 @@ impl Engine {
 
     /// Renders the open photo's current edit with a new generation.
     pub(crate) fn render(&self, recorded: bool, phase: Phase) -> Result<Applied, EngineError> {
-        let gpu = self.gpu()?;
-        let (state, request) = {
-            let s = self.session.lock().expect("session");
-            let id = s.open.ok_or(EngineError::NoPhoto)?;
-            let p = &s.edits[&id];
-            let request = DevelopRequest {
-                generation: self.generations.next(),
-                photo: id,
-                edit: p.current().clone(),
-                view: s.view,
-                target: s.target,
-                phase,
-            };
-            (state(id, p), request)
-        };
-        let frame = gpu.develop(request)?;
-        Ok(Applied {
+        render_when(
+            self.gpu()?,
+            &self.session,
+            &self.generations,
             recorded,
-            state,
-            frame,
-        })
+            phase,
+            |_| true,
+        )
+        .map(|a| a.expect("always rendered"))
     }
+}
+
+/// Renders the open photo's current edit with a new generation, and notes
+/// whether the frame came back provisional. The engine's renders and the
+/// prefetch worker's both come here. Nothing is issued, and the answer is
+/// `None`, unless `when` holds of the session as the generation is taken:
+/// the check and the request are one step.
+pub(crate) fn render_when(
+    gpu: &RenderThread,
+    session: &Mutex<Session>,
+    generations: &Generations,
+    recorded: bool,
+    phase: Phase,
+    when: impl FnOnce(&Session) -> bool,
+) -> Result<Option<Applied>, EngineError> {
+    let (state, request) = {
+        let mut s = session.lock().expect("session");
+        let id = s.open.ok_or(EngineError::NoPhoto)?;
+        if !when(&s) {
+            return Ok(None);
+        }
+        let generation = generations.next();
+        s.issued = generation;
+        let p = &s.edits[&id];
+        let request = DevelopRequest {
+            generation,
+            photo: id,
+            edit: p.current().clone(),
+            view: s.view,
+            target: s.target,
+            phase,
+        };
+        (state(id, p), request)
+    };
+    let generation = request.generation;
+    let frame = gpu.develop(request)?;
+    if let Some(f) = &frame {
+        let mut s = session.lock().expect("session");
+        // A frame older than the last one issued says nothing about it.
+        if s.issued == generation {
+            s.provisional = f.provisional.then_some(generation);
+        }
+    }
+    Ok(Some(Applied {
+        recorded,
+        state,
+        frame,
+    }))
 }
 
 /// A file's bytes decoded into the render thread's input, with the file's

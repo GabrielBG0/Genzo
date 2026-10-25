@@ -441,7 +441,7 @@ A software adapter uses the same sizes.
   - A Fit view that level 1 covers, tone and color changes, and a white balance drag render as usual. Their frames equal a freshly opened photo's, bit for bit.
   - **A view that wants level 0** upsamples level 1 at once and is *provisional*. This covers a Fit view larger than level 1 (a 12 MP photo on a 4K screen), a tight crop, and 1:1. Once the input comes, the engine renders it again from level 0 (owner, 2026-10-24).
   - **A settled new white**, which rebuilds the pyramid, waits on the render thread for the input. A newer request still replaces it.
-- **Who owns it:** LIB-09 and the engine session.
+- **Who owns it:** LIB-09 and the engine session (`engine::prefetch`). A cached level 1 is used only while it fits the photo's edit (`PhotoInfo::level1_fits`).
 
 ### Re-runs, quality levels and generations
 

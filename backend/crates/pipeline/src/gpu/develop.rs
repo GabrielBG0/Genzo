@@ -101,6 +101,13 @@ impl PhotoInfo {
         }
     }
 
+    /// Whether `level1`, built for this photo, is what `edit`'s white
+    /// balance renders: opened, it needs no rebuild. A cache of prefetched
+    /// neighbors keeps an entry only while this holds.
+    pub fn level1_fits(&self, level1: &Level1, edit: &Edit) -> bool {
+        same_white(&self.white(edit), &level1.transform)
+    }
+
     /// The transform stages 2 and 4 use for `edit`'s white balance: what
     /// [`Develop::render`] holds the pyramid to, so a level 1 built with it
     /// needs no rebuild once opened.
