@@ -28,6 +28,7 @@ use genzo_pipeline::gpu::develop::{Photo, PhotoInfo, as_shot};
 use genzo_pipeline::gpu::raw_stages::Level1;
 use genzo_pipeline::gpu::thread::RenderThread;
 
+use crate::EngineError;
 use crate::develop::{Applied, Session};
 use crate::history::PhotoEdits;
 use crate::strip::{Decode, Direction};
@@ -205,6 +206,15 @@ impl Shared {
 }
 
 impl Worker {
+    /// Notes what a decode said about its file, for the strip's `kind`.
+    fn learn<T>(&self, id: u64, decoded: &Result<T, EngineError>) {
+        self.session
+            .lock()
+            .expect("session")
+            .strip
+            .learn(id, decoded);
+    }
+
     pub fn run(self) {
         while let Some(task) = self.shared.next() {
             match task {
@@ -215,7 +225,9 @@ impl Worker {
     }
 
     fn attach(&self, id: u64, path: &std::path::Path) {
-        let Ok((src, _)) = self.decoder.decode(path) else {
+        let decoded = self.decoder.decode(path);
+        self.learn(id, &decoded);
+        let Ok((src, _)) = decoded else {
             // Its level 1 shows; the views that need level 0 stay
             // provisional.
             self.shared.failed(id);
@@ -257,6 +269,7 @@ impl Worker {
 
     fn neighbor(&self, id: u64, path: &std::path::Path) {
         let decoded = self.decoder.decode(path);
+        self.learn(id, &decoded);
         // A switch while it decoded may have made it current, or no longer
         // a neighbor.
         if !self.shared.still_wanted(id) {

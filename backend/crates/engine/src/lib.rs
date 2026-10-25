@@ -65,6 +65,16 @@ pub enum EngineError {
     Io(String),
     #[error("{0}")]
     Decode(String),
+    /// A file Genzo recognizes but does not render, with the reason the
+    /// status bar shows (DEV-01, States).
+    #[error("{0}")]
+    Unsupported(String),
+    /// Truncated, or failing a decoder's bounds checks (DEV-01, States).
+    #[error("This file is damaged ({0})")]
+    Damaged(String),
+    /// A file listed in the strip that is no longer there (LIB-09, States).
+    #[error("This file is no longer there ({0})")]
+    Missing(String),
     #[error("no GPU: {0}")]
     NoGpu(String),
     #[error("{0}")]
@@ -85,8 +95,19 @@ impl From<GpuError> for EngineError {
 }
 
 impl EngineError {
+    /// A decoder's error as the photo state it puts the file in: damaged
+    /// when corrupt, else unsupported with its own message as the reason
+    /// ("Nikon High Efficiency RAW is not supported yet").
     fn decode(e: genzo_imgio::DecodeError) -> Self {
-        Self::Decode(e.to_string())
+        use genzo_imgio::DecodeError as D;
+        match e {
+            D::Corrupt { message, .. } => Self::Damaged(message),
+            D::Unsupported(_, reason) => Self::Unsupported(reason),
+            D::UnknownFormat => {
+                Self::Unsupported("This file's format is not one Genzo reads".into())
+            }
+            e @ D::NotBuiltIn(..) => Self::Unsupported(e.to_string()),
+        }
     }
 }
 

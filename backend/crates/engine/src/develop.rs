@@ -17,7 +17,7 @@ use genzo_jobs::Generations;
 use genzo_model::edit::{Change, Edit, Phase};
 use genzo_pipeline::gpu::develop::{Photo, as_shot};
 use genzo_pipeline::gpu::thread::{DevelopFrame, DevelopRequest, RenderThread};
-use genzo_pipeline::raw::RawSource;
+use genzo_pipeline::raw::{RawError, RawSource};
 
 use crate::history::{PhotoEdits, Refused};
 use crate::{Engine, EngineError};
@@ -264,7 +264,13 @@ pub(crate) fn decode(data: &[u8]) -> Result<(RawSource, u8), EngineError> {
     let orientation = img.orientation;
     RawSource::from_decoded(img)
         .map(|src| (src, orientation))
-        .map_err(|e| EngineError::Decode(e.to_string()))
+        .map_err(|e| match e {
+            // Corrupt levels are a damaged file; the rest (missing color
+            // data, an encoding M1 refuses) unsupported (DEV-01, States).
+            RawError::Levels(m) => EngineError::Damaged(m),
+            RawError::Unsupported(m) => EngineError::Unsupported(m),
+            e @ RawError::Encoding(_) => EngineError::Unsupported(e.to_string()),
+        })
 }
 
 fn state(id: u64, p: &PhotoEdits) -> EditState {
