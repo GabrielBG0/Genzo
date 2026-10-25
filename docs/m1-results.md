@@ -35,6 +35,7 @@ The photo-open budgets, and LIB-09's criterion 5: switching to a prefetched neig
   - then jumps four right to a photo that isn't one, which is decoded, opened and rendered;
   - and repeats.
 - The first pixels are timed once the prefetch is idle, so the neighbors' decodes don't share the CPU with them.
+- **First pixels (since 2026-10-25, LIB-09's preview on a switch):** from the switch call to its embedded preview reaching the engine's preview sink, upright and in the frame's target. On a switch to a photo not prefetched, it is read from the file while the photo decodes beside it. On a switch to a neighbor, it is the preview the prefetch kept.
 
 **Results** (p95; p50 in brackets):
 
@@ -46,6 +47,17 @@ The photo-open budgets, and LIB-09's criterion 5: switching to a prefetched neig
 
 Samples: 12 switches, 9 fit renders and 60 previews per folder.
 
+**With the preview shown on a switch** (2026-10-25, same setup; p95, p50 in brackets):
+
+| Target | Budget | 12 MP | 48 MP |
+|---|---|---|---|
+| First pixels, a switch to a photo not prefetched | under 100 ms | 30.1 ms (25.9) | 71.8 ms (56.4) |
+| First pixels, a switch to a prefetched neighbor | under 100 ms | 0.0 ms | 0.0 ms |
+| Switch to a prefetched neighbor | under 150 ms | 20.1 ms (18.5) | 84.0 ms (67.7) |
+| Full fit-view render, not prefetched | under 1 s, under 2 s | 81 ms (76) | 1404 ms (1165) |
+
+Samples: 9 cold switches and 12 neighbor switches per folder. The cold first pixels take longer than the preview's decode alone (the table above), because the preview read and the photo's decode now run at the same time and each reads the whole file.
+
 **The 12 MP switch is provisional at this view.** A Fit view reads level 1 only when level 1 covers the whole view on both sides (`sampling::plan_view`). Here the view is 2560 × 1440, and level 1 of the 4032 × 3024 photo is 2016 × 1512: narrower than the view, though wider than the 1920 × 1440 frame. So the switch draws its frame from level 1 in place of level 0. The frame from level 0 follows once the input is decoded and attached: at 60 ms p50, 62 ms p95, after the switch began. At 48 MP, level 1 (4032 × 3024) covers the view, so the switch is final.
 
 **Result:** every budget measured here holds on the reference desktop.
@@ -53,8 +65,8 @@ Samples: 12 switches, 9 fit renders and 60 previews per folder.
 **Room left:**
 - **The 48 MP switch is the closest:** 99 of 150 ms. Uploading the 98 MB level 1 dominates; DEV-01 measured the GPU part of the switch alone at 22.5 ms.
 - **The 48 MP first pixels read the whole 28 MB file** before the preview is found. Reading only the head would cut that, if the budget gets tight.
+- **A cold switch reads the file twice**, once for its preview and once for its decode, side by side: 72 ms of 100 at 48 MP. Reading it once for both, or the preview first, would cut that.
 
 **Still open:**
 - **The bench runs by hand.** `scripts/gpu-check.sh` doesn't run it yet, since it needs corpus copies. CI only runs a smoke test on small PNGs (`cli/tests/bench_open.rs`).
-- **The embedded preview isn't shown on a switch yet** (LIB-09, after this). "First pixels" measures its decode, not its display.
 - **The other machines** (macOS, the Linux laptop) are not measured.
