@@ -9,6 +9,7 @@ use std::process::ExitCode;
 use std::time::Instant;
 
 use genzo_engine::api::{Command, Event, PixelFormat, SpikeSource};
+use genzo_engine::develop::{Applied, Target, ViewSpec};
 use genzo_engine::{Engine, contract, files};
 
 const USAGE: &str = "\
@@ -24,6 +25,9 @@ commands:
   bench decode FILE [T N]      decode FILE N times with T threads, print p50/p95
   bench gpu [W H N]            render a W×H synthetic raw into a 2560 px viewport,
                                N steps per slider, print GPU and engine p50/p95
+  bench open FOLDER [W H N]    open FOLDER at Fit in a W×H view, N times: first
+                               pixels, the fit render of photos not prefetched and
+                               the switch to a prefetched neighbor, p50/p95
 
 Every bench command also takes `--json FILE`: it writes the p50/p95 of each
 metric there, for scripts/check-bench.py to compare against a stored baseline.
@@ -91,6 +95,7 @@ fn main() -> ExitCode {
         ["bench", "test-pattern", rest @ ..] => bench_test_pattern(rest, &mut metrics),
         ["bench", "decode", file, rest @ ..] => bench_decode(file, rest, &mut metrics),
         ["bench", "gpu", rest @ ..] => bench_gpu(rest, &mut metrics),
+        ["bench", "open", folder, rest @ ..] => bench_open(folder, rest, &mut metrics),
         _ => Err(USAGE.to_owned()),
     };
     let result = result.and_then(|()| match &json_out {
@@ -287,6 +292,138 @@ fn bench_gpu(args: &[&str], metrics: &mut Metrics) -> Result<(), String> {
         println!(
             "{name}, {n} steps: {gpu}; engine (render, readback, tiles) p50 {e50:.2} ms, p95 {e95:.2} ms"
         );
+    }
+    Ok(())
+}
+
+/// LIB-09 criterion 5 and the photo-open budgets: opening a folder in
+/// Develop at Fit.
+///
+/// - **First pixels:** each file read and its embedded preview decoded.
+/// - **Fit render:** a switch to a photo not prefetched: decoded, opened
+///   and rendered settled at Fit.
+/// - **Neighbor switch:** a switch to a prefetched neighbor, rendered from
+///   its level 1. When that frame is provisional (the view wants level 0),
+///   also the time until the frame from level 0 is ready.
+///
+/// Each of the N passes starts a new engine, so nothing is cached. It moves
+/// one photo right to a prefetched neighbor, waiting for the prefetch
+/// first, then jumps four right to one that is not, and repeats.
+fn bench_open(folder: &str, args: &[&str], metrics: &mut Metrics) -> Result<(), String> {
+    let view = (parse_num(args, 0, 2560)?, parse_num(args, 1, 1440)?);
+    let passes = parse_num(args, 2, 3)?.max(1);
+    let folder = std::path::Path::new(folder);
+    let mut times = OpenTimes::default();
+    for pass in 1..=passes {
+        println!("pass {pass} of {passes}");
+        open_pass(folder, view, &mut times)?;
+    }
+    for (name, times) in [
+        ("open/first pixels", times.previews),
+        ("open/fit render", times.fits),
+        ("open/neighbor switch", times.switches),
+        ("open/neighbor switch, from level 0", times.sharp),
+    ] {
+        if times.is_empty() {
+            println!("{name}: no samples");
+            continue;
+        }
+        let count = times.len();
+        let (p50, p95) = percentiles(times);
+        metrics.add(name, p50, p95);
+        println!("{name}, {count} samples: p50 {p50:.1} ms, p95 {p95:.1} ms");
+    }
+    Ok(())
+}
+
+#[derive(Default)]
+struct OpenTimes {
+    previews: Vec<f64>,
+    fits: Vec<f64>,
+    switches: Vec<f64>,
+    sharp: Vec<f64>,
+}
+
+/// One pass of [`bench_open`], with a new engine.
+fn open_pass(
+    folder: &std::path::Path,
+    view: (u32, u32),
+    times: &mut OpenTimes,
+) -> Result<(), String> {
+    let engine = Engine::new();
+    let info = engine.info().adapter;
+    println!("adapter: {} ({}, {:?})", info.name, info.backend, info.kind);
+    // Kept for the first photo; nothing is open yet to render.
+    let _ = engine.set_view(ViewSpec::Fit(view), Target::Srgb);
+    let ms = |t: Instant| t.elapsed().as_secs_f64() * 1000.0;
+
+    let started = Instant::now();
+    let opened = engine.open_folder(folder).map_err(|e| e.to_string())?;
+    let first = opened
+        .first
+        .ok_or("no photos in the folder")?
+        .map_err(|e| e.to_string())?;
+    std::hint::black_box(first);
+    let photos = opened.strip.photos;
+    println!(
+        "open {} photos, the first at Fit {}x{}: {:.0} ms (with the device's warm-up)",
+        photos.len(),
+        view.0,
+        view.1,
+        ms(started)
+    );
+    if photos.len() < 2 {
+        return Err("a neighbor switch needs two photos or more".into());
+    }
+    for p in &photos {
+        let path = folder.join(&p.file_name);
+        if let Some(t) = files::time_preview(&path).map_err(|e| e.to_string())? {
+            times.previews.push(t);
+        }
+    }
+
+    let switch = |i: usize| -> Result<(Applied, f64), String> {
+        let started = Instant::now();
+        let a = engine
+            .select_photo(photos[i].id)
+            .map_err(|e| e.to_string())?;
+        Ok((a, ms(started)))
+    };
+    let mut at = 0;
+    while at + 1 < photos.len() {
+        engine.wait_prefetch_idle();
+        let next = at + 1;
+        if !engine.prefetched().contains(&photos[next].id) {
+            return Err(format!("{} was not prefetched", photos[next].file_name));
+        }
+        let started = Instant::now();
+        let (a, t) = switch(next)?;
+        times.switches.push(t);
+        let mut line = format!("switch to {}: {t:.1} ms", photos[next].file_name);
+        if a.frame.as_ref().is_some_and(|f| f.provisional) {
+            // The worker decodes its input, attaches it and renders again.
+            while engine.take_sharpened().is_none() {
+                if started.elapsed().as_secs() > 30 {
+                    return Err("no frame from level 0 after 30 s".into());
+                }
+                std::thread::sleep(std::time::Duration::from_millis(1));
+            }
+            let t = ms(started);
+            times.sharp.push(t);
+            line += &format!(", provisional; from level 0 at {t:.0} ms");
+        }
+        println!("{line}");
+        at = next;
+        // Four right is no neighbor of this photo, so not prefetched.
+        let cold = at + 4;
+        if cold >= photos.len() {
+            break;
+        }
+        engine.wait_prefetch_idle();
+        let (_, t) = switch(cold)?;
+        times.fits.push(t);
+        println!("fit render of {}: {t:.0} ms", photos[cold].file_name);
+        at = cold;
     }
     Ok(())
 }
