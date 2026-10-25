@@ -49,6 +49,18 @@ impl Default for Session {
 }
 
 impl Session {
+    /// Ends the open photo's gesture, if one is in progress, recording its
+    /// step as its *end* would: before that photo goes.
+    pub(crate) fn end_gesture(&mut self) {
+        if let Some(open) = self.open
+            && let Some(p) = self.edits.get_mut(&open)
+            && p.in_gesture()
+        {
+            // No change to apply, so nothing to refuse.
+            let _ = p.apply(&[], Phase::End);
+        }
+    }
+
     /// A new photo id, never given before this session.
     pub(crate) fn take_id(&mut self) -> u64 {
         let id = self.next_id;
@@ -102,10 +114,13 @@ impl Engine {
     /// Returns its id; its edit starts at its defaults.
     pub fn open_source(&self, src: RawSource, orientation: u8) -> Result<u64, EngineError> {
         let gpu = self.gpu()?;
+        // A strip switch cannot interleave with this opening.
+        let _switch = self.switching.lock().expect("switching");
         let (_, kind) = as_shot(&src);
         let size = src.size();
         let id = {
             let mut s = self.session.lock().expect("session");
+            s.end_gesture();
             let id = s.take_id();
             s.edits.insert(id, PhotoEdits::new(kind, size, orientation));
             id

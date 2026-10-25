@@ -225,6 +225,22 @@ fn a_switch_ends_the_gesture_first() {
     let state = engine.select_photo(a).unwrap().state;
     assert_eq!(state.edit.exposure, 0.7);
     assert_eq!(state.undo.as_deref(), Some("Exposure"));
+
+    // A folder with no photos, and a photo opened from its input, end it
+    // too.
+    let empty = TempDir::new("gesture-empty", &[]);
+    engine
+        .apply(&[Change::Contrast(15.0)], Phase::Start)
+        .unwrap();
+    engine.open_folder(&empty.0).unwrap();
+    engine.open_folder(&dir.0).unwrap();
+    let state = engine.edit_state().unwrap();
+    assert_eq!((state.photo, state.edit.contrast), (a, 15.0));
+    assert_eq!(state.undo.as_deref(), Some("Contrast"));
+    engine.apply(&[Change::Whites(10.0)], Phase::Start).unwrap();
+    engine.open_source(source_for("x.jpg"), 1).unwrap();
+    let state = engine.select_photo(a).unwrap().state;
+    assert_eq!(state.undo.as_deref(), Some("Whites"));
 }
 
 #[test]

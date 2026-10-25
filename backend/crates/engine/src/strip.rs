@@ -126,6 +126,7 @@ impl Engine {
             s.strip.current = None;
             s.strip.direction = Direction::Next;
             if s.strip.photos.is_empty() {
+                s.end_gesture();
                 s.open = None;
             }
             s.strip.photos.first().map(|(id, _)| *id)
@@ -205,13 +206,7 @@ impl Engine {
                 drop(s);
                 return self.render(false, Phase::End);
             }
-            // The gesture's end records its step before the photo goes.
-            if let Some(open) = s.open
-                && let Some(p) = s.edits.get_mut(&open)
-                && p.in_gesture()
-            {
-                p.apply(&[], Phase::End)?;
-            }
+            s.end_gesture();
             s.strip.direction = Direction::of(s.strip.current, index, s.strip.direction);
             s.strip.current = Some(index);
             s.open = None;
