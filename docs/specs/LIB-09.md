@@ -103,6 +103,6 @@ Nothing is stored on disk in M1. The engine holds, for the session:
 2. **Order:** files with capture times sort by time with sub-seconds, ties and undated files by natural file name, undated after dated (engine test, synthetic EXIF).
 3. **Unsupported files** are listed, with their reason, and their controls are disabled (engine test with a Nikon HE file where the corpus has one, else a synthetic one).
 4. **Prefetch order** follows the direction of travel, and a switch cancels the work for photos that are no longer neighbors (engine test with a fake decoder that records its calls, `tests/prefetch.rs`).
-5. **Switching to a prefetched neighbor** renders at Fit without decoding, under 150 ms on the reference desktop (`cli bench open`, recorded in `docs/m1-results.md`: 22 ms at 12 MP and 97 ms at 48 MP, p95, on 2026-10-24).
+5. **Switching to a prefetched neighbor** renders at Fit without decoding, under 150 ms on the reference desktop (`cli bench open`, recorded in `docs/m1-results.md`: 19 ms at 12 MP and 99 ms at 48 MP, p95, on 2026-10-25).
 6. **The edited dot** follows the edit: set by an edit, cleared by undoing back to the defaults, kept across a folder switch and back (engine test, `tests/strip.rs`).
 7. **Frontend** (Vitest and Playwright against the fake engine): the ring, the dot, ← and →, the empty and no-photos states, and visible-first thumbnails, compared with the handoff's Filmstrip.

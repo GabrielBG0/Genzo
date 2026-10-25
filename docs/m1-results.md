@@ -21,7 +21,7 @@ Plan, backend step 2: measure the parallel decode of a 48 MP JPEG XL ProRAW befo
 
 **Still open:** the second 16 Pro file (`IMG_6889`, on the owner's Linux machine), and peak memory on Windows (the probe reads it only on Linux).
 
-## Opening a folder in Develop on the reference desktop (2026-10-24)
+## Opening a folder in Develop on the reference desktop (2026-10-25)
 
 The photo-open budgets, and LIB-09's criterion 5: switching to a prefetched neighbor renders at Fit without decoding, under 150 ms.
 
@@ -34,23 +34,24 @@ The photo-open budgets, and LIB-09's criterion 5: switching to a prefetched neig
   - waits for the prefetch, then moves one photo right to a prefetched neighbor;
   - then jumps four right to a photo that isn't one, which is decoded, opened and rendered;
   - and repeats.
+- The first pixels are timed once the prefetch is idle, so the neighbors' decodes don't share the CPU with them.
 
 **Results** (p95; p50 in brackets):
 
 | Target | Budget | 12 MP | 48 MP |
 |---|---|---|---|
-| Switch to a prefetched neighbor | under 150 ms | 22.0 ms (19.8) | 96.6 ms (90.4) |
-| Full fit-view render, not prefetched | under 1 s (12 MP), under 2 s (48 MP) | 85 ms (72) | 1467 ms (1213) |
-| First pixels: the file read and its embedded preview decoded | under 100 ms | 10.7 ms (6.8) | 81.5 ms (26.2) |
+| Switch to a prefetched neighbor | under 150 ms | 19.2 ms (18.4) | 99.3 ms (87.3) |
+| Full fit-view render, not prefetched | under 1 s (12 MP), under 2 s (48 MP) | 76 ms (71) | 1315 ms (1210) |
+| First pixels: the file read and its embedded preview decoded | under 100 ms | 6.7 ms (6.2) | 23.2 ms (17.7) |
 
 Samples: 12 switches, 9 fit renders and 60 previews per folder.
 
-**The 12 MP switch is provisional at this view.** The Fit frame (1920 × 1440) wants level 0, since the photo is 4032 × 3024 and its level 1 is 2016 × 1512. So the switch shows level 1 upsampled, and the frame from level 0 follows once the input is decoded and attached: at 59 ms p50, 63 ms p95, after the switch began. At 48 MP, level 1 (4032 × 3024) covers the view, so the switch is final.
+**The 12 MP switch is provisional at this view.** A Fit view reads level 1 only when level 1 covers the whole view on both sides (`sampling::plan_view`). Here the view is 2560 × 1440, and level 1 of the 4032 × 3024 photo is 2016 × 1512: narrower than the view, though wider than the 1920 × 1440 frame. So the switch draws its frame from level 1 in place of level 0. The frame from level 0 follows once the input is decoded and attached: at 60 ms p50, 62 ms p95, after the switch began. At 48 MP, level 1 (4032 × 3024) covers the view, so the switch is final.
 
 **Result:** every budget measured here holds on the reference desktop.
 
 **Room left:**
-- **The 48 MP switch is the closest:** 97 of 150 ms. Uploading the 98 MB level 1 dominates; DEV-01 measured the GPU part of the switch alone at 22.5 ms.
+- **The 48 MP switch is the closest:** 99 of 150 ms. Uploading the 98 MB level 1 dominates; DEV-01 measured the GPU part of the switch alone at 22.5 ms.
 - **The 48 MP first pixels read the whole 28 MB file** before the preview is found. Reading only the head would cut that, if the budget gets tight.
 
 **Still open:**

@@ -375,6 +375,8 @@ fn open_pass(
     if photos.len() < 2 {
         return Err("a neighbor switch needs two photos or more".into());
     }
+    // Timed without the prefetch's decodes beside them.
+    engine.wait_prefetch_idle();
     for p in &photos {
         let path = folder.join(&p.file_name);
         if let Some(t) = files::time_preview(&path).map_err(|e| e.to_string())? {
