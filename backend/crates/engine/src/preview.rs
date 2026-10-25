@@ -239,6 +239,24 @@ mod tests {
         );
     }
 
+    /// Alpha is kept as it is, converted or copied.
+    #[test]
+    fn alpha_is_kept() {
+        for (color, target) in [
+            (ColorEncoding::Srgb, Target::Srgb),
+            (ColorEncoding::AdobeRgb, Target::Srgb),
+        ] {
+            let p = Preview {
+                width: 1,
+                height: 1,
+                rgba: vec![90, 120, 30, 128],
+                orientation: 6,
+                color,
+            };
+            assert_eq!(prepare(&p, target).unwrap().rgba[3], 128);
+        }
+    }
+
     #[test]
     fn a_wrong_size_or_an_unreadable_encoding_shows_none() {
         let mut p = grid(1, ColorEncoding::Srgb);
