@@ -244,7 +244,10 @@ pub(crate) fn render_when(
     let frame = gpu.develop(request)?;
     if let Some(f) = &frame {
         let mut s = session.lock().expect("session");
-        s.provisional = f.provisional.then_some(generation);
+        // A frame older than the last one issued says nothing about it.
+        if s.issued == generation {
+            s.provisional = f.provisional.then_some(generation);
+        }
     }
     Ok(Some(Applied {
         recorded,
