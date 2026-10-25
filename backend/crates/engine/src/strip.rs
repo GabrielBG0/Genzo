@@ -160,6 +160,16 @@ impl StripSession {
             self.kinds.insert(id, kind);
         }
     }
+
+    /// As [`Self::learn`], for a neighbor's decode by prefetch: dropped
+    /// once the photo is current, since the switch to it decodes it again
+    /// and its result is the newer one.
+    pub(crate) fn learn_neighbor<T>(&mut self, id: u64, decoded: &Result<T, EngineError>) {
+        let current = self.current.map(|i| self.photos[i].0);
+        if current != Some(id) {
+            self.learn(id, decoded);
+        }
+    }
 }
 
 impl Engine {

@@ -1,5 +1,8 @@
-//! LIB-09 criterion 3 (DEV-01 criterion 17, its engine part): files Genzo
-//! cannot render are listed, say why, and leave nothing open in Develop.
+//! LIB-09 criterion 3, and part of DEV-01 criterion 17's engine side: files
+//! Genzo cannot render are listed, say why, and leave nothing open in
+//! Develop. A DNG with a required unknown opcode is imgio's own test
+//! (`dng.rs`); the engine maps every unsupported file the same way. The
+//! embedded preview they show comes with the next step.
 //! Each strip photo's `kind` is learned from its decode: by a switch to it,
 //! or by prefetch as a neighbor.
 //!

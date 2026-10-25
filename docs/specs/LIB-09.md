@@ -88,7 +88,7 @@ Nothing is stored on disk in M1. The engine holds, for the session:
 **When `kind` is known.** Listing reads no pixels (Edge cases, thousands of files), so a photo's `kind` is *not known yet* until it is decoded: by a switch to it, or by prefetch as a neighbor. Its last decode decides it, kept by id for the session like the edits, so reopening a folder keeps it. A *missing* photo that a new listing finds again is *not known yet* again. A photo that changes on disk is not decoded again (Edge cases), so its `kind` stays.
 
 - The reasons: an unsupported file's own message from its decoder ("Nikon High Efficiency RAW is not supported yet", "CMYK JPEG"); "This file's format is not one Genzo reads" for a file with a listed extension but no format Genzo recognizes; "This file is damaged"; "This file is no longer there".
-- A cached neighbor whose file went away still opens from its level 1 on a switch. The decode of its input after the switch then finds it *missing*.
+- **Pending the owner:** a cached neighbor whose file went away still opens from its level 1 on a switch, and stays editable; the decode of its input after the switch then finds it *missing*, and its 1:1 views stay provisional. That differs from *A file that went missing* in States. The other choice is to close it in Develop when that decode fails.
 
 `ListFolderPhotos` returns each photo's `{id, file_name, capture_time, kind, edited}`, where `edited` is the edited dot's flag. A photo's id is stable for the session, so the same file opened again keeps its edit. The engine keys it by the file's canonical path, so a folder opened through another path to the same files keeps their ids.
 

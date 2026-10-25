@@ -269,7 +269,13 @@ impl Worker {
 
     fn neighbor(&self, id: u64, path: &std::path::Path) {
         let decoded = self.decoder.decode(path);
-        self.learn(id, &decoded);
+        // Not if a switch made it current meanwhile: that switch decoded it
+        // again, and knows better.
+        self.session
+            .lock()
+            .expect("session")
+            .strip
+            .learn_neighbor(id, &decoded);
         // A switch while it decoded may have made it current, or no longer
         // a neighbor.
         if !self.shared.still_wanted(id) {

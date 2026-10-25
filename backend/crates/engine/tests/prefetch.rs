@@ -25,6 +25,8 @@ struct Calls {
     /// Every name asked for, never drained.
     seen: Vec<String>,
     held: HashSet<String>,
+    /// Names that fail as missing, from the decodes started after.
+    gone: HashSet<String>,
 }
 
 /// Names with "broken" in them fail.
@@ -48,6 +50,11 @@ impl Fake {
     fn release(&self, name: &str) {
         self.calls.lock().unwrap().held.remove(name);
         self.changed.notify_all();
+    }
+
+    /// Makes the decodes of `name` started from now on fail as missing.
+    fn delete(&self, name: &str) {
+        self.calls.lock().unwrap().gone.insert(name.into());
     }
 
     fn release_all(&self) {
@@ -76,6 +83,9 @@ impl Decode for Fake {
         c.names.push(name.clone());
         c.seen.push(name.clone());
         self.changed.notify_all();
+        if c.gone.contains(&name) {
+            return Err(EngineError::Missing(name));
+        }
         while c.held.contains(&name) {
             c = self.changed.wait(c).unwrap();
         }
@@ -410,4 +420,28 @@ fn a_switch_drops_the_sharp_frame_of_the_photo_before() {
     // Rendered again, not taken, and then the photo goes.
     engine.select_photo(p[0]).unwrap();
     assert!(engine.take_sharpened().is_none());
+}
+
+/// A neighbor whose decode read the file before it went, and finished
+/// after the switch to it found it missing: the switch's result stands.
+#[test]
+fn a_neighbor_decode_older_than_the_switch_does_not_set_its_kind() {
+    use genzo_engine::strip::PhotoKind;
+    let _lock = ONE_DEVICE.lock().unwrap_or_else(|e| e.into_inner());
+    let fake = Arc::new(Fake::default());
+    let Some(engine) = engine(&fake) else { return };
+    let _release = ReleaseAll(fake.clone());
+    let dir = TempDir::new("stale-kind", &["p0.jpg", "p1.jpg"]);
+    fake.hold("p1.jpg");
+    let opened = engine.open_folder(&dir.0).unwrap();
+    let p1 = opened.strip.photos[1].id;
+    fake.wait_started("p1.jpg");
+    fake.delete("p1.jpg");
+    assert!(matches!(
+        engine.select_photo(p1),
+        Err(EngineError::Missing(_))
+    ));
+    fake.release("p1.jpg");
+    engine.wait_prefetch_idle();
+    assert_eq!(engine.strip().photos[1].kind, PhotoKind::Missing);
 }
