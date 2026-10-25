@@ -151,6 +151,19 @@ pub fn time_decode(path: &Path, threads: u8, iterations: u32) -> Result<Vec<f64>
         .collect()
 }
 
+/// Reads a file and decodes its embedded preview, the first pixels a photo
+/// shows (DEV-01, *States*: Opening). Returns the time in milliseconds,
+/// or `None` when the file has no preview.
+pub fn time_preview(path: &Path) -> Result<Option<f64>, EngineError> {
+    let started = Instant::now();
+    let data = read(path)?;
+    let preview = genzo_imgio::decode_preview(&data).map_err(EngineError::decode)?;
+    Ok(preview.map(|p| {
+        std::hint::black_box(p);
+        ms_since(started)
+    }))
+}
+
 fn ms_since(t: Instant) -> f64 {
     t.elapsed().as_secs_f64() * 1000.0
 }
