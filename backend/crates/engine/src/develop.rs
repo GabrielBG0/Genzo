@@ -27,11 +27,12 @@ pub use genzo_pipeline::reference::sampling::ViewSpec;
 /// The session's photos and the one open in Develop.
 #[derive(Debug)]
 pub(crate) struct Session {
-    edits: HashMap<u64, PhotoEdits>,
-    open: Option<u64>,
+    pub(crate) edits: HashMap<u64, PhotoEdits>,
+    pub(crate) open: Option<u64>,
     next_id: u64,
-    view: ViewSpec,
+    pub(crate) view: ViewSpec,
     target: Target,
+    pub(crate) strip: crate::strip::StripSession,
 }
 
 impl Default for Session {
@@ -42,7 +43,29 @@ impl Default for Session {
             next_id: 1,
             view: ViewSpec::Fit((1280, 960)),
             target: Target::Srgb,
+            strip: Default::default(),
         }
+    }
+}
+
+impl Session {
+    /// Ends the open photo's gesture, if one is in progress, recording its
+    /// step as its *end* would: before that photo goes.
+    pub(crate) fn end_gesture(&mut self) {
+        if let Some(open) = self.open
+            && let Some(p) = self.edits.get_mut(&open)
+            && p.in_gesture()
+        {
+            // No change to apply, so nothing to refuse.
+            let _ = p.apply(&[], Phase::End);
+        }
+    }
+
+    /// A new photo id, never given before this session.
+    pub(crate) fn take_id(&mut self) -> u64 {
+        let id = self.next_id;
+        self.next_id += 1;
+        id
     }
 }
 
@@ -79,15 +102,7 @@ impl Engine {
     pub fn open_photo(&self, data: Vec<u8>) -> Result<u64, EngineError> {
         let (tx, rx) = mpsc::channel();
         rayon::spawn(move || {
-            let decoded = genzo_imgio::decode(&data, genzo_imgio::DecodeOptions::default())
-                .map_err(EngineError::decode)
-                .and_then(|img| {
-                    let orientation = img.orientation;
-                    RawSource::from_decoded(img)
-                        .map(|src| (src, orientation))
-                        .map_err(|e| EngineError::Decode(e.to_string()))
-                });
-            let _ = tx.send(decoded);
+            let _ = tx.send(decode(&data));
         });
         let (src, orientation) = rx
             .recv()
@@ -99,12 +114,14 @@ impl Engine {
     /// Returns its id; its edit starts at its defaults.
     pub fn open_source(&self, src: RawSource, orientation: u8) -> Result<u64, EngineError> {
         let gpu = self.gpu()?;
+        // A strip switch cannot interleave with this opening.
+        let _switch = self.switching.lock().expect("switching");
         let (_, kind) = as_shot(&src);
         let size = src.size();
         let id = {
             let mut s = self.session.lock().expect("session");
-            let id = s.next_id;
-            s.next_id += 1;
+            s.end_gesture();
+            let id = s.take_id();
             s.edits.insert(id, PhotoEdits::new(kind, size, orientation));
             id
         };
@@ -169,7 +186,7 @@ impl Engine {
     }
 
     /// Renders the open photo's current edit with a new generation.
-    fn render(&self, recorded: bool, phase: Phase) -> Result<Applied, EngineError> {
+    pub(crate) fn render(&self, recorded: bool, phase: Phase) -> Result<Applied, EngineError> {
         let gpu = self.gpu()?;
         let (state, request) = {
             let s = self.session.lock().expect("session");
@@ -192,6 +209,17 @@ impl Engine {
             frame,
         })
     }
+}
+
+/// A file's bytes decoded into the render thread's input, with the file's
+/// orientation.
+pub(crate) fn decode(data: &[u8]) -> Result<(RawSource, u8), EngineError> {
+    let img = genzo_imgio::decode(data, genzo_imgio::DecodeOptions::default())
+        .map_err(EngineError::decode)?;
+    let orientation = img.orientation;
+    RawSource::from_decoded(img)
+        .map(|src| (src, orientation))
+        .map_err(|e| EngineError::Decode(e.to_string()))
 }
 
 fn state(id: u64, p: &PhotoEdits) -> EditState {

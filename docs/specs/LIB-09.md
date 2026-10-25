@@ -34,8 +34,10 @@ Sources: FEATURES.md (LIB-09), the plan's M1 items (backend item 9, the engine's
 - The new photo shows its embedded preview within one frame, or the neutral `bg` fill with its file name when it has none (DEV-01, *States*: Opening).
   - A photo Genzo renders: its fit render then replaces that.
   - An unsupported or damaged one: it stays, with the reason in the status bar and the Develop controls disabled (DEV-01, *States*).
-- A gesture in progress ends first: the photo switch waits for its *end*, which records its step.
-- The view resets to Fit on every switch. Zoom and pan are not kept per photo in M1.
+- A gesture in progress ends first: the photo switch waits for its *end*, which records its step. A switch that arrives during a gesture ends it in the engine, recording the step as its *end* would.
+- The view resets to Fit on every switch, at the viewport's size. Zoom and pan are not kept per photo in M1.
+- Choosing the photo already open is no switch: nothing is decoded again, and the direction stays.
+- A photo that does not decode is still selected, with nothing open in Develop and its error returned, so ← and → move on from it.
 
 ### Prefetch
 
@@ -77,7 +79,7 @@ Nothing is stored on disk in M1. The engine holds, for the session:
 | `direction` | next or previous | The last move, for the prefetch order. On opening a folder it is next |
 | per photo id | the edit and its history | APP-10, DEV-01 *Data*. Kept across folder switches for the session |
 
-`ListFolderPhotos` returns each photo's `{id, file_name, capture_time, kind, edited}`, where `edited` is the edited dot's flag. A photo's id is stable for the session, so the same file opened again keeps its edit.
+`ListFolderPhotos` returns each photo's `{id, file_name, capture_time, kind, edited}`, where `edited` is the edited dot's flag. A photo's id is stable for the session, so the same file opened again keeps its edit. The engine keys it by the file's canonical path, so a folder opened through another path to the same files keeps their ids.
 
 ## Edge cases
 
@@ -85,6 +87,7 @@ Nothing is stored on disk in M1. The engine holds, for the session:
 - **Two files with the same capture time and name** (a RAW and a JPEG of one shot, `IMG_1.CR3` and `IMG_1.JPG`): both are listed, ordered by extension. M2's stacking decides whether they pair.
 - **A file whose EXIF is damaged:** no capture time, so it sorts after the dated ones by name. It opens as usual, or shows as damaged (DEV-01, *States*).
 - **The current photo is the first or last:** ← (or →) does nothing at that end. The strip does not wrap.
+- **A folder with no photos** closes the photo open in Develop.
 - **A neighbor that fails to decode** is not retried by prefetch. Selecting it shows its state (DEV-01, *States*).
 - **A file that changes on disk** while the session is open is not detected in M1. The engine reads it again only when its cached pyramid is evicted.
 
@@ -95,5 +98,5 @@ Nothing is stored on disk in M1. The engine holds, for the session:
 3. **Unsupported files** are listed, with their reason, and their controls are disabled (engine test with a Nikon HE file where the corpus has one, else a synthetic one).
 4. **Prefetch order** follows the direction of travel, and a switch cancels the work for photos that are no longer neighbors (engine test with a fake decoder that records its calls).
 5. **Switching to a prefetched neighbor** renders at Fit without decoding, under 150 ms on the reference desktop (`cli bench open`, recorded in `docs/m1-results.md`).
-6. **The edited dot** follows the edit: set by an edit, cleared by undoing back to the defaults, kept across a folder switch and back (engine test).
+6. **The edited dot** follows the edit: set by an edit, cleared by undoing back to the defaults, kept across a folder switch and back (engine test, `tests/strip.rs`).
 7. **Frontend** (Vitest and Playwright against the fake engine): the ring, the dot, ← and →, the empty and no-photos states, and visible-first thumbnails, compared with the handoff's Filmstrip.
