@@ -128,24 +128,32 @@ fn a_switch_opens_the_photo_in_develop() {
     let _lock = ONE_DEVICE.lock().unwrap_or_else(|e| e.into_inner());
     let fake = Arc::new(Fake::default());
     let Some(engine) = engine(&fake) else { return };
-    let dir = TempDir::new("switch", &["a.jpg", "b.jpg", "c.jpg"]);
+    let dir = TempDir::new("switch", &["a.jpg", "b.jpg", "c.jpg", "d.jpg"]);
     let opened = engine.open_folder(&dir.0).unwrap();
-    let [a, b, c] = ids(&opened.strip)[..] else {
+    let [a, _, c, d] = ids(&opened.strip)[..] else {
         panic!()
     };
     opened.first.unwrap().unwrap();
-    assert_eq!(fake.calls(), ["a.jpg"], "the first photo opens");
+    engine.wait_prefetch_idle();
+    assert_eq!(
+        fake.calls(),
+        ["a.jpg", "b.jpg", "c.jpg"],
+        "the first photo, then its neighbors"
+    );
     assert_eq!(opened.strip.current, Some(a));
     engine.set_view(VIEW, Target::Srgb).unwrap();
 
-    let switched = engine.select_photo(c).unwrap();
-    assert_eq!(fake.calls(), ["c.jpg"]);
-    assert_eq!(switched.state.photo, c);
+    // A photo not prefetched: decoded, then opened. Its neighbors are
+    // cached already.
+    let switched = engine.select_photo(d).unwrap();
+    engine.wait_prefetch_idle();
+    assert_eq!(fake.calls(), ["d.jpg"]);
+    assert_eq!(switched.state.photo, d);
     let strip = engine.strip();
-    assert_eq!((strip.current, strip.direction), (Some(c), Direction::Next));
+    assert_eq!((strip.current, strip.direction), (Some(d), Direction::Next));
     // The frame is the photo's, as if opened from its input.
     let theirs = pixels(&switched);
-    engine.open_source(source_for("c.jpg"), 1).unwrap();
+    engine.open_source(source_for("d.jpg"), 1).unwrap();
     let want = pixels(&engine.set_view(VIEW, Target::Srgb).unwrap());
     assert_eq!(theirs, want);
 
@@ -158,14 +166,17 @@ fn a_switch_opens_the_photo_in_develop() {
     };
     engine.set_view(one_to_one, Target::Srgb).unwrap();
     let back = engine.step(Direction::Previous).unwrap().unwrap();
-    assert_eq!(back.state.photo, b);
+    assert_eq!(back.state.photo, c);
     let Readback::Frame { size, .. } = back.frame.unwrap().readback else {
         panic!("not at Fit");
     };
     assert!(size.0 == 200 || size.1 == 150, "{size:?}");
     assert_eq!(engine.strip().direction, Direction::Previous);
-    engine.select_photo(b).unwrap();
-    assert_eq!(fake.calls(), ["b.jpg"]);
+    engine.wait_prefetch_idle();
+    fake.calls();
+    engine.select_photo(c).unwrap();
+    engine.wait_prefetch_idle();
+    assert!(fake.calls().is_empty());
     assert_eq!(engine.strip().direction, Direction::Previous);
     // The strip does not wrap.
     engine.select_photo(a).unwrap();

@@ -386,6 +386,12 @@ fn a_neighbor_prefetched_with_its_custom_white_needs_no_rebuild() {
         .unwrap()
         .unwrap()
         .unwrap();
+    // It fits that edit, and no longer once the white moves.
+    assert!(got.info.level1_fits(&got.level1, &warm));
+    let mut cooler = warm.clone();
+    cooler.white_balance.temp = 5200.0;
+    assert!(!got.info.level1_fits(&got.level1, &cooler));
+    assert!(!got.info.level1_fits(&got.level1, &Edit::defaults(kind)));
     // Opened before its input comes, a settled render of that edit is the
     // pyramid's own white: it neither waits for the input nor rebuilds.
     t.open_level1(2, got.info, Arc::new(got.level1)).unwrap();

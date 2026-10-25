@@ -26,6 +26,7 @@ pub mod develop;
 pub mod files;
 pub mod folder;
 pub mod history;
+mod prefetch;
 pub mod strip;
 
 /// The contract types, re-exported for the shell and the cli.
@@ -95,19 +96,24 @@ impl EngineError {
 pub struct Engine {
     adapter: AdapterInfo,
     /// The render thread, if a GPU adapter (hardware or software) opened.
-    gpu: Option<RenderThread>,
-    generations: Generations,
+    /// The prefetch worker holds it too.
+    gpu: Option<Arc<RenderThread>>,
+    generations: Arc<Generations>,
     /// Finished frames by generation: the concatenated tile messages.
     frames: Mutex<FrameStore>,
     /// Where the autobench report goes (`GENZO_AUTOBENCH`), if the app was
     /// started to benchmark itself.
     autobench: Option<PathBuf>,
     /// Develop's photos, edits and histories, and the strip.
-    session: Mutex<develop::Session>,
+    session: Arc<Mutex<develop::Session>>,
     /// Held for a whole photo switch, so two cannot interleave.
     switching: Mutex<()>,
     /// What opens the strip's files.
     decoder: Arc<dyn strip::Decode>,
+    /// The neighbors' prefetch: its plan and its cache.
+    prefetch: Arc<prefetch::Shared>,
+    /// The prefetch worker, started on the first switch.
+    worker: Mutex<Option<std::thread::JoinHandle<()>>>,
 }
 
 #[derive(Debug, Default)]
@@ -184,13 +190,15 @@ impl Engine {
         };
         Self {
             adapter,
-            gpu,
-            generations: Generations::new(),
+            gpu: gpu.map(Arc::new),
+            generations: Arc::new(Generations::new()),
             frames: Mutex::new(FrameStore::default()),
             autobench: None,
-            session: Mutex::default(),
+            session: Arc::default(),
             switching: Mutex::new(()),
             decoder: Arc::new(strip::FileDecoder),
+            prefetch: Arc::default(),
+            worker: Mutex::new(None),
         }
     }
 
@@ -228,7 +236,7 @@ impl Engine {
     }
 
     fn gpu(&self) -> Result<&RenderThread, EngineError> {
-        self.gpu.as_ref().ok_or_else(|| {
+        self.gpu.as_deref().ok_or_else(|| {
             EngineError::NoGpu(self.adapter.fallback_reason.clone().unwrap_or_default())
         })
     }
@@ -455,6 +463,22 @@ impl Engine {
             .by_generation
             .get(&generation)
             .cloned()
+    }
+}
+
+impl Drop for Engine {
+    /// Stops the prefetch worker before the render thread goes: it holds
+    /// the thread too, and a second device in one process crashes WARP.
+    fn drop(&mut self) {
+        let worker = self.worker.get_mut().ok().and_then(Option::take);
+        if let Some(handle) = worker {
+            self.prefetch.stop();
+            if let Some(gpu) = &self.gpu {
+                // Frees a build the worker waits on.
+                let _ = gpu.keep_prefetching(&[]);
+            }
+            let _ = handle.join();
+        }
     }
 }
 
