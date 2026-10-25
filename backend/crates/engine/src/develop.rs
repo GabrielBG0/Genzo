@@ -196,29 +196,37 @@ impl Engine {
 
     /// Renders the open photo's current edit with a new generation.
     pub(crate) fn render(&self, recorded: bool, phase: Phase) -> Result<Applied, EngineError> {
-        render(
+        render_when(
             self.gpu()?,
             &self.session,
             &self.generations,
             recorded,
             phase,
+            |_| true,
         )
+        .map(|a| a.expect("always rendered"))
     }
 }
 
 /// Renders the open photo's current edit with a new generation, and notes
 /// whether the frame came back provisional. The engine's renders and the
-/// prefetch worker's both come here.
-pub(crate) fn render(
+/// prefetch worker's both come here. Nothing is issued, and the answer is
+/// `None`, unless `when` holds of the session as the generation is taken:
+/// the check and the request are one step.
+pub(crate) fn render_when(
     gpu: &RenderThread,
     session: &Mutex<Session>,
     generations: &Generations,
     recorded: bool,
     phase: Phase,
-) -> Result<Applied, EngineError> {
+    when: impl FnOnce(&Session) -> bool,
+) -> Result<Option<Applied>, EngineError> {
     let (state, request) = {
         let mut s = session.lock().expect("session");
         let id = s.open.ok_or(EngineError::NoPhoto)?;
+        if !when(&s) {
+            return Ok(None);
+        }
         let generation = generations.next();
         s.issued = generation;
         let p = &s.edits[&id];
@@ -238,11 +246,11 @@ pub(crate) fn render(
         let mut s = session.lock().expect("session");
         s.provisional = f.provisional.then_some(generation);
     }
-    Ok(Applied {
+    Ok(Some(Applied {
         recorded,
         state,
         frame,
-    })
+    }))
 }
 
 /// A file's bytes decoded into the render thread's input, with the file's

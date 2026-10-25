@@ -390,3 +390,24 @@ fn a_neighbor_whose_white_changed_since_is_prefetched_again() {
         "its edit, from its new level 1"
     );
 }
+
+#[test]
+fn a_switch_drops_the_sharp_frame_of_the_photo_before() {
+    let _lock = ONE_DEVICE.lock().unwrap_or_else(|e| e.into_inner());
+    let fake = Arc::new(Fake::default());
+    let Some(engine) = engine(&fake) else { return };
+    let _release = ReleaseAll(fake.clone());
+    let dir = TempDir::new("drop-sharp", &["p0.jpg", "p1.jpg", "p2.jpg"]);
+    let opened = engine.open_folder(&dir.0).unwrap();
+    let p: Vec<u64> = opened.strip.photos.iter().map(|p| p.id).collect();
+    engine.set_view(LARGE, Target::Srgb).unwrap();
+    engine.wait_prefetch_idle();
+    fake.hold("p1.jpg");
+    assert!(frame(&engine.select_photo(p[1]).unwrap()).1);
+    fake.wait_started("p1.jpg");
+    fake.release("p1.jpg");
+    engine.wait_prefetch_idle();
+    // Rendered again, not taken, and then the photo goes.
+    engine.select_photo(p[0]).unwrap();
+    assert!(engine.take_sharpened().is_none());
+}

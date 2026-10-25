@@ -9,7 +9,7 @@
 //!   balance, waits for it, and keeps it in an LRU of 768 MB. A queued build
 //!   holds its decoded input, so only one is ever queued.
 //! - A photo opened from its level 1 needs its input: the worker decodes it
-//!   first, before any neighbor, and attaches it. If the last frame was
+//!   first in the queue, and attaches it. If the last frame was
 //!   provisional, it renders the photo again from level 0.
 //! - A switch replaces the plan and cancels the builds of photos that are no
 //!   longer neighbors. A photo already cached, or whose decode failed, is not
@@ -73,8 +73,9 @@ struct Plan {
     tasks: VecDeque<Task>,
     /// The current photo's neighbors, cached or not.
     wanted: Vec<u64>,
-    /// The photo whose task the worker runs.
-    running: Option<u64>,
+    /// The photo whose task the worker runs, and whether it is a
+    /// neighbor's.
+    running: Option<(u64, bool)>,
     /// Photos that did not decode: never tried again.
     failed: HashSet<u64>,
     stop: bool,
@@ -149,10 +150,14 @@ impl Shared {
             plan.tasks.push_back(Task::Attach { id, path });
         }
         for (id, path, cached) in neighbors {
-            if !cached && !plan.failed.contains(&id) && plan.running != Some(id) {
+            // A neighbor being decoded is not queued twice; a photo whose
+            // input is being attached is.
+            if !cached && !plan.failed.contains(&id) && plan.running != Some((id, true)) {
                 plan.tasks.push_back(Task::Neighbor { id, path });
             }
         }
+        // A sharp frame of the photo before the switch is no longer wanted.
+        self.sharpened.lock().expect("sharpened").take();
         self.changed.notify_all();
         plan.wanted.clone()
     }
@@ -185,7 +190,7 @@ impl Shared {
                 return None;
             }
             if let Some(task) = plan.tasks.pop_front() {
-                plan.running = Some(task.id());
+                plan.running = Some((task.id(), matches!(task, Task::Neighbor { .. })));
                 return Some(task);
             }
             plan = self.changed.wait(plan).expect("plan");
@@ -223,25 +228,30 @@ impl Worker {
             return;
         }
         // Rendered again only when the last frame was provisional and
-        // nothing newer was asked for since: a render held for the input
-        // ran on its own.
-        let again = {
-            let s = self.session.lock().expect("session");
+        // nothing newer was asked for since (a render held for the input
+        // ran on its own), and no gesture is in progress.
+        let again = |s: &Session| {
             s.open == Some(id)
                 && s.provisional == Some(s.issued)
                 && !s.edits.get(&id).is_some_and(PhotoEdits::in_gesture)
         };
-        if again
-            && let Ok(a) = crate::develop::render(
-                &self.gpu,
-                &self.session,
-                &self.generations,
-                false,
-                Phase::End,
-            )
-            && a.frame.as_ref().is_some_and(|f| !f.provisional)
-        {
-            *self.shared.sharpened.lock().expect("sharpened") = Some(a);
+        let Ok(Some(a)) = crate::develop::render_when(
+            &self.gpu,
+            &self.session,
+            &self.generations,
+            false,
+            Phase::End,
+            again,
+        ) else {
+            return;
+        };
+        if a.frame.as_ref().is_some_and(|f| !f.provisional) {
+            // Kept only while the photo is still open: a switch clears the
+            // slot after it changes the open photo.
+            let s = self.session.lock().expect("session");
+            if s.open == Some(id) {
+                *self.shared.sharpened.lock().expect("sharpened") = Some(a);
+            }
         }
     }
 
