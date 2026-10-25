@@ -39,8 +39,13 @@ pub struct FileDecoder;
 
 impl Decode for FileDecoder {
     fn decode(&self, path: &Path) -> Result<(RawSource, u8), EngineError> {
-        let data =
-            std::fs::read(path).map_err(|e| EngineError::Io(format!("{}: {e}", path.display())))?;
+        let data = std::fs::read(path).map_err(|e| {
+            let what = format!("{}: {e}", path.display());
+            match e.kind() {
+                std::io::ErrorKind::NotFound => EngineError::Missing(what),
+                _ => EngineError::Io(what),
+            }
+        })?;
         crate::develop::decode(&data)
     }
 }
@@ -65,12 +70,56 @@ impl Direction {
     }
 }
 
+/// Whether a strip photo renders (LIB-09, Data; DEV-01, States). Listing
+/// reads no pixels, so it is known once the photo is decoded: by a switch
+/// to it, or by prefetch as a neighbor.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum PhotoKind {
+    /// Not decoded yet this session.
+    #[default]
+    Unknown,
+    Renders,
+    /// Recognized but not rendered, with the reason the status bar shows.
+    Unsupported(String),
+    /// Truncated, or failing a decoder's bounds checks.
+    Damaged,
+    /// Gone since the folder was listed.
+    Missing,
+}
+
+impl PhotoKind {
+    /// The status bar's reason for a photo that shows only its embedded
+    /// preview; `None` for one that renders or is not known yet.
+    pub fn reason(&self) -> Option<&str> {
+        match self {
+            Self::Unknown | Self::Renders => None,
+            Self::Unsupported(why) => Some(why),
+            Self::Damaged => Some("This file is damaged"),
+            Self::Missing => Some("This file is no longer there"),
+        }
+    }
+
+    /// What a decode says about its file. `None` for an error that is not
+    /// the file's (a read error, a stopped decoder): the kind stays.
+    fn of<T>(decoded: &Result<T, EngineError>) -> Option<Self> {
+        match decoded {
+            Ok(_) => Some(Self::Renders),
+            Err(EngineError::Unsupported(why)) => Some(Self::Unsupported(why.clone())),
+            Err(EngineError::Damaged(_)) => Some(Self::Damaged),
+            Err(EngineError::Missing(_)) => Some(Self::Missing),
+            Err(_) => None,
+        }
+    }
+}
+
 /// One photo of the strip, as `ListFolderPhotos` returns it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StripPhoto {
     pub id: u64,
     pub file_name: String,
     pub capture_time: Option<CaptureTime>,
+    /// Whether it renders, once it was decoded.
+    pub kind: PhotoKind,
     /// Its edit differs from its defaults: the blue dot.
     pub edited: bool,
 }
@@ -99,6 +148,28 @@ pub(crate) struct StripSession {
     photos: Vec<(u64, FolderPhoto)>,
     current: Option<usize>,
     direction: Direction,
+    /// What each photo's last decode said, by id: kept across folder
+    /// switches like the edits.
+    kinds: std::collections::HashMap<u64, PhotoKind>,
+}
+
+impl StripSession {
+    /// Notes what decoding photo `id` said about its file.
+    pub(crate) fn learn<T>(&mut self, id: u64, decoded: &Result<T, EngineError>) {
+        if let Some(kind) = PhotoKind::of(decoded) {
+            self.kinds.insert(id, kind);
+        }
+    }
+
+    /// As [`Self::learn`], for a neighbor's decode by prefetch: dropped
+    /// once the photo is current, since the switch to it decodes it again
+    /// and its result is the newer one.
+    pub(crate) fn learn_neighbor<T>(&mut self, id: u64, decoded: &Result<T, EngineError>) {
+        let current = self.current.map(|i| self.photos[i].0);
+        if current != Some(id) {
+            self.learn(id, decoded);
+        }
+    }
 }
 
 impl Engine {
@@ -124,6 +195,12 @@ impl Engine {
                     (id, p)
                 })
                 .collect();
+            // Listed again, so there again.
+            for (id, _) in &photos {
+                if s.strip.kinds.get(id) == Some(&PhotoKind::Missing) {
+                    s.strip.kinds.remove(id);
+                }
+            }
             s.strip.photos = photos;
             s.strip.current = None;
             s.strip.direction = Direction::Next;
@@ -159,6 +236,7 @@ impl Engine {
                     id: *id,
                     file_name: p.file_name.clone(),
                     capture_time: p.capture_time,
+                    kind: s.strip.kinds.get(id).cloned().unwrap_or_default(),
                     edited: s.edits.get(id).is_some_and(PhotoEdits::is_edited),
                 })
                 .collect(),
@@ -236,7 +314,13 @@ impl Engine {
         }
         // One being built: opened from the input its build holds.
         if !gpu.open_prefetching(id)? {
-            let (src, orientation) = match self.decode_off_thread(path) {
+            let decoded = self.decode_off_thread(path);
+            self.session
+                .lock()
+                .expect("session")
+                .strip
+                .learn(id, &decoded);
+            let (src, orientation) = match decoded {
                 Ok(d) => d,
                 Err(e) => {
                     self.prefetch.failed(id);

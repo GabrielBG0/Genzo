@@ -80,10 +80,15 @@ Nothing is stored on disk in M1. The engine holds, for the session:
 
 | Field | Type | Meaning |
 |---|---|---|
-| `photos` | list of `{id, path, file_name, capture_time, kind}` | The opened folder's photos, in the strip's order. `kind` says whether the file renders or is unsupported, and why (DEV-01, *States*) |
+| `photos` | list of `{id, path, file_name, capture_time, kind}` | The opened folder's photos, in the strip's order. `kind` says whether the file renders or is unsupported, and why (DEV-01, *States*): not known yet, renders, unsupported with its reason, damaged, or missing |
 | `current` | photo id | The photo in Develop |
 | `direction` | next or previous | The last move, for the prefetch order. On opening a folder it is next |
 | per photo id | the edit and its history | APP-10, DEV-01 *Data*. Kept across folder switches for the session |
+
+**When `kind` is known.** Listing reads no pixels (Edge cases, thousands of files), so a photo's `kind` is *not known yet* until it is decoded: by a switch to it, or by prefetch as a neighbor. Its last decode decides it, kept by id for the session like the edits, so reopening a folder keeps it. A *missing* photo that a new listing finds again is *not known yet* again. A photo that changes on disk is not decoded again (Edge cases), so its `kind` stays.
+
+- The reasons: an unsupported file's own message from its decoder ("Nikon High Efficiency RAW is not supported yet", "CMYK JPEG"); "This file's format is not one Genzo reads" for a file with a listed extension but no format Genzo recognizes; "This file is damaged"; "This file is no longer there".
+- **Pending the owner:** a cached neighbor whose file went away still opens from its level 1 on a switch, and stays editable; the decode of its input after the switch then finds it *missing*, and its 1:1 views stay provisional. That differs from *A file that went missing* in States. The other choice is to close it in Develop when that decode fails.
 
 `ListFolderPhotos` returns each photo's `{id, file_name, capture_time, kind, edited}`, where `edited` is the edited dot's flag. A photo's id is stable for the session, so the same file opened again keeps its edit. The engine keys it by the file's canonical path, so a folder opened through another path to the same files keeps their ids.
 
@@ -101,7 +106,7 @@ Nothing is stored on disk in M1. The engine holds, for the session:
 
 1. **Listing:** a folder with RAW, DNG, JPEG, HEIC, TIFF and PNG files, XMP sidecars, a hidden file, a subfolder and an unknown extension lists exactly the image files directly inside it (engine test, a temporary folder of corpus copies).
 2. **Order:** files with capture times sort by time with sub-seconds, ties and undated files by natural file name, undated after dated (engine test, synthetic EXIF).
-3. **Unsupported files** are listed, with their reason, and their controls are disabled (engine test with a Nikon HE file where the corpus has one, else a synthetic one).
+3. **Unsupported files** are listed, with their reason, and their controls are disabled (engine test with a Nikon HE file where the corpus has one, else a synthetic one). `tests/kind.rs`: a CMYK JPEG, a damaged PNG, a file of no known format and a file deleted after listing, through the real decoder; nothing opens in Develop for them, and each `kind` is learned from a switch or a prefetch. The corpus's Nikon Z 8 High Efficiency and GoPro GPR files are checked locally (the corpus is not in CI).
 4. **Prefetch order** follows the direction of travel, and a switch cancels the work for photos that are no longer neighbors (engine test with a fake decoder that records its calls, `tests/prefetch.rs`).
 5. **Switching to a prefetched neighbor** renders at Fit without decoding, under 150 ms on the reference desktop (`cli bench open`, recorded in `docs/m1-results.md`: 19 ms at 12 MP and 99 ms at 48 MP, p95, on 2026-10-25).
 6. **The edited dot** follows the edit: set by an edit, cleared by undoing back to the defaults, kept across a folder switch and back (engine test, `tests/strip.rs`).
