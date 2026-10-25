@@ -63,7 +63,7 @@ impl std::fmt::Debug for Sink {
 /// Genzo does not read (DEV-01, Stage 4), as for the image itself.
 pub fn prepare(p: &Preview, target: Target) -> Option<ShownPreview> {
     let (w, h) = (p.width, p.height);
-    if p.rgba.len() != 4 * w as usize * h as usize {
+    if w == 0 || h == 0 || p.rgba.len() != 4 * w as usize * h as usize {
         return None;
     }
     let (sw, sh) = shown((w, h), p.orientation);
@@ -262,6 +262,19 @@ mod tests {
         let mut p = grid(1, ColorEncoding::Srgb);
         p.rgba.pop();
         assert!(prepare(&p, Target::Srgb).is_none());
+        // No pixels at all: none, not a panic in the worker.
+        for (width, height) in [(0, 0), (0, 5), (5, 0)] {
+            let empty = Preview {
+                width,
+                height,
+                rgba: Vec::new(),
+                ..grid(6, ColorEncoding::Srgb)
+            };
+            assert!(
+                prepare(&empty, Target::Srgb).is_none(),
+                "{width} x {height}"
+            );
+        }
         let p = grid(1, ColorEncoding::Icc(b"not a profile".to_vec()));
         assert!(prepare(&p, Target::Srgb).is_none());
     }
