@@ -477,15 +477,18 @@ struct Seen {
 }
 
 impl Seen {
-    /// Waits for, and returns, what was shown for `photo`.
+    /// Waits for, and returns, what was shown for `photo`; panics after
+    /// 10 s.
     fn wait_for(&self, photo: u64) -> Shown {
-        let mut s = self.shown.lock().unwrap();
-        loop {
-            if let Some(x) = s.iter().find(|x| x.photo == photo) {
-                return x.clone();
-            }
-            s = self.changed.wait(s).unwrap();
-        }
+        let s = self.shown.lock().unwrap();
+        let (s, _) = self
+            .changed
+            .wait_timeout_while(s, std::time::Duration::from_secs(10), |s| {
+                !s.iter().any(|x| x.photo == photo)
+            })
+            .unwrap();
+        let found = s.iter().find(|x| x.photo == photo).cloned();
+        found.unwrap_or_else(|| panic!("nothing shown for photo {photo}"))
     }
 
     fn take(&self) -> Vec<Shown> {
