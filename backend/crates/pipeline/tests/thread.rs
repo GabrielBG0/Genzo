@@ -107,7 +107,8 @@ fn a_render_for_a_photo_no_longer_open_is_dropped() {
     let f = t.develop(request(3, 2, &defaults, fit)).unwrap().unwrap();
     match f.readback {
         Readback::Frame { size, half, .. } => {
-            assert_eq!((size, half), ((320, 240), false));
+            // Photo 2's own frame: 500 x 400 fitted into 320 x 240.
+            assert_eq!((size, half), ((300, 240), false));
         }
         r => panic!("{r:?}"),
     }

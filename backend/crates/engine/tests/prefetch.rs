@@ -295,6 +295,39 @@ fn a_switch_to_a_prefetched_neighbor_renders_without_decoding() {
     assert_eq!(pixels, fresh(&engine, "p1.jpg", SMALL));
 }
 
+/// A viewport wider than level 1, whose fitted frame level 1 covers: p1's
+/// 360 x 250 in 260 x 100 is 144 x 100, its level 1 180 x 125. The switch
+/// is final, as for a 12 MP photo at Fit in a 2560 x 1440 viewport.
+#[test]
+fn a_neighbor_whose_level1_covers_the_fitted_frame_is_not_provisional() {
+    let _lock = ONE_DEVICE.lock().unwrap_or_else(|e| e.into_inner());
+    let fake = Arc::new(Fake::default());
+    let Some(engine) = engine(&fake) else { return };
+    let _release = ReleaseAll(fake.clone());
+    let dir = TempDir::new("fitted", &["p0.jpg", "p1.jpg", "p2.jpg"]);
+    let opened = engine.open_folder(&dir.0).unwrap();
+    let p: Vec<u64> = opened.strip.photos.iter().map(|p| p.id).collect();
+    let wide = ViewSpec::Fit((260, 100));
+    engine.set_view(wide, Target::Srgb).unwrap();
+    engine.wait_prefetch_idle();
+    fake.hold("p1.jpg");
+    let switched = engine.select_photo(p[1]).unwrap();
+    let f = switched.frame.as_ref().expect("rendered");
+    assert!(!f.provisional, "level 1 covers the fitted frame");
+    assert!(matches!(
+        f.readback,
+        Readback::Frame {
+            size: (144, 100),
+            ..
+        }
+    ));
+    fake.wait_started("p1.jpg");
+    fake.release("p1.jpg");
+    engine.wait_prefetch_idle();
+    assert!(engine.take_sharpened().is_none());
+    assert_eq!(frame(&switched).0, fresh(&engine, "p1.jpg", wide));
+}
+
 #[test]
 fn a_provisional_frame_is_rendered_again_once_the_input_comes() {
     let _lock = ONE_DEVICE.lock().unwrap_or_else(|e| e.into_inner());

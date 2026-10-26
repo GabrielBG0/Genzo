@@ -290,11 +290,13 @@ Geometry changes which source pixel lands where. It changes no pixel values in M
 - **How** (`reference::sampling`, `gpu::view`): output pixel centers go through one affine into the level's texels, composing the scale, the crop and its straighten angle, and the orientation. The filter is separable along the level's axes, edges clamped. It takes at most 8 taps per axis while the view is at least half the chosen level on that axis, as at Fit; a view smaller than the smallest level (a thumbnail) or of another aspect ratio takes about 4 per level texel it covers.
 - An integer distance other than 0 weighs exactly 0, so a view the size of a level is an exact copy, in every orientation.
 - The result is the "stage 4 sampled" viewport cache (RGBA16F, the size of the view). Stages 6 and 7 read it, and stage 9 writes the RGBA8 frame from what they leave.
-- **A Fit view larger than level 1** (a 12 MP photo, level 1 2016 px wide, on a 2560 px view) is rendered from level-0 tiles, as at 1:1 (decided 2026-10-19). Such a photo runs stages 1 to 3 twice, once for the pyramid and once for level 0 (about 10 ms each at 12 MP on the RTX 3060). Deriving level 1 from the level-0 tiles instead would change the pyramid's goldens; it is a possible later optimization.
+- **A Fit view larger than level 1** (a 12 MP photo, level 1 2016 × 1512, on a 4K screen: its frame is 2880 × 2160) is rendered from level-0 tiles, as at 1:1 (decided 2026-10-19). Such a photo runs stages 1 to 3 twice, once for the pyramid and once for level 0 (about 10 ms each at 12 MP on the RTX 3060). Deriving level 1 from the level-0 tiles instead would change the pyramid's goldens; it is a possible later optimization.
 - **The frame** (`geometry`, `reference::sampling::Frame`) is what a view shows:
   - The file's orientation and the edit's quarter turns and flip compose into one of the eight EXIF orientations (`geometry::compose`). The turns apply first, clockwise, then the flip.
   - Then comes the crop, straightened about its center in pixel space.
   - Without a crop the frame is the whole oriented image, planned exactly as before crops existed.
+  - **At Fit, the frame is fitted into the viewport, its aspect kept** (`Frame::fit_in`, applied as `Develop::render` begins). The binding side is the viewport's exactly; the other is rounded, at least 1 pixel. The frame is that size, not the viewport's, and it says so (`Readback::Frame`'s `size`); the frontend centers it. A 4032 × 3024 photo in a 2560 × 1440 viewport is a 1920 × 1440 frame. A smaller image is enlarged to fit (pending the owner).
+  - A crop changes the frame's aspect, so at Fit each crop delta resizes the view's caches before sampling.
   - With one, the affine maps view pixels to the crop's source pixels, then rotates them about its center into oriented pixels, then scales to the level (`d / dims` per axis pair, as without a crop). So a straight crop on whole pixels at 1:1 is an exact copy of level 0, in every orientation.
   - The level is the smallest whose texels per view pixel reach 1 along both of the view's axes (the affine's columns), so a tight crop at Fit reads level 0.
   - The filter's scale per level axis is the length of that axis's row of the affine, which equals the old maximum when straight.
@@ -504,7 +506,7 @@ DEV-01 has no shortcuts of its own; DEV-02 and DEV-12 own the controls. Its inpu
   - Between *start* and *end*, renders are interactive. The settled render follows *end*.
   - A delta without a gesture, such as a typed value or a reset, is a start and an end in one.
   - The engine records one history step per *end* (APP-10).
-- **`SetView`**: the viewport size in device pixels, the zoom (Fit or 1:1), and the visible rectangle in image coordinates after geometry. Panning at 1:1 sends `SetView`, and the engine renders what became visible. At 1:1 the engine snaps the origin to whole image pixels: tiles the frontend holds stay valid only across whole-pixel pans (Readback).
+- **`SetView`**: the viewport size in device pixels, the zoom (Fit or 1:1), and the visible rectangle in image coordinates after geometry. At Fit the engine renders the frame fitted into the viewport (*The frame*), not a frame of the viewport's size. Panning at 1:1 sends `SetView`, and the engine renders what became visible. At 1:1 the engine snaps the origin to whole image pixels: tiles the frontend holds stay valid only across whole-pixel pans (Readback).
 - **`SelectPhoto`**: the photo whose edit the deltas apply to.
 
 ## States

@@ -76,6 +76,17 @@ fn view(c: &mut Criterion) {
         })
     });
     view.set_ratio(None);
+    // A crop dragged at Fit: the frame's size follows the crop's aspect,
+    // so each delta resizes the view's textures before sampling.
+    let mut narrower = false;
+    group.bench_function("sample the pyramid, resized each time", |b| {
+        b.iter(|| {
+            narrower = !narrower;
+            view.sample(&gpu, p, 1, (out.0 - u32::from(narrower), out.1));
+            wait(&gpu);
+        })
+    });
+    view.sample(&gpu, p, 1, out);
     // A crop straightened by 20 degrees, at the same view size: the
     // pyramid's level 1 sampled along a rotated affine.
     let crop = fit(

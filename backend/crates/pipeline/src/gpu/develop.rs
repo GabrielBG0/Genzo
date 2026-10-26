@@ -366,7 +366,9 @@ impl Develop {
     /// Renders `edit` (clamped, `Edit::clamped`) in `view` for `target`,
     /// re-running from the earliest stage whose inputs changed since the
     /// last render. The frame is then in [`Develop::view`]: at Fit during a
-    /// gesture, the half-size preview in its top left.
+    /// gesture, the half-size preview in its top left. A Fit view's size is
+    /// the viewport's: the frame is the framed image fitted into it
+    /// ([`Frame::fit_in`]).
     pub fn render(
         &mut self,
         gpu: &Gpu,
@@ -382,6 +384,12 @@ impl Develop {
         geometry.crop = fit(geometry.crop, size, geometry.orientation(file))
             .ok_or(DevelopError::CropDoesNotFit)?;
         let frame = Frame::of(&geometry, file);
+        // A Fit view names the viewport; it renders the framed image
+        // scaled into it, so everything below sees the frame's own size.
+        let view = match view {
+            ViewSpec::Fit(viewport) => ViewSpec::Fit(frame.fit_in(size, viewport)),
+            region => region,
+        };
         let wanted = Self::transform(p, edit);
         let look = Look::from(edit);
         let edited = edit.is_edited(&Edit::defaults(p.kind));
