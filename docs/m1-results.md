@@ -58,9 +58,24 @@ Samples: 12 switches, 9 fit renders and 60 previews per folder.
 
 Samples: 9 cold switches and 12 neighbor switches per folder. The cold first pixels take longer than the preview's decode alone (the table above), because the preview read and the photo's decode now run at the same time and each reads the whole file.
 
-**The 12 MP switch is provisional at this view.** A Fit view reads level 1 only when level 1 covers the whole view on both sides (`sampling::plan_view`). Here the view is 2560 × 1440, and level 1 of the 4032 × 3024 photo is 2016 × 1512: narrower than the view, though wider than the 1920 × 1440 frame. So the switch draws its frame from level 1 in place of level 0. The frame from level 0 follows once the input is decoded and attached: at 60 ms p50, 62 ms p95, after the switch began. At 48 MP, level 1 (4032 × 3024) covers the view, so the switch is final.
+**These frames were stretched.** Until 2026-10-26 a Fit frame had the viewport's size, so these 4:3 photos rendered at 2560 × 1440. That made the 12 MP switch provisional: level 1 (2016 × 1512) was narrower than the 2560 px frame, and the frame from level 0 followed at 62 ms p95.
 
-**Result:** every budget measured here holds on the reference desktop.
+**With the frame fitted into the viewport** (2026-10-26, same setup, three runs at 48 MP; p95, p50 in brackets). The frame is now 1920 × 1440, which level 1 covers at 12 MP, so no switch is provisional:
+
+| Target | Budget | 12 MP | 48 MP |
+|---|---|---|---|
+| Switch to a prefetched neighbor | under 150 ms | 26.8 ms (23.3) | 58.1 to 84.8 ms (49.3 to 73.4) |
+| Full fit-view render, not prefetched | under 1 s, under 2 s | 77 ms (60) | 1305 to 1495 ms (1271 to 1344) |
+| First pixels, a switch to a photo not prefetched | under 100 ms | 41.7 ms (27.6) | **1206 to 1210 ms** (65.1 to 73.4) |
+| First pixels, a switch to a prefetched neighbor | under 100 ms | 0.0 ms | 0.0 ms |
+
+**The 48 MP cold first pixels miss the budget once in 9 samples, in every run.** The cause is not the Fit change:
+- `preview::prepare` converts the preview with rayon. On a cold switch it runs on the switching thread while the photo's decode fills rayon's pool, so its work can queue behind the decode's, for about 1.2 s.
+- Run sequentially, `prepare` takes 433 ms for this file's preview. Run in parallel, it normally takes about 60 ms.
+- The 2026-10-25 run above had no such sample, but the code was the same, so that was luck.
+- The fix comes next, in its own change.
+
+**Result:** every budget measured here holds on the reference desktop, except the 48 MP cold first pixels' outlier above.
 
 **Room left:**
 - **The 48 MP switch is the closest:** 99 of 150 ms. Uploading the 98 MB level 1 dominates; DEV-01 measured the GPU part of the switch alone at 22.5 ms.

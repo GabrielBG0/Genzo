@@ -14,6 +14,9 @@
 //! it 0.45 ms, about 0.06 ms over Genzo Standard alone (2026-10-20).
 //! Sampling a crop straightened 20 degrees 1.8 ms: the crop is smaller than
 //! the image, so its filter is narrower (2026-10-20).
+//! Sampling with the view resized first, as each crop delta at Fit does
+//! now that the frame keeps the crop's aspect: 2.95 ms against 2.81 ms
+//! (2026-10-26).
 //! Readback through the frame's staging buffers: the whole frame (what Fit
 //! sends), and one column of 256 px tiles (what a 256 px pan at 1:1 sends):
 //! 11.5 ms for the 19.7 MB frame (M0 measured about 9 ms for a 2560 x 1440
