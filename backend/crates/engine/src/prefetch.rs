@@ -31,10 +31,22 @@ use genzo_pipeline::gpu::thread::RenderThread;
 use crate::EngineError;
 use crate::develop::{Applied, Session};
 use crate::history::PhotoEdits;
+use crate::preview::{ShownPreview, prepare};
 use crate::strip::{Decode, Direction};
+use genzo_color::output::Target;
+use genzo_imgio::Preview;
 
 /// The cap of the neighbors' cache (DEV-01, *Prefetched neighbors*).
 const CACHE_BYTES: u64 = 768 << 20;
+
+/// The cap of the neighbors' previews, ready to show on a switch: four
+/// neighbors' previews of a few MB each, decoded and prepared, and room
+/// for the ones just left.
+const PREVIEW_BYTES: u64 = 128 << 20;
+
+/// A neighbor's embedded preview as decoded, and prepared for the target
+/// it was decoded for; `None` when it has none that shows.
+type KeptPreview = Option<(Arc<Preview>, Arc<ShownPreview>)>;
 
 /// A prefetched neighbor: what `RenderThread::open_level1` takes.
 #[derive(Debug)]
@@ -89,6 +101,9 @@ pub(crate) struct Shared {
     /// Signalled when the plan changes, and when the worker goes idle.
     changed: Condvar,
     cache: Mutex<ByteLru<u64, Arc<Cached>>>,
+    /// Each neighbor's embedded preview, prepared for the target it was
+    /// decoded for; `None` when it has none.
+    pub previews: Mutex<ByteLru<u64, KeptPreview>>,
     /// The worker's render from level 0 of a photo whose last frame was
     /// provisional, until the caller takes it.
     sharpened: Mutex<Option<Applied>>,
@@ -100,6 +115,7 @@ impl Default for Shared {
             plan: Mutex::default(),
             changed: Condvar::new(),
             cache: Mutex::new(ByteLru::new(CACHE_BYTES)),
+            previews: Mutex::new(ByteLru::new(PREVIEW_BYTES)),
             sharpened: Mutex::new(None),
         }
     }
@@ -125,6 +141,20 @@ impl Shared {
         }
         cache.remove(&id);
         None
+    }
+
+    /// Photo `id`'s kept preview, prepared for `target`, if prefetch kept
+    /// one: `Some` of `None` when the file has none. One prepared for
+    /// another target is prepared again, from its decoded pixels.
+    pub fn preview(&self, id: u64, target: Target) -> Option<Option<Arc<ShownPreview>>> {
+        let kept = self.previews.lock().expect("previews").get(&id)?.clone();
+        Some(kept.and_then(|(raw, shown)| {
+            if shown.target == target {
+                Some(shown)
+            } else {
+                prepare(&raw, target).map(Arc::new)
+            }
+        }))
     }
 
     pub fn is_cached(&self, id: u64) -> bool {
@@ -215,6 +245,25 @@ impl Worker {
             .learn(id, decoded);
     }
 
+    /// Decodes and prepares `id`'s embedded preview into the cache, for
+    /// the target the session has now.
+    fn keep_preview(&self, id: u64, path: &std::path::Path) {
+        let target = self.session.lock().expect("session").target;
+        let kept: KeptPreview = self.decoder.preview(path).ok().flatten().and_then(|p| {
+            let shown = prepare(&p, target)?;
+            Some((Arc::new(p), Arc::new(shown)))
+        });
+        let bytes = kept
+            .as_ref()
+            .map_or(1, |(raw, shown)| (raw.rgba.len() + shown.bytes()) as u64);
+        let _ = self
+            .shared
+            .previews
+            .lock()
+            .expect("previews")
+            .insert(id, kept, bytes);
+    }
+
     pub fn run(self) {
         while let Some(task) = self.shared.next() {
             match task {
@@ -281,6 +330,9 @@ impl Worker {
         if !self.shared.still_wanted(id) {
             return;
         }
+        // Its preview too, for a switch to show at once, whether or not it
+        // decoded: an unsupported file shows its preview.
+        self.keep_preview(id, path);
         let (src, orientation) = match decoded {
             Ok(d) => d,
             Err(_) => {

@@ -33,7 +33,7 @@ pub(crate) struct Session {
     pub(crate) open: Option<u64>,
     next_id: u64,
     pub(crate) view: ViewSpec,
-    target: Target,
+    pub(crate) target: Target,
     pub(crate) strip: crate::strip::StripSession,
     /// The generation of the last Develop render issued.
     pub(crate) issued: u64,

@@ -27,6 +27,7 @@ pub mod files;
 pub mod folder;
 pub mod history;
 mod prefetch;
+pub mod preview;
 pub mod strip;
 
 /// The contract types, re-exported for the shell and the cli.
@@ -135,6 +136,8 @@ pub struct Engine {
     prefetch: Arc<prefetch::Shared>,
     /// The prefetch worker, started on the first switch.
     worker: Mutex<Option<std::thread::JoinHandle<()>>>,
+    /// Receives what each strip switch shows at once.
+    preview_sink: Option<preview::Sink>,
 }
 
 #[derive(Debug, Default)]
@@ -220,12 +223,20 @@ impl Engine {
             decoder: Arc::new(strip::FileDecoder),
             prefetch: Arc::default(),
             worker: Mutex::new(None),
+            preview_sink: None,
         }
     }
 
     /// This engine, opening the strip's files with `decoder`.
     pub fn with_decoder(mut self, decoder: Arc<dyn strip::Decode>) -> Self {
         self.decoder = decoder;
+        self
+    }
+
+    /// This engine, handing each strip switch's first pixels to `sink`
+    /// before the photo decodes (until contract 0.5.0's `PreviewShown`).
+    pub fn with_preview_sink(mut self, sink: preview::PreviewSink) -> Self {
+        self.preview_sink = Some(preview::Sink(sink));
         self
     }
 

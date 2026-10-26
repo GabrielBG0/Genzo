@@ -11,10 +11,11 @@
 //! Efficiency and GoPro GPR.
 
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use genzo_engine::api::edit::Phase;
 use genzo_engine::develop::{Target, ViewSpec};
+use genzo_engine::preview::Shown;
 use genzo_engine::strip::{Direction, PhotoKind, Strip};
 use genzo_engine::{Engine, EngineError};
 
@@ -220,11 +221,14 @@ fn a_cached_neighbor_gone_is_found_missing_after_the_switch() {
 }
 
 /// The corpus's unsupported RAW formats, when present (gitignored, so
-/// local only): Nikon High Efficiency and GoPro GPR.
+/// local only): Nikon High Efficiency and GoPro GPR. Each shows its
+/// embedded preview, upright, beside its reason.
 #[test]
 fn corpus_formats_genzo_does_not_decode_say_why() {
     let _lock = ONE_DEVICE.lock().unwrap_or_else(|e| e.into_inner());
     let corpus = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../corpus/raw");
+    // The preview sizes are imgio's (`preview_corpus.rs`); `None` where
+    // the file holds none.
     let cases = [
         (
             "Nikon/Z 8/Nikon_Z8_high_efficiency_low.NEF",
@@ -235,6 +239,11 @@ fn corpus_formats_genzo_does_not_decode_say_why() {
             "GoPro GPR (VC-5 compression) is not supported",
         ),
     ];
+    let previews = |path: &str| {
+        genzo_imgio::decode_preview(&std::fs::read(corpus.join(path)).unwrap())
+            .unwrap()
+            .map(|p| (p.width, p.height, p.orientation))
+    };
     let present: Vec<_> = cases
         .iter()
         .filter(|(p, _)| corpus.join(p).is_file())
@@ -244,6 +253,9 @@ fn corpus_formats_genzo_does_not_decode_say_why() {
         return;
     }
     let Some(engine) = engine() else { return };
+    let shown = Arc::new(Mutex::new(Vec::new()));
+    let s = shown.clone();
+    let engine = engine.with_preview_sink(Arc::new(move |x: Shown| s.lock().unwrap().push(x)));
     for (path, want) in present {
         let from = corpus.join(path);
         let name = from.file_name().unwrap().to_string_lossy().into_owned();
@@ -259,5 +271,17 @@ fn corpus_formats_genzo_does_not_decode_say_why() {
             "{path}"
         );
         nothing_open(&engine);
+        let got: Vec<Shown> = std::mem::take(&mut shown.lock().unwrap());
+        let [one] = &got[..] else {
+            panic!("{path}: {got:?}")
+        };
+        let want =
+            previews(path).map(|(w, h, o)| if (5..=8).contains(&o) { (h, w) } else { (w, h) });
+        assert_eq!(
+            one.preview.as_ref().map(|p| (p.width, p.height)),
+            want,
+            "{path}"
+        );
+        eprintln!("{path}: preview {want:?}");
     }
 }

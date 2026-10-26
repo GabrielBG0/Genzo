@@ -14,7 +14,11 @@
 
 use std::fmt::Debug;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::mpsc::Receiver;
 
+use genzo_color::output::Target;
+use genzo_imgio::Preview;
 use genzo_imgio::capture::CaptureTime;
 use genzo_model::edit::Phase;
 use genzo_pipeline::gpu::develop::{Photo, as_shot};
@@ -24,6 +28,7 @@ use crate::develop::{Applied, ViewSpec};
 use crate::folder::{FolderPhoto, list_folder};
 use crate::history::PhotoEdits;
 use crate::prefetch::{Worker, neighbors};
+use crate::preview::{Shown, ShownPreview, prepare};
 use crate::{Engine, EngineError};
 use genzo_model::edit::Edit;
 
@@ -31,6 +36,12 @@ use genzo_model::edit::Edit;
 /// Injected so tests can see which files are decoded, and when.
 pub trait Decode: Send + Sync + Debug {
     fn decode(&self, path: &Path) -> Result<(RawSource, u8), EngineError>;
+
+    /// The file's embedded preview, if it has one (DEV-01, States:
+    /// Opening). A decoder without previews has none.
+    fn preview(&self, _path: &Path) -> Result<Option<Preview>, EngineError> {
+        Ok(None)
+    }
 }
 
 /// Reads the file and decodes it with `genzo-imgio`.
@@ -47,6 +58,12 @@ impl Decode for FileDecoder {
             }
         })?;
         crate::develop::decode(&data)
+    }
+
+    fn preview(&self, path: &Path) -> Result<Option<Preview>, EngineError> {
+        let data =
+            std::fs::read(path).map_err(|e| EngineError::Io(format!("{}: {e}", path.display())))?;
+        genzo_imgio::decode_preview(&data).map_err(EngineError::decode)
     }
 }
 
@@ -280,7 +297,7 @@ impl Engine {
     /// The switch itself; the caller holds `switching`.
     fn switch_to(&self, id: u64) -> Result<Applied, EngineError> {
         let gpu = self.gpu()?;
-        let (path, edit) = {
+        let (path, edit, target) = {
             let mut s = self.session.lock().expect("session");
             let index = s
                 .strip
@@ -302,11 +319,19 @@ impl Engine {
             };
             s.view = ViewSpec::Fit(out);
             let edit = s.edits.get(&id).map(|p| p.current().clone());
-            (s.strip.photos[index].1.path.clone(), edit)
+            (s.strip.photos[index].1.path.clone(), edit, s.target)
         };
+        // The first pixels, before anything decodes: the preview prefetch
+        // kept; else none when its level 1 follows at once; else the
+        // file's own, read beside its decode.
+        let kept = self.prefetch.preview(id, target);
+        let level1 = edit.and_then(|e| self.prefetch.cached(id, &e));
+        if kept.is_some() || level1.is_some() {
+            self.show(id, kept.clone().flatten());
+        }
         // A neighbor prefetched for its edit: shown from its level 1 at
         // once, its input decoded after, before any neighbor.
-        if let Some(c) = edit.and_then(|e| self.prefetch.cached(id, &e)) {
+        if let Some(c) = level1 {
             gpu.open_level1(id, c.info.clone(), c.level1.clone())?;
             self.session.lock().expect("session").open = Some(id);
             self.replan(Some((id, path)));
@@ -314,7 +339,13 @@ impl Engine {
         }
         // One being built: opened from the input its build holds.
         if !gpu.open_prefetching(id)? {
-            let decoded = self.decode_off_thread(path);
+            let decoding = self.spawn_decode(path.clone());
+            if kept.is_none() {
+                self.show(id, self.read_preview(&path, target));
+            }
+            let decoded = decoding
+                .recv()
+                .unwrap_or_else(|_| Err(EngineError::Decode("the decoder stopped".into())));
             self.session
                 .lock()
                 .expect("session")
@@ -337,6 +368,8 @@ impl Engine {
                     .or_insert_with(|| PhotoEdits::new(kind, size, orientation));
             }
             gpu.open(id, Photo { src, orientation })?;
+        } else if kept.is_none() {
+            self.show(id, None);
         }
         self.session.lock().expect("session").open = Some(id);
         self.replan(None);
@@ -414,15 +447,29 @@ impl Engine {
         self.prefetch.take_sharpened()
     }
 
-    /// Runs the decoder on the rayon pool and waits for it.
-    fn decode_off_thread(&self, path: PathBuf) -> Result<(RawSource, u8), EngineError> {
+    /// Runs the decoder on the rayon pool; its result comes on the channel.
+    fn spawn_decode(&self, path: PathBuf) -> Receiver<Result<(RawSource, u8), EngineError>> {
         let decoder = self.decoder.clone();
         let (tx, rx) = std::sync::mpsc::channel();
         rayon::spawn(move || {
             let _ = tx.send(decoder.decode(&path));
         });
-        rx.recv()
-            .map_err(|_| EngineError::Decode("the decoder stopped".into()))?
+        rx
+    }
+
+    /// The file's embedded preview, prepared for `target`; `None` when it
+    /// has none, cannot be read, or no sink is there to show it.
+    fn read_preview(&self, path: &Path, target: Target) -> Option<Arc<ShownPreview>> {
+        self.preview_sink.as_ref()?;
+        let p = self.decoder.preview(path).ok()??;
+        prepare(&p, target).map(Arc::new)
+    }
+
+    /// Hands photo `id`'s first pixels to the sink, if there is one.
+    fn show(&self, id: u64, preview: Option<Arc<ShownPreview>>) {
+        if let Some(sink) = &self.preview_sink {
+            (sink.0)(Shown { photo: id, preview });
+        }
     }
 }
 

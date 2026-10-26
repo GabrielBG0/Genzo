@@ -12,8 +12,10 @@ use std::sync::{Arc, Condvar, Mutex};
 
 use genzo_engine::api::edit::{Change, Phase};
 use genzo_engine::develop::{Applied, Readback, Target, ViewSpec};
+use genzo_engine::preview::Shown;
 use genzo_engine::strip::Decode;
 use genzo_engine::{Engine, EngineError};
+use genzo_imgio::{ColorEncoding, Preview};
 use genzo_pipeline::gpu::synthetic::{scene_raw, with_camera_profile};
 use genzo_pipeline::raw::RawSource;
 
@@ -25,6 +27,8 @@ struct Calls {
     /// Every name asked for, never drained.
     seen: Vec<String>,
     held: HashSet<String>,
+    /// Every name whose preview was asked for, never drained.
+    previews: Vec<String>,
     /// Names that fail as missing, from the decodes started after.
     gone: HashSet<String>,
 }
@@ -94,6 +98,25 @@ impl Decode for Fake {
             return Err(EngineError::Decode(format!("{name} is broken")));
         }
         Ok((source_for(&name), 1))
+    }
+
+    /// A 4 × 2 sRGB preview whose codes depend on the name; none for names
+    /// with "nopreview" in them. A broken file has one, as unsupported
+    /// files do.
+    fn preview(&self, path: &Path) -> Result<Option<Preview>, EngineError> {
+        let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        self.calls.lock().unwrap().previews.push(name.clone());
+        if name.contains("nopreview") {
+            return Ok(None);
+        }
+        let v = name.bytes().fold(0u8, u8::wrapping_add);
+        Ok(Some(Preview {
+            width: 4,
+            height: 2,
+            rgba: [v, 2, 3, 255].repeat(8),
+            orientation: 1,
+            color: ColorEncoding::Srgb,
+        }))
     }
 }
 
@@ -444,4 +467,151 @@ fn a_neighbor_decode_older_than_the_switch_does_not_set_its_kind() {
     fake.release("p1.jpg");
     engine.wait_prefetch_idle();
     assert_eq!(engine.strip().photos[1].kind, PhotoKind::Missing);
+}
+
+/// What the preview sink received, in order.
+#[derive(Default)]
+struct Seen {
+    shown: Mutex<Vec<Shown>>,
+    changed: Condvar,
+}
+
+impl Seen {
+    /// Waits for, and returns, what was shown for `photo`; panics after
+    /// 10 s.
+    fn wait_for(&self, photo: u64) -> Shown {
+        let s = self.shown.lock().unwrap();
+        let (s, _) = self
+            .changed
+            .wait_timeout_while(s, std::time::Duration::from_secs(10), |s| {
+                !s.iter().any(|x| x.photo == photo)
+            })
+            .unwrap();
+        let found = s.iter().find(|x| x.photo == photo).cloned();
+        found.unwrap_or_else(|| panic!("nothing shown for photo {photo}"))
+    }
+
+    fn take(&self) -> Vec<Shown> {
+        std::mem::take(&mut self.shown.lock().unwrap())
+    }
+}
+
+fn with_sink(engine: Engine) -> (Engine, Arc<Seen>) {
+    let seen = Arc::new(Seen::default());
+    let s = seen.clone();
+    let engine = engine.with_preview_sink(Arc::new(move |shown| {
+        s.shown.lock().unwrap().push(shown);
+        s.changed.notify_all();
+    }));
+    (engine, seen)
+}
+
+fn previews(fake: &Fake) -> Vec<String> {
+    std::mem::take(&mut fake.calls.lock().unwrap().previews)
+}
+
+/// The red code of a shown preview's first pixel: which photo's it is.
+fn code(s: &Shown) -> u8 {
+    s.preview.as_ref().expect("a preview").rgba[0]
+}
+
+fn code_of(name: &str) -> u8 {
+    name.bytes().fold(0u8, u8::wrapping_add)
+}
+
+#[test]
+fn a_switch_shows_the_preview_before_the_photo_decodes() {
+    let _lock = ONE_DEVICE.lock().unwrap_or_else(|e| e.into_inner());
+    let fake = Arc::new(Fake::default());
+    let Some(engine) = engine(&fake) else { return };
+    let (engine, seen) = with_sink(engine);
+    let engine = Arc::new(engine);
+    let _release = ReleaseAll(fake.clone());
+    let dir = TempDir::new("first-pixels", &["p0.jpg", "p1.jpg", "p2.jpg", "p3.jpg"]);
+    let opened = engine.open_folder(&dir.0).unwrap();
+    let p: Vec<u64> = opened.strip.photos.iter().map(|p| p.id).collect();
+    // The first photo's preview is shown on opening the folder.
+    assert_eq!(code(&seen.wait_for(p[0])), code_of("p0.jpg"));
+    engine.wait_prefetch_idle();
+    seen.take();
+    previews(&fake);
+
+    // p3 is no neighbor: its decode is held, and its preview is already
+    // shown, ready to draw.
+    fake.hold("p3.jpg");
+    let (e, far) = (engine.clone(), p[3]);
+    let switch = std::thread::spawn(move || e.select_photo(far).map(|a| a.state.photo));
+    let shown = seen.wait_for(p[3]);
+    let preview = shown.preview.as_ref().unwrap();
+    assert_eq!((preview.width, preview.height), (4, 2));
+    assert_eq!(preview.target, Target::Srgb);
+    assert_eq!(code(&shown), code_of("p3.jpg"));
+    fake.wait_started("p3.jpg");
+    assert!(!switch.is_finished(), "shown while its decode is held");
+    fake.release("p3.jpg");
+    assert_eq!(switch.join().unwrap().unwrap(), p[3]);
+    engine.wait_prefetch_idle();
+    seen.take();
+    previews(&fake);
+
+    // A neighbor prefetched: the preview kept with its level 1, not read
+    // again on the switch.
+    engine.select_photo(p[2]).unwrap();
+    assert_eq!(code(&seen.wait_for(p[2])), code_of("p2.jpg"));
+    assert!(!previews(&fake).contains(&"p2.jpg".into()));
+    engine.wait_prefetch_idle();
+    seen.take();
+
+    // Kept for sRGB, so prepared again for Display P3 from its kept
+    // pixels, without reading the file: other codes for the same color.
+    engine.set_view(SMALL, Target::DisplayP3).unwrap();
+    previews(&fake);
+    engine.select_photo(p[1]).unwrap();
+    let p3 = seen.wait_for(p[1]);
+    assert_eq!(p3.preview.as_ref().unwrap().target, Target::DisplayP3);
+    assert_ne!(code(&p3), code_of("p1.jpg"));
+    assert!(previews(&fake).is_empty());
+}
+
+#[test]
+fn a_switch_without_a_preview_says_so() {
+    let _lock = ONE_DEVICE.lock().unwrap_or_else(|e| e.into_inner());
+    let fake = Arc::new(Fake::default());
+    let Some(engine) = engine(&fake) else { return };
+    let (engine, seen) = with_sink(engine);
+    let _release = ReleaseAll(fake.clone());
+    let dir = TempDir::new(
+        "no-preview",
+        &[
+            "a.jpg",
+            "b_nopreview.jpg",
+            "c.jpg",
+            "d_broken.jpg",
+            "e_nopreview.jpg",
+        ],
+    );
+    let p: Vec<u64> = engine
+        .open_folder(&dir.0)
+        .unwrap()
+        .strip
+        .photos
+        .iter()
+        .map(|p| p.id)
+        .collect();
+    engine.wait_prefetch_idle();
+    // A neighbor without one, kept as none: shown as none, so the photo
+    // before does not stay.
+    engine.select_photo(p[1]).unwrap();
+    assert!(seen.wait_for(p[1]).preview.is_none());
+    // Not prefetched, and without one.
+    engine.select_photo(p[4]).unwrap();
+    assert!(seen.wait_for(p[4]).preview.is_none());
+    engine.wait_prefetch_idle();
+    // A file that does not decode still shows its preview, beside its
+    // error.
+    seen.take();
+    assert!(engine.select_photo(p[3]).is_err());
+    assert_eq!(code(&seen.wait_for(p[3])), code_of("d_broken.jpg"));
+    // Each switch shows once.
+    assert_eq!(seen.take().len(), 1);
 }

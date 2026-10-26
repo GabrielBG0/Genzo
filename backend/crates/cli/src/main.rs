@@ -6,10 +6,12 @@
 
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use genzo_engine::api::{Command, Event, PixelFormat, SpikeSource};
 use genzo_engine::develop::{Applied, Target, ViewSpec};
+use genzo_engine::preview::Shown;
 use genzo_engine::{Engine, contract, files};
 
 const USAGE: &str = "\
@@ -299,7 +301,10 @@ fn bench_gpu(args: &[&str], metrics: &mut Metrics) -> Result<(), String> {
 /// LIB-09 criterion 5 and the photo-open budgets: opening a folder in
 /// Develop at Fit.
 ///
-/// - **First pixels:** each file read and its embedded preview decoded.
+/// - **First pixels:** from a switch to its embedded preview reaching the
+///   preview sink, ready to draw: read from the file for a photo not
+///   prefetched, kept by the prefetch for a neighbor. Photos without one
+///   give no sample.
 /// - **Fit render:** a switch to a photo not prefetched: decoded, opened
 ///   and rendered settled at Fit.
 /// - **Neighbor switch:** a switch to a prefetched neighbor, rendered from
@@ -320,6 +325,7 @@ fn bench_open(folder: &str, args: &[&str], metrics: &mut Metrics) -> Result<(), 
     }
     for (name, times) in [
         ("open/first pixels", times.previews),
+        ("open/first pixels, neighbor", times.neighbor_previews),
         ("open/fit render", times.fits),
         ("open/neighbor switch", times.switches),
         ("open/neighbor switch, from level 0", times.sharp),
@@ -339,6 +345,7 @@ fn bench_open(folder: &str, args: &[&str], metrics: &mut Metrics) -> Result<(), 
 #[derive(Default)]
 struct OpenTimes {
     previews: Vec<f64>,
+    neighbor_previews: Vec<f64>,
     fits: Vec<f64>,
     switches: Vec<f64>,
     sharp: Vec<f64>,
@@ -350,7 +357,14 @@ fn open_pass(
     view: (u32, u32),
     times: &mut OpenTimes,
 ) -> Result<(), String> {
-    let engine = Engine::new();
+    // When the last switch's preview arrived, and for which photo.
+    let shown: Arc<Mutex<Option<(u64, Instant)>>> = Arc::default();
+    let s = shown.clone();
+    let engine = Engine::new().with_preview_sink(Arc::new(move |x: Shown| {
+        if x.preview.is_some() {
+            *s.lock().unwrap() = Some((x.photo, Instant::now()));
+        }
+    }));
     let info = engine.info().adapter;
     println!("adapter: {} ({}, {:?})", info.name, info.backend, info.kind);
     // Kept for the first photo; nothing is open yet to render.
@@ -375,21 +389,19 @@ fn open_pass(
     if photos.len() < 2 {
         return Err("a neighbor switch needs two photos or more".into());
     }
-    // Timed without the prefetch's decodes beside them.
-    engine.wait_prefetch_idle();
-    for p in &photos {
-        let path = folder.join(&p.file_name);
-        if let Some(t) = files::time_preview(&path).map_err(|e| e.to_string())? {
-            times.previews.push(t);
-        }
-    }
-
-    let switch = |i: usize| -> Result<(Applied, f64), String> {
+    // A switch: its result, its time, and the time to its preview.
+    let switch = |i: usize| -> Result<(Applied, f64, Option<f64>), String> {
+        shown.lock().unwrap().take();
         let started = Instant::now();
         let a = engine
             .select_photo(photos[i].id)
             .map_err(|e| e.to_string())?;
-        Ok((a, ms(started)))
+        let t = ms(started);
+        let first = match *shown.lock().unwrap() {
+            Some((id, at)) if id == photos[i].id => Some((at - started).as_secs_f64() * 1000.0),
+            _ => None,
+        };
+        Ok((a, t, first))
     };
     let mut at = 0;
     while at + 1 < photos.len() {
@@ -399,8 +411,9 @@ fn open_pass(
             return Err(format!("{} was not prefetched", photos[next].file_name));
         }
         let started = Instant::now();
-        let (a, t) = switch(next)?;
+        let (a, t, first) = switch(next)?;
         times.switches.push(t);
+        times.neighbor_previews.extend(first);
         let mut line = format!("switch to {}: {t:.1} ms", photos[next].file_name);
         if a.frame.as_ref().is_some_and(|f| f.provisional) {
             // The worker decodes its input, attaches it and renders again.
@@ -422,8 +435,9 @@ fn open_pass(
             break;
         }
         engine.wait_prefetch_idle();
-        let (_, t) = switch(cold)?;
+        let (_, t, first) = switch(cold)?;
         times.fits.push(t);
+        times.previews.extend(first);
         println!("fit render of {}: {t:.0} ms", photos[cold].file_name);
         at = cold;
     }
