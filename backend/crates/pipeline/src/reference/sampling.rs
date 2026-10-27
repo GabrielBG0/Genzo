@@ -132,6 +132,23 @@ impl Frame {
         ((w.round() as u32).max(1), (h.round() as u32).max(1))
     }
 
+    /// The size of the framed image scaled to fit a `viewport`, its aspect
+    /// kept: what a Fit view in that viewport renders (DEV-01, SetView).
+    /// The binding side is the viewport's exactly, the other rounded (so
+    /// never past the viewport's) and at least 1. A smaller image is
+    /// enlarged.
+    pub fn fit_in(&self, level0: (u32, u32), viewport: (u32, u32)) -> (u32, u32) {
+        assert!(viewport.0 > 0 && viewport.1 > 0);
+        let (w, h) = self.size(level0);
+        let (vw, vh) = (f64::from(viewport.0), f64::from(viewport.1));
+        let side = |v: f64| (v.round() as u32).max(1);
+        if w * vh >= h * vw {
+            (viewport.0, side(h * vw / w))
+        } else {
+            (side(w * vh / h), viewport.1)
+        }
+    }
+
     /// Where `point`, in the framed image's normalized coordinates (0 to 1
     /// on each axis, after orientation, turns, flip and crop, as DEV-02's
     /// picker sends it), lands in the stored image whose full resolution is
@@ -677,6 +694,41 @@ mod tests {
         assert_eq!(fallback.level, 1);
         // The filter's scale is the length of each level axis's row.
         assert!((s.footprint[0] - 1.0).abs() < 1e-12);
+    }
+
+    /// A Fit view in a viewport keeps the framed image's aspect: the
+    /// binding side is the viewport's, the other rounded, never past the
+    /// viewport and never 0.
+    #[test]
+    fn a_fit_view_keeps_the_frames_aspect() {
+        let level0 = (4032, 3024);
+        let up = Frame::from(1);
+        // 4:3 in 16:9: the height binds. In 4:3 itself, both sides.
+        assert_eq!(up.fit_in(level0, (2560, 1440)), (1920, 1440));
+        assert_eq!(up.fit_in(level0, (400, 300)), (400, 300));
+        assert_eq!(up.fit_in(level0, (400, 1000)), (400, 300));
+        // A smaller image is enlarged.
+        assert_eq!(up.fit_in((40, 30), (400, 1000)), (400, 300));
+        // Turned a quarter: 3024 x 4032.
+        assert_eq!(Frame::from(6).fit_in(level0, (2560, 1440)), (1080, 1440));
+        assert_eq!(Frame::from(8).fit_in(level0, (300, 1000)), (300, 400));
+        // Rounded: 1030 x 777 at 180 high is 238.6 wide.
+        assert_eq!(up.fit_in((1030, 777), (320, 180)), (239, 180));
+        // A sliver keeps at least 1 pixel.
+        assert_eq!(up.fit_in((10_000, 3), (100, 100)), (100, 1));
+        // A straightened crop: its own size, 1200 x 750 (8:5).
+        let cropped = Frame {
+            orientation: 1,
+            crop: Some(Crop {
+                cx: 0.45,
+                cy: 0.6,
+                w: 0.3,
+                h: 0.25,
+                angle: 17.0,
+            }),
+        };
+        assert_eq!(cropped.fit_in((4000, 3000), (1000, 1000)), (1000, 625));
+        assert_eq!(cropped.fit_in((4000, 3000), (2000, 500)), (800, 500));
     }
 
     #[test]

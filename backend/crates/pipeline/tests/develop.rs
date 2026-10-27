@@ -60,7 +60,9 @@ const TILES: TileConfig = TileConfig {
     apron: 24,
 };
 
-const FIT: ViewSpec = ViewSpec::Fit((420, 310));
+/// A Fit view larger than level 1 of the turned 1030 x 777 photo: its
+/// frame is 420 x 557, level 1 shows 389 x 515.
+const FIT: ViewSpec = ViewSpec::Fit((420, 560));
 const ONE_TO_ONE: ViewSpec = ViewSpec::Region {
     out: (300, 220),
     zoom: 1.0,

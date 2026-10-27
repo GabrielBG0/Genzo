@@ -116,3 +116,45 @@ fn a_request_during_the_rest_still_renders_as_fresh() {
     );
     assert_eq!(pixels(&toned), want, "a tone change during the rest");
 }
+
+fn size(a: &Applied) -> (u32, u32) {
+    match &a.frame.as_ref().expect("rendered").readback {
+        Readback::Frame { size, .. } => *size,
+        r => panic!("{r:?}"),
+    }
+}
+
+/// A Fit view is the framed image scaled to fit the viewport, its aspect
+/// kept: the frame is that size, not the viewport's (DEV-01, SetView).
+#[test]
+fn a_fit_frame_keeps_the_photos_aspect() {
+    let _lock = ONE_DEVICE.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(engine) = engine() else { return };
+    let wide = ViewSpec::Fit((320, 180));
+    // 1030 × 777 in a 16:9 viewport: the height binds, 238.6 px wide.
+    engine.open_source(source(), 1).unwrap();
+    assert_eq!(
+        size(&engine.set_view(wide, Target::Srgb).unwrap()),
+        (239, 180)
+    );
+    // The file's orientation 6 shows it 777 × 1030.
+    engine.open_source(source(), 6).unwrap();
+    assert_eq!(
+        size(&engine.set_view(wide, Target::Srgb).unwrap()),
+        (136, 180)
+    );
+    // A tall viewport: the width binds.
+    let tall = engine.set_view(ViewSpec::Fit((100, 400)), Target::Srgb);
+    assert_eq!(size(&tall.unwrap()), (100, 133));
+    // A crop has its own aspect: half the width, 388.5 × 1030.
+    engine.set_view(wide, Target::Srgb).unwrap();
+    let half = Change::Crop {
+        cx: 0.5,
+        cy: 0.5,
+        w: 0.5,
+        h: 1.0,
+        angle: 0.0,
+    };
+    let cropped = engine.apply(&[half], Phase::End).unwrap();
+    assert_eq!(size(&cropped), (68, 180));
+}
