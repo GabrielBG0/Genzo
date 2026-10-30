@@ -150,8 +150,10 @@ impl Shared {
 
     /// Photo `id`'s kept preview, prepared for `target` and the viewport
     /// `fit`, if prefetch kept one: `Some` of `None` when the file has none.
-    /// One prepared for another target is prepared again, from its reduced
-    /// pixels; one reduced for another viewport is not kept.
+    /// One prepared for another target or viewport is prepared again from
+    /// its reduced pixels: reduced again for a smaller viewport, as it is
+    /// for a larger one (a preview is never enlarged), so a resize never
+    /// leaves a neighbor without its preview.
     pub fn preview(
         &self,
         id: u64,
@@ -159,11 +161,8 @@ impl Shared {
         fit: (u32, u32),
     ) -> Option<Option<Arc<ShownPreview>>> {
         let kept = self.previews.lock().expect("previews").get(&id)?.clone();
-        if kept.fit != fit {
-            return None;
-        }
         Some(kept.preview.and_then(|(reduced, shown)| {
-            if shown.target == target {
+            if shown.target == target && kept.fit == fit {
                 Some(shown)
             } else {
                 prepare(&reduced, target, fit).map(Arc::new)
