@@ -1,11 +1,11 @@
 //! Embedded previews on the real files of the corpus (DEV-01, stage 0).
 //!
 //! The expectations come from scripts/preview-reference.py: an independent
-//! parser applies the same rule (the smallest JPEG with a long edge of at
-//! least 1280 px, else the largest) and libjpeg-turbo decodes that exact
-//! stream. Genzo's preview must have the same size and, within JPEG decoder
-//! tolerance, the same per-channel means, which proves the same stream was
-//! decoded. Corpus files skip when missing, unless GENZO_REQUIRE_CORPUS=1 and
+//! parser applies the same rule (color before grayscale, then the smallest
+//! JPEG with a long edge of at least 1280 px, else the largest) and
+//! libjpeg-turbo decodes that exact stream. Genzo's preview must have the
+//! same size and, within JPEG decoder tolerance, the same per-channel means,
+//! which proves the same stream was decoded. Corpus files skip when missing, unless GENZO_REQUIRE_CORPUS=1 and
 //! corpus/golden-inputs.txt lists them (CI).
 //!   cargo test --release -p genzo-imgio --test preview_corpus -- --nocapture
 
@@ -54,7 +54,7 @@ type Reference = (&'static str, Option<(u32, u32, [f64; 3])>, u8);
 const PREVIEWS: &[Reference] = &[
     (
         "raw/Apple/iPhone 12 Pro/IMG_1361.DNG",
-        Some((2016, 1512, [23.98, 23.98, 23.98])),
+        Some((4032, 3024, [117.038, 128.083, 141.059])),
         6,
     ),
     (
@@ -135,7 +135,7 @@ const PREVIEWS: &[Reference] = &[
     // Not on the CI list: local only.
     (
         "proraw/iPhone 16 Pro/IPhone16proRaw.DNG",
-        Some((2016, 1512, [94.027, 94.027, 94.027])),
+        Some((8064, 6048, [122.161, 125.258, 124.707])),
         6,
     ),
     (

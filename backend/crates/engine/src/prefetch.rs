@@ -31,7 +31,7 @@ use genzo_pipeline::gpu::thread::RenderThread;
 use crate::EngineError;
 use crate::develop::{Applied, Session};
 use crate::history::PhotoEdits;
-use crate::preview::{ShownPreview, prepare, prepare_behind};
+use crate::preview::{ShownPreview, prepare, prepare_behind, reduce};
 use crate::strip::{Decode, Direction};
 use genzo_color::output::Target;
 use genzo_imgio::Preview;
@@ -40,13 +40,18 @@ use genzo_imgio::Preview;
 const CACHE_BYTES: u64 = 768 << 20;
 
 /// The cap of the neighbors' previews, ready to show on a switch: four
-/// neighbors' previews of a few MB each, decoded and prepared, and room
-/// for the ones just left.
+/// neighbors' previews of up to 22 MB each at 2560 x 1440 (reduced and
+/// prepared), and room for the ones just left.
 const PREVIEW_BYTES: u64 = 128 << 20;
 
-/// A neighbor's embedded preview as decoded, and prepared for the target
-/// it was decoded for; `None` when it has none that shows.
-type KeptPreview = Option<(Arc<Preview>, Arc<ShownPreview>)>;
+/// A neighbor's embedded preview, reduced for the viewport it was kept
+/// for, and prepared for the target it had then.
+#[derive(Debug, Clone)]
+pub(crate) struct KeptPreview {
+    fit: (u32, u32),
+    /// `None` when it has none that shows.
+    preview: Option<(Arc<Preview>, Arc<ShownPreview>)>,
+}
 
 /// A prefetched neighbor: what `RenderThread::open_level1` takes.
 #[derive(Debug)]
@@ -143,16 +148,24 @@ impl Shared {
         None
     }
 
-    /// Photo `id`'s kept preview, prepared for `target`, if prefetch kept
-    /// one: `Some` of `None` when the file has none. One prepared for
-    /// another target is prepared again, from its decoded pixels.
-    pub fn preview(&self, id: u64, target: Target) -> Option<Option<Arc<ShownPreview>>> {
+    /// Photo `id`'s kept preview, prepared for `target` and the viewport
+    /// `fit`, if prefetch kept one: `Some` of `None` when the file has none.
+    /// One prepared for another target or viewport is prepared again from
+    /// its reduced pixels: reduced again for a smaller viewport, as it is
+    /// for a larger one (a preview is never enlarged), so a resize never
+    /// leaves a neighbor without its preview.
+    pub fn preview(
+        &self,
+        id: u64,
+        target: Target,
+        fit: (u32, u32),
+    ) -> Option<Option<Arc<ShownPreview>>> {
         let kept = self.previews.lock().expect("previews").get(&id)?.clone();
-        Some(kept.and_then(|(raw, shown)| {
-            if shown.target == target {
+        Some(kept.preview.and_then(|(reduced, shown)| {
+            if shown.target == target && kept.fit == fit {
                 Some(shown)
             } else {
-                prepare(&raw, target).map(Arc::new)
+                prepare(&reduced, target, fit).map(Arc::new)
             }
         }))
     }
@@ -245,17 +258,22 @@ impl Worker {
             .learn(id, decoded);
     }
 
-    /// Decodes and prepares `id`'s embedded preview into the cache, for
-    /// the target the session has now.
+    /// Decodes, reduces and prepares `id`'s embedded preview into the
+    /// cache, for the target and viewport the session has now.
     fn keep_preview(&self, id: u64, path: &std::path::Path) {
-        let target = self.session.lock().expect("session").target;
-        let kept: KeptPreview = self.decoder.preview(path).ok().flatten().and_then(|p| {
-            let shown = prepare_behind(&p, target)?;
-            Some((Arc::new(p), Arc::new(shown)))
+        let (target, fit) = {
+            let s = self.session.lock().expect("session");
+            (s.target, s.view.out())
+        };
+        let preview = self.decoder.preview(path).ok().flatten().and_then(|p| {
+            let reduced = reduce(&p, fit)?;
+            let shown = prepare_behind(&reduced, target, fit)?;
+            Some((Arc::new(reduced), Arc::new(shown)))
         });
-        let bytes = kept
-            .as_ref()
-            .map_or(1, |(raw, shown)| (raw.rgba.len() + shown.bytes()) as u64);
+        let bytes = preview.as_ref().map_or(1, |(reduced, shown)| {
+            (reduced.rgba.len() + shown.bytes()) as u64
+        });
+        let kept = KeptPreview { fit, preview };
         let _ = self
             .shared
             .previews
