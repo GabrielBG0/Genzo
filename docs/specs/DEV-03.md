@@ -32,7 +32,7 @@ Sources: the spec's feature table ("Histogram, clipping warnings, before and aft
 ### The histogram panel
 
 1. **The plot.** The three channels are drawn as filled areas over the 256 bins, from dark at the left to light at the right. Where channels overlap, the colors mix as the handoff draws them (two channels give the secondary color, three give gray). The colors come from the token set.
-2. **Height.** The plot is scaled so that the tallest bin from 1 to 254 fills it. Bins 0 and 255 can be taller and are cut at the top, so that a clipped spike never flattens the rest of the plot.
+2. **Height.** The plot is scaled so that the tallest bin from 1 to 254 fills it. Bins 0 and 255 can be taller and are cut at the top, so that a clipped spike never flattens the rest of the plot. When every bin from 1 to 254 is empty (each pixel at 0 or 255 in every channel), the tallest of bins 0 and 255 fills it instead. With no pixels counted, the plot is empty.
 3. **The corner markers.** A triangle in the top-left corner (shadows) and one in the top-right corner (highlights).
    - Dim when nothing clips.
    - Lit when something clips, in the color of the clipped channels: one channel's own color, or the mix of two. White when all three clip.
@@ -52,7 +52,7 @@ Sources: the spec's feature table ("Histogram, clipping warnings, before and aft
 
 ### The J overlay
 
-- **J turns both overlays on or off together.** A marker click turns one on or off (see above). Their state is the view's, not the photo's: it holds across photos and switches, and is not saved (Decided: "Module state").
+- **J turns both overlays on or off together.** A marker click turns one on or off (see above). Their state is the view's and follows the Decided row "Module state (APP-01)": switching photos or modules turns both off, and nothing is saved.
 - **What it shows:** on the photo, every pixel whose highlights clip is drawn in `label.red`; every pixel whose shadows clip is drawn in `label.blue`. A pixel that clips in both is drawn red.
 - **Drawn by stage 9 into the frame.** The overlay is part of the frame's pixels, so it needs no second image over the binary tile protocol, and it is right at Fit and at 1:1, while dragging too. The frontend sends the two colors from its token set with the overlay state (`SetClippingOverlay`, below), so no color is hard-coded in the engine. The overlay is flat, with no blend or blur.
 - Turning an overlay on or off renders the frame again from the stage 7 cache, through stage 9 only (DEV-01, *Re-runs*).
@@ -95,7 +95,7 @@ Every command is in the shortcut registry, with its shortcut shown in its toolti
 | State | What the histogram shows | J and the markers |
 |---|---|---|
 | **No photo selected** | An empty plot, markers dim, the EXIF row empty | J does nothing |
-| **Opening** (the embedded preview is shown) | The preview's histogram, the EXIF row filled | The markers work; J's state is kept but drawn from the first frame |
+| **Opening** (the embedded preview is shown) | The preview's histogram, the EXIF row filled | The markers work; J can be turned on, and is drawn from the first frame |
 | **Opening, no embedded preview** | An empty plot until the first frame | As Opening |
 | **Ready, at Fit** | The frame's histogram, live while dragging | Everything |
 | **Ready, at 1:1** | The whole photo's; while dragging, the last one until release | Everything |
@@ -105,7 +105,7 @@ Every command is in the shortcut registry, with its shortcut shown in its toolti
 
 ## Data
 
-Nothing is stored. The overlay state is the view's for the session, like the zoom (Decided: "Module state"). The histogram is computed again with every frame. The EXIF values are read from the file each time it is opened.
+Nothing is stored. The overlay state is the view's and is reset by a photo or module switch, like the zoom (Decided: "Module state (APP-01)"). The histogram is computed again with every frame. The EXIF values are read from the file each time it is opened.
 
 ## Edge cases
 

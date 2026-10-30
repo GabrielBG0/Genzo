@@ -152,7 +152,7 @@ Parked decisions that have been settled, with the date and what follows from eac
 | What a prefetched neighbor keeps | Its level 1 only, rendered tile by tile and read back beside the current pyramid; on a switch the old pyramid is freed, level 1 uploaded and levels 2 and up computed on the GPU | 2026-10-24 | No second pyramid on the GPU, so the 1 GB budget holds; 98 MB of CPU memory per 48 MP neighbor. DEV-01 |
 | A switch whose view wants level 0 | Level 1 upsampled at once, marked provisional; rendered again from level 0 when the decoded input comes | 2026-10-24 | A Fit view larger than level 1 (12 MP on a 4K screen), a tight crop or 1:1 keeps the 150 ms switch, and sharpens a moment later. DEV-01, Prefetched neighbors |
 | Prefetch order | The direction of travel: after moving right, next, next + 1, previous, previous − 1; the mirror after moving left; on opening a folder, as after moving right | 2026-10-24 | A switch cancels prefetch for photos no longer neighbors. LIB-09 |
-| Histogram and clipping (DEV-03) | What the screen shows: the codes of the frame stage 9 writes, in its target (sRGB or Display P3), after gamut compression and the dither. A pixel clips when any of its channels is at 255 (highlights) or 0 (shadows). The histogram is always of the whole cropped photo: at Fit from the frame, at 1:1 from a whole-photo render at the Fit size, after the visible tiles and only on release while dragging | 2026-10-30 | On a Display P3 monitor, colors that only an sRGB export clips do not warn; OUT-01 says so. Counting runs in stage 9's output shader, inside the 10 MB the GPU budget already reserves. The 1:1 render reuses the view's stage caches, so the next 1:1 drag or pan samples once more. The J overlay and the Alt clipping preview are drawn by stage 9 into the frame, so no mask travels on its own |
+| Histogram and clipping (DEV-03) | What the screen shows: the codes of the frame stage 9 writes, in its target (sRGB or Display P3), after gamut compression and the dither. A pixel clips when any of its channels is at 255 (highlights) or 0 (shadows). The histogram is always of the whole cropped photo: at Fit from the frame, and live while dragging from each drag frame. At 1:1 it comes from a whole-photo render at the Fit size after the visible tiles; while dragging at 1:1, it updates on release only | 2026-10-30 | On a Display P3 monitor, colors that only an sRGB export clips do not warn; OUT-01 says so. Counting runs in stage 9's output shader, inside the 10 MB the GPU budget already reserves. The 1:1 render reuses the view's stage caches, so the next 1:1 drag or pan samples once more. The J overlay and the Alt clipping preview are drawn by stage 9 into the frame, so no mask travels on its own |
 
 ## Parked decisions, with a deadline
 
@@ -372,10 +372,11 @@ These come from `docs/m0-results.md` and decide how the steps below are built:
    - Done: `bench open FOLDER [W H N]` (with step 9), and its smoke test on small PNGs. Not yet in `scripts/gpu-check.sh`.
 
 ### Contract
-- Commands: `OpenFolder`, `SelectPhoto`, `SetView`, `ApplyEditDelta`, `ResetParam`, `PickWhiteBalance`, `Undo`, `Redo`, `ExportJpeg`.
+- Commands: `OpenFolder`, `SelectPhoto`, `SetView`, `ApplyEditDelta`, `ResetParam`, `PickWhiteBalance`, `SetClippingOverlay`, `Undo`, `Redo`, `ExportJpeg`.
   - `PickWhiteBalance` carries a point on the shown image. The engine samples there, applies the white balance and records the step (DEV-02).
   - `SetView` carries the viewport size, the zoom (Fit or 1:1) and the visible rectangle, so the engine renders only what is seen.
   - `ApplyEditDelta` carries the gesture phase (start, update, end). The engine picks the drag preview from it, replacing the spike's `proxy` flag, and records one history step per finished gesture.
+  - `ApplyEditDelta` also carries `clipping_preview`, set while Alt is held during a tone slider's drag, and `SetClippingOverlay` carries J's two overlays and their token colors (DEV-03).
 - Queries: `ListFolderPhotos`, `GetEdit`, `GetHistogram`.
 - Events: `PreviewShown`, `RenderFinished`, `ExportProgress`, `AdapterInfo` (for the software-fallback notice).
 - Frames: the tile protocol from M0.
