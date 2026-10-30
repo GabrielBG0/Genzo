@@ -275,8 +275,21 @@ fn corpus_formats_genzo_does_not_decode_say_why() {
         let [one] = &got[..] else {
             panic!("{path}: {got:?}")
         };
-        let want =
-            previews(path).map(|(w, h, o)| if (5..=8).contains(&o) { (h, w) } else { (w, h) });
+        // Upright, and reduced to the engine's first view, Fit at 1280 x
+        // 960, with the Fit frame's rounding.
+        let want = previews(path)
+            .map(|(w, h, o)| if (5..=8).contains(&o) { (h, w) } else { (w, h) })
+            .map(|(w, h)| {
+                let (vw, vh) = (1280.0, 960.0);
+                let (fw, fh) = (f64::from(w), f64::from(h));
+                if w <= 1280 && h <= 960 {
+                    (w, h)
+                } else if fw * vh >= fh * vw {
+                    (1280, (fh * vw / fw).round() as u32)
+                } else {
+                    ((fw * vh / fh).round() as u32, 960)
+                }
+            });
         assert_eq!(
             one.preview.as_ref().map(|p| (p.width, p.height)),
             want,

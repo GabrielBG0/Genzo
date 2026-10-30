@@ -101,13 +101,22 @@ No cold sample of the 27 waited for the decode. One run's p95 of 98.8 ms is with
 - **The fit render slows from 1.3 s to 3.2 s** because that work shares the cores with the photo's decode.
 - **No neighbor keeps a preview:** its decoded and prepared pixels, about 390 MB, are larger than the 128 MB the prefetch keeps for previews, so a switch to a neighbor shows none until its level 1 does.
 
-**Result:** at 12 MP every budget holds on the reference desktop. At 48 MP, the first pixels and the fit render miss theirs with the real preview.
+**With the preview reduced to the Fit frame** (2026-10-30, same setup, three runs at 48 MP, one at 12 MP; p95, p50 in brackets). `preview::reduce` takes box means of the preview's codes down to the size the Fit frame shows it at (1920 × 1440 here), before the conversion. The conversion keeps the colors it converted per band of rows, so gamut compression runs once per color rather than once per pixel, with the same result. Prefetch keeps the reduced preview, about 22 MB with the prepared one, so neighbors keep theirs again:
+
+| Target | Budget | 12 MP | 48 MP |
+|---|---|---|---|
+| First pixels, a switch to a photo not prefetched | under 100 ms | 31.1 ms (17.2) | **560 to 605 ms** (528 to 547) |
+| First pixels, a switch to a prefetched neighbor | under 100 ms | 0.0 ms | 0.0 ms |
+| Switch to a prefetched neighbor | under 150 ms | 19.2 ms (17.5) | 80.0 to 81.8 ms (72.5 to 77.6) |
+| Full fit-view render, not prefetched | under 1 s, under 2 s | 73 ms (55) | 1187 to 1198 ms (1114 to 1121) |
+
+**Result:** every budget holds on the reference desktop except the 48 MP cold first pixels: about 0.55 s against 100 ms. The floor is the preview's decode, about 270 ms for the 8064 × 6048 JPEG alone, slower beside the photo's decode. zune-jpeg can't decode at a reduced scale, and a decoder that can (1/2 to 1/8 in the DCT domain, as libjpeg-turbo does) would be a second JPEG decoder: the owner decides.
 
 **Room left:**
 - **The 48 MP switch is the closest:** 99 of 150 ms. Uploading the 98 MB level 1 dominates; DEV-01 measured the GPU part of the switch alone at 22.5 ms.
 - **The 48 MP first pixels read the whole 28 MB file** before the preview is found. Reading only the head would cut that, if the budget gets tight.
 - **A cold switch reads the file twice**, once for its preview and once for its decode, side by side: up to 99 ms of 100 at 48 MP. Reading it once for both would cut that.
-- **Preparing the preview at the frame's size**, not the preview's, would cut `prepare` and the kept previews by the ratio of their pixels (about 17 for this file at 1920 × 1440). The 270 ms decode stays: getting under 100 ms needs a decoder that scales in the DCT domain.
+- **The 48 MP preview's decode** is the floor of a cold switch's first pixels: about 270 ms alone. Getting under 100 ms needs a decoder that scales in the DCT domain. A disk tier of small previews (plan step 8) helps only photos seen before.
 
 **Still open:**
 - **The bench runs by hand.** `scripts/gpu-check.sh` doesn't run it yet, since it needs corpus copies. CI only runs a smoke test on small PNGs (`cli/tests/bench_open.rs`).

@@ -297,7 +297,7 @@ impl Engine {
     /// The switch itself; the caller holds `switching`.
     fn switch_to(&self, id: u64) -> Result<Applied, EngineError> {
         let gpu = self.gpu()?;
-        let (path, edit, target) = {
+        let (path, edit, target, out) = {
             let mut s = self.session.lock().expect("session");
             let index = s
                 .strip
@@ -319,12 +319,12 @@ impl Engine {
             };
             s.view = ViewSpec::Fit(out);
             let edit = s.edits.get(&id).map(|p| p.current().clone());
-            (s.strip.photos[index].1.path.clone(), edit, s.target)
+            (s.strip.photos[index].1.path.clone(), edit, s.target, out)
         };
         // The first pixels, before anything decodes: the preview prefetch
         // kept; else none when its level 1 follows at once; else the
         // file's own, read beside its decode.
-        let kept = self.prefetch.preview(id, target);
+        let kept = self.prefetch.preview(id, target, out);
         let level1 = edit.and_then(|e| self.prefetch.cached(id, &e));
         if kept.is_some() || level1.is_some() {
             self.show(id, kept.clone().flatten());
@@ -341,7 +341,7 @@ impl Engine {
         if !gpu.open_prefetching(id)? {
             let decoding = self.spawn_decode(path.clone());
             if kept.is_none() {
-                self.show(id, self.read_preview(&path, target));
+                self.show(id, self.read_preview(&path, target, out));
             }
             let decoded = decoding
                 .recv()
@@ -457,12 +457,18 @@ impl Engine {
         rx
     }
 
-    /// The file's embedded preview, prepared for `target`; `None` when it
-    /// has none, cannot be read, or no sink is there to show it.
-    fn read_preview(&self, path: &Path, target: Target) -> Option<Arc<ShownPreview>> {
+    /// The file's embedded preview, prepared for `target` and the viewport
+    /// `fit`; `None` when it has none, cannot be read, or no sink is there
+    /// to show it.
+    fn read_preview(
+        &self,
+        path: &Path,
+        target: Target,
+        fit: (u32, u32),
+    ) -> Option<Arc<ShownPreview>> {
         self.preview_sink.as_ref()?;
         let p = self.decoder.preview(path).ok()??;
-        prepare(&p, target).map(Arc::new)
+        prepare(&p, target, fit).map(Arc::new)
     }
 
     /// Hands photo `id`'s first pixels to the sink, if there is one.

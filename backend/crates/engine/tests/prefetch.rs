@@ -597,13 +597,30 @@ fn a_switch_shows_the_preview_before_the_photo_decodes() {
 
     // Kept for sRGB, so prepared again for Display P3 from its kept
     // pixels, without reading the file: other codes for the same color.
-    engine.set_view(SMALL, Target::DisplayP3).unwrap();
+    // The same viewport as the engine's first, so kept for this one.
+    engine
+        .set_view(ViewSpec::Fit((1280, 960)), Target::DisplayP3)
+        .unwrap();
     previews(&fake);
     engine.select_photo(p[1]).unwrap();
     let p3 = seen.wait_for(p[1]);
     assert_eq!(p3.preview.as_ref().unwrap().target, Target::DisplayP3);
     assert_ne!(code(&p3), code_of("p1.jpg"));
     assert!(previews(&fake).is_empty());
+    engine.wait_prefetch_idle();
+    seen.take();
+
+    // p0's preview was kept for sRGB and the first viewport: in a smaller
+    // one, never shown larger than the frame, though kept for the target.
+    // The 4 x 2 previews fit only from 4 x 2 up.
+    engine
+        .set_view(ViewSpec::Fit((2, 1)), Target::Srgb)
+        .unwrap();
+    engine.select_photo(p[0]).unwrap();
+    let small = seen.wait_for(p[0]);
+    if let Some(s) = &small.preview {
+        assert!(s.width <= 2 && s.height <= 1, "{}x{}", s.width, s.height);
+    }
 }
 
 #[test]
