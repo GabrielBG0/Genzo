@@ -22,15 +22,19 @@
 
 use zune_core::bytestream::ZCursor;
 use zune_core::colorspace::ColorSpace;
-use zune_core::options::DecoderOptions;
 use zune_jpeg::JpegDecoder;
 
-use crate::{ColorEncoding, FileFormat, Preview, exif, raster};
+use crate::{ColorEncoding, FileFormat, Preview, bands, exif, raster};
 
 /// The preview size preferred: the smallest candidate with a long edge of
 /// at least this many pixels. Cameras store one of 1616 to 2016 px beside
 /// the full-size JPEG; that decodes in a few milliseconds.
 pub(crate) const PREFERRED_EDGE: u32 = 1280;
+
+/// Previews from this many pixels are decoded in bands on the rayon pool
+/// of the caller (`bands.rs`), when their restart markers allow; smaller
+/// ones take a few milliseconds whole.
+const BANDS_FROM: u64 = 4_000_000;
 
 /// Largest candidate considered, in pixels.
 const MAX_PIXELS: u64 = 50_000_000;
@@ -181,12 +185,8 @@ fn decode_candidate(
     c: Candidate,
 ) -> Option<(Vec<u8>, Option<ColorEncoding>, Option<u8>)> {
     let stream = &data[c.start..c.end];
-    let options = DecoderOptions::default()
-        .set_strict_mode(true)
-        .set_max_width(65_535)
-        .set_max_height(65_535)
-        .jpeg_set_out_colorspace(ColorSpace::RGB);
-    let mut decoder = JpegDecoder::new_with_options(ZCursor::new(stream), options);
+    let mut decoder =
+        JpegDecoder::new_with_options(ZCursor::new(stream), bands::options(ColorSpace::RGB));
     decoder.decode_headers().ok()?;
     let info = decoder.info()?;
     if (u32::from(info.width), u32::from(info.height)) != (c.width, c.height) {
@@ -198,13 +198,16 @@ fn decode_candidate(
     ) {
         return None;
     }
-    let rgb = decoder.decode().ok()?;
-    if rgb.len() != c.pixels() as usize * 3 {
+    let cut = (c.pixels() >= BANDS_FROM)
+        .then(|| bands::layout(stream))
+        .flatten()
+        .and_then(|l| bands::decode(stream, &l, rayon::current_num_threads() as u32));
+    let rgba = match cut {
+        Some(rgba) => rgba,
+        None => bands::whole(stream)?,
+    };
+    if rgba.len() != c.pixels() as usize * 4 {
         return None;
-    }
-    let mut rgba = Vec::with_capacity(c.pixels() as usize * 4);
-    for p in rgb.as_chunks::<3>().0 {
-        rgba.extend_from_slice(&[p[0], p[1], p[2], 255]);
     }
     let exif = decoder.exif().map(|e| exif::tiff_payload(e).to_vec());
     let color = match decoder.icc_profile() {
@@ -214,6 +217,26 @@ fn decode_candidate(
     };
     let orientation = exif.as_deref().and_then(exif::orientation_tag);
     Some((rgba, color, orientation))
+}
+
+/// For the corpus tests: every embedded stream of `data` that can be cut
+/// into bands, decoded so at every thread count from 1 to 16, must be the
+/// same bytes as decoded whole; how many decoded.
+pub fn check_bands_in(data: &[u8]) -> usize {
+    let mut cut = 0;
+    for c in candidates(data) {
+        let s = &data[c.start..c.end];
+        let Some(l) = bands::layout(s) else {
+            continue;
+        };
+        let whole = bands::whole(s);
+        for threads in 1..=16 {
+            let got = bands::decode(s, &l, threads);
+            assert!(got == whole, "the stream at {} in {threads} bands", c.start);
+        }
+        cut += usize::from(whole.is_some());
+    }
+    cut
 }
 
 /// The file-level facts a preview takes when its own stream says nothing:

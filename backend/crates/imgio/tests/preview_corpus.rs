@@ -182,6 +182,26 @@ fn previews_match_libjpeg_turbo() {
 
 /// A damaged file still shows a preview that lies in its intact part: the
 /// first half of a NEF holds the 1620 px preview, of a CR3 the 1620 px one.
+/// Every preview the corpus holds that can be cut at its restart markers
+/// decodes, in bands, to the same bytes as whole (`bands.rs`). The ProRAW
+/// previews of the iPhone 16 Pro are the reason for bands.
+#[test]
+fn previews_in_bands_are_the_same_bytes() {
+    let mut cut = Vec::new();
+    for &(key, ..) in PREVIEWS {
+        if let Some(data) = file(key) {
+            let n = genzo_imgio::check_bands_in(&data);
+            if n > 0 {
+                cut.push(key);
+            }
+        }
+    }
+    println!("cut into bands: {cut:?}");
+    if let Some(data) = file("proraw/iPhone 16 Pro/IPhone16proRaw.DNG") {
+        assert!(genzo_imgio::check_bands_in(&data) > 0);
+    }
+}
+
 #[test]
 fn truncated_files_keep_their_early_previews() {
     for (key, size) in [
