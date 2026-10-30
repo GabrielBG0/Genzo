@@ -36,7 +36,7 @@ def streams(d):
                     j += 1
                     continue
                 n = int.from_bytes(d[j + 2:j + 4], "big")
-                if m in (0xC0, 0xC1, 0xC2) and d[j + 4] == 8:
+                if m in (0xC0, 0xC1, 0xC2) and j + 10 <= len(d) and d[j + 4] == 8:
                     size = (int.from_bytes(d[j + 7:j + 9], "big"), int.from_bytes(d[j + 5:j + 7], "big"))
                     components = d[j + 9]
                 if m == 0xDA:
