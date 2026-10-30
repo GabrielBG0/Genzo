@@ -33,4 +33,5 @@ serde_json.workspace = true
 serde.workspace = true
 
 [dev-dependencies]
+jpeg-encoder.workspace = true
 png.workspace = true

@@ -561,6 +561,7 @@ dependencies = [
  "genzo-jobs",
  "genzo-model",
  "genzo-pipeline",
+ "jpeg-encoder",
  "png",
  "rayon",
  "serde",

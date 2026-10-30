@@ -28,7 +28,7 @@ use crate::develop::{Applied, ViewSpec};
 use crate::folder::{FolderPhoto, list_folder};
 use crate::history::PhotoEdits;
 use crate::prefetch::{Worker, neighbors};
-use crate::preview::{Shown, ShownPreview, prepare};
+use crate::preview::{Shown, ShownPreview, on_pool, prepare};
 use crate::{Engine, EngineError};
 use genzo_model::edit::Edit;
 
@@ -457,9 +457,9 @@ impl Engine {
         rx
     }
 
-    /// The file's embedded preview, prepared for `target` and the viewport
-    /// `fit`; `None` when it has none, cannot be read, or no sink is there
-    /// to show it.
+    /// The file's embedded preview, read and prepared for `target` and the
+    /// viewport `fit` on the preview pool; `None` when it has none, cannot
+    /// be read, or no sink is there to show it.
     fn read_preview(
         &self,
         path: &Path,
@@ -467,8 +467,11 @@ impl Engine {
         fit: (u32, u32),
     ) -> Option<Arc<ShownPreview>> {
         self.preview_sink.as_ref()?;
-        let p = self.decoder.preview(path).ok()??;
-        prepare(&p, target, fit).map(Arc::new)
+        let decoder = &self.decoder;
+        on_pool(|| {
+            let p = decoder.preview(path).ok()??;
+            prepare(&p, target, fit).map(Arc::new)
+        })
     }
 
     /// Hands photo `id`'s first pixels to the sink, if there is one.

@@ -1,13 +1,15 @@
 //! A switch's preview while a decode fills rayon's global pool (DEV-01,
-//! States: Opening): it is prepared on a pool of its own, so it never
-//! waits for the decode's work to drain.
+//! States: Opening): it is read and prepared on a pool of its own, so it
+//! never waits for the decode's work to drain.
 //!
 //! A fake decoder holds every thread of the global pool for the names with
-//! "gate" in them, until the test opens the gate. This file is its own test
+//! "gate" in them, until the test opens the gate. A "big" one's preview is
+//! a real 2048 x 2048 JPEG with restart markers, which imgio decodes in
+//! bands on the pool of its caller. This file is its own test
 //! binary because of that: any other test here using rayon would stall.
 
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::Duration;
 
 use genzo_engine::preview::Shown;
@@ -105,13 +107,12 @@ impl Decode for Fake {
         Ok((source_for(&name), 1))
     }
 
-    /// A 4 × 2 Display P3 preview: converted for an sRGB frame. A gated
-    /// name's is read only once its decode holds the pool, so it is
-    /// prepared while the pool is full.
+    /// A 4 × 2 Display P3 preview: converted for an sRGB frame. A big
+    /// name's is a real JPEG.
     fn preview(&self, path: &Path) -> Result<Option<Preview>, EngineError> {
         let name = path.file_name().unwrap().to_string_lossy().into_owned();
-        if name.contains("gate") {
-            self.gate.wait_holding(&name);
+        if name.contains("big") {
+            return Ok(genzo_imgio::decode_preview(big_preview()).unwrap());
         }
         let v = name.bytes().fold(0u8, u8::wrapping_add);
         Ok(Some(Preview {
@@ -122,6 +123,24 @@ impl Decode for Fake {
             color: ColorEncoding::DisplayP3,
         }))
     }
+}
+
+/// A TIFF holding a 2048 x 2048 4:2:0 JPEG with a restart every MCU row:
+/// a preview imgio decodes in bands.
+fn big_preview() -> &'static [u8] {
+    static FILE: OnceLock<Vec<u8>> = OnceLock::new();
+    FILE.get_or_init(|| {
+        let side = 2048_u16;
+        let rgb: Vec<u8> = (0..u32::from(side) * u32::from(side))
+            .flat_map(|i| [(i % 2048 / 8) as u8, (i / 2048 / 8) as u8, 128])
+            .collect();
+        let mut file = b"II*\0".to_vec();
+        let mut e = jpeg_encoder::Encoder::new(&mut file, 80);
+        e.set_restart_interval(side / 16);
+        e.encode(&rgb, side, side, jpeg_encoder::ColorType::Rgb)
+            .unwrap();
+        file
+    })
 }
 
 struct TempDir(PathBuf);
@@ -225,8 +244,9 @@ fn a_cold_switch_shows_its_preview_while_a_neighbor_decode_fills_the_pool() {
         return;
     };
     let _open = OpenOnDrop(fake.gate.clone());
-    let names = ["p0.jpg", "p1_gate.jpg", "p2.jpg", "p3.jpg", "p4.jpg"];
+    let names = ["p0.jpg", "p1_gate.jpg", "p2.jpg", "p3.jpg", "p4_big.jpg"];
     let dir = TempDir::new("neighbor", &names);
+    big_preview();
     let p: Vec<u64> = engine
         .open_folder(&dir.0)
         .unwrap()
@@ -238,7 +258,8 @@ fn a_cold_switch_shows_its_preview_while_a_neighbor_decode_fills_the_pool() {
     // Prefetch decodes p1, the next neighbor, which holds the global pool.
     fake.gate.wait_holding("p1_gate.jpg");
 
-    // p4 is no neighbor of p0: its preview, while p1 still decodes.
+    // p4 is no neighbor of p0: its preview, decoded in bands, while p1
+    // still decodes.
     let (e, far) = (engine.clone(), p[4]);
     let switch = std::thread::spawn(move || e.select_photo(far).map(|a| a.state.photo));
     let shown = seen.shown_within(p[4]);

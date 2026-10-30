@@ -64,7 +64,8 @@ impl std::fmt::Debug for Sink {
     }
 }
 
-/// The pool a switch's preview is prepared on, one thread per core. It
+/// The pool a switch's preview is read and prepared on, one thread per
+/// core: a large one is decoded in bands there (imgio's `bands.rs`). It
 /// shares the cores with a decode, but never waits for its work to drain.
 /// Only the switching thread uses it: the prefetch worker prepares its
 /// neighbors' previews on the global pool ([`prepare_behind`]), so the
@@ -78,6 +79,11 @@ fn pool() -> &'static rayon::ThreadPool {
             .build()
             .expect("the preview pool")
     })
+}
+
+/// Runs `f`, a switch's reading of its preview, on the preview pool.
+pub(crate) fn on_pool<T: Send>(f: impl FnOnce() -> T + Send) -> T {
+    pool().install(f)
 }
 
 /// `p` upright, in `target`, and reduced to fit in `fit` (the viewport),
