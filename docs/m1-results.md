@@ -74,7 +74,7 @@ Samples: 9 cold switches and 12 neighbor switches per folder. The cold first pix
 - Run sequentially, `prepare` takes 433 ms for this file's preview. Run in parallel, it normally takes about 60 ms.
 - The 2026-10-25 run above had no such sample, but the code was the same, so that was luck.
 
-**With the preview prepared on its own pool** (2026-10-30, same setup, three runs at 48 MP, one at 12 MP; p95, p50 in brackets). `prepare` now runs on a rayon pool of its own, one thread per core. It still shares the cores with the decode, but its work no longer waits for the decode's to drain. That holds for a neighbor's decode in prefetch too, which `tests/preview_pool.rs` checks along with the switch's own:
+**With the preview prepared on its own pool** (2026-10-30, same setup, three runs at 48 MP, one at 12 MP; p95, p50 in brackets). `prepare` now runs on a rayon pool of its own, one thread per core. It still shares the cores with the decode, but its work no longer waits for the decode's to drain. That holds for a neighbor's decode in prefetch too, which `tests/preview_pool.rs` checks along with the switch's own. Only the switch uses that pool: the prefetch worker prepares the previews it keeps on the global pool, so a switch never waits behind one of them:
 
 | Target | Budget | 12 MP | 48 MP |
 |---|---|---|---|

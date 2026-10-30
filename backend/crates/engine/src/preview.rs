@@ -62,10 +62,12 @@ impl std::fmt::Debug for Sink {
     }
 }
 
-/// The pool previews are prepared on, one thread per core. They share the
-/// cores with a decode, but never wait for its work to drain. Its callers,
-/// the switching thread and the prefetch worker, are not rayon threads: one
-/// on the global pool could run a decode's work while it waits.
+/// The pool a switch's preview is prepared on, one thread per core. It
+/// shares the cores with a decode, but never waits for its work to drain.
+/// Only the switching thread uses it: the prefetch worker prepares its
+/// neighbors' previews on the global pool ([`prepare_behind`]), so the
+/// switch never waits behind one. Neither is a rayon thread; one on the
+/// global pool could run a decode's work while it waits here.
 fn pool() -> &'static rayon::ThreadPool {
     static POOL: OnceLock<rayon::ThreadPool> = OnceLock::new();
     POOL.get_or_init(|| {
@@ -76,9 +78,16 @@ fn pool() -> &'static rayon::ThreadPool {
     })
 }
 
-/// `p` upright and in `target`. `None` when its color encoding is one
-/// Genzo does not read (DEV-01, Stage 4), as for the image itself.
+/// `p` upright and in `target`, for a switch to show at once. `None` when
+/// its color encoding is one Genzo does not read (DEV-01, Stage 4), as for
+/// the image itself.
 pub fn prepare(p: &Preview, target: Target) -> Option<ShownPreview> {
+    pool().install(|| prepare_behind(p, target))
+}
+
+/// As [`prepare`], on the global pool, behind any decode there: for the
+/// previews prefetch keeps.
+pub(crate) fn prepare_behind(p: &Preview, target: Target) -> Option<ShownPreview> {
     let (w, h) = (p.width, p.height);
     if w == 0 || h == 0 || p.rgba.len() != 4 * w as usize * h as usize {
         return None;
@@ -106,32 +115,30 @@ pub fn prepare(p: &Preview, target: Target) -> Option<ShownPreview> {
             .collect()
     });
     let mut rgba = vec![0u8; 4 * sw as usize * sh as usize];
-    pool().install(|| {
-        rgba.par_chunks_mut(4 * sw as usize)
-            .enumerate()
-            .for_each(|(y, row)| {
-                let b = (y as f64 + 0.5) / f64::from(sh);
-                for (x, out) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
-                    let a = (x as f64 + 0.5) / f64::from(sw);
-                    let at = |r: [f64; 3], n: u32| {
-                        ((r[0] * a + r[1] * b + r[2]) * f64::from(n)).floor() as u32
-                    };
-                    let (sx, sy) = (at(map[0], w).min(w - 1), at(map[1], h).min(h - 1));
-                    let i = 4 * (sy as usize * w as usize + sx as usize);
-                    let src = &p.rgba[i..i + 4];
-                    match (&enc, &lin) {
-                        (Some(e), Some(lin)) => {
-                            let linear = [0, 1, 2].map(|c| lin[c][src[c] as usize]);
-                            let working = genzo_color::mul(&e.to_working, linear);
-                            let rgb = pixel(working, (x as u32, y as u32), target, compress, false);
-                            out[..3].copy_from_slice(&rgb);
-                        }
-                        _ => out[..3].copy_from_slice(&src[..3]),
+    rgba.par_chunks_mut(4 * sw as usize)
+        .enumerate()
+        .for_each(|(y, row)| {
+            let b = (y as f64 + 0.5) / f64::from(sh);
+            for (x, out) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+                let a = (x as f64 + 0.5) / f64::from(sw);
+                let at = |r: [f64; 3], n: u32| {
+                    ((r[0] * a + r[1] * b + r[2]) * f64::from(n)).floor() as u32
+                };
+                let (sx, sy) = (at(map[0], w).min(w - 1), at(map[1], h).min(h - 1));
+                let i = 4 * (sy as usize * w as usize + sx as usize);
+                let src = &p.rgba[i..i + 4];
+                match (&enc, &lin) {
+                    (Some(e), Some(lin)) => {
+                        let linear = [0, 1, 2].map(|c| lin[c][src[c] as usize]);
+                        let working = genzo_color::mul(&e.to_working, linear);
+                        let rgb = pixel(working, (x as u32, y as u32), target, compress, false);
+                        out[..3].copy_from_slice(&rgb);
                     }
-                    out[3] = src[3];
+                    _ => out[..3].copy_from_slice(&src[..3]),
                 }
-            });
-    });
+                out[3] = src[3];
+            }
+        });
     Some(ShownPreview {
         width: sw,
         height: sh,
