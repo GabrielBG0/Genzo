@@ -6,6 +6,8 @@
 //! This is the CPU reference; `pipeline`'s output shader is checked against
 //! it.
 
+use std::sync::OnceLock;
+
 use crate::{Mat3, WORKING_TO_XYZ, invert, mat_mul, mul, rgb_to_xyz, srgb_encode};
 
 /// The white both targets and the working space share, CIE xy.
@@ -30,15 +32,35 @@ impl Target {
     /// own D65, so a source encoded with the same primaries comes back
     /// exactly (`encoding::InputEncoding` builds its matrices the same way).
     pub fn to_xyz(self) -> Mat3 {
-        rgb_to_xyz(self.primaries(), D65)
+        self.matrices().to_xyz
     }
 
     /// Linear AP1 to linear target RGB.
     pub fn from_working(self) -> Mat3 {
-        mat_mul(
-            &invert(&self.to_xyz()).expect("invertible"),
-            &WORKING_TO_XYZ,
-        )
+        self.matrices().from_working
+    }
+
+    /// The target's matrices, derived once: stage 9 uses them for every
+    /// pixel, and inverting them each time cost more than the rest of it.
+    fn matrices(self) -> &'static Matrices {
+        static SRGB: OnceLock<Matrices> = OnceLock::new();
+        static P3: OnceLock<Matrices> = OnceLock::new();
+        let cell = match self {
+            Target::Srgb => &SRGB,
+            Target::DisplayP3 => &P3,
+        };
+        cell.get_or_init(|| {
+            let to_xyz = rgb_to_xyz(self.primaries(), D65);
+            let from_xyz = invert(&to_xyz).expect("invertible");
+            Matrices {
+                to_xyz,
+                from_working: mat_mul(&from_xyz, &WORKING_TO_XYZ),
+                from_xyz_oklab: FromOklab {
+                    lab_to_lms: invert(&OKLAB_M2).expect("invertible"),
+                    lms_to_rgb: mat_mul(&from_xyz, &invert(&OKLAB_M1).expect("invertible")),
+                },
+            }
+        })
     }
 
     /// The gamut compression for this target.
@@ -99,15 +121,24 @@ pub const CHROMA_SEARCH: f64 = 0.5;
 /// The largest chroma `target` holds at Oklab lightness `l` and hue
 /// direction (`a`, `b` per unit chroma), by bisection.
 pub fn max_chroma(l: f64, dir: [f64; 2], target: Target) -> f64 {
-    let to_rgb = target.from_xyz_oklab();
-    let inside = |c: f64| {
-        let rgb = oklab_to(&to_rgb, [l, c * dir[0], c * dir[1]]);
-        rgb.iter().all(|v| (0.0..=1.0).contains(v))
-    };
+    search(&target.from_xyz_oklab(), l, dir, |_| false)
+}
+
+/// The bisection of [`max_chroma`], stopped at the first chroma found
+/// inside for which `enough` holds.
+fn search(to_rgb: &FromOklab, l: f64, dir: [f64; 2], enough: impl Fn(f64) -> bool) -> f64 {
     let (mut lo, mut hi) = (0.0, CHROMA_SEARCH);
     for _ in 0..EDGE_STEPS {
         let mid = 0.5 * (lo + hi);
-        if inside(mid) { lo = mid } else { hi = mid }
+        let rgb = oklab_to(to_rgb, [l, mid * dir[0], mid * dir[1]]);
+        if rgb.iter().all(|v| (0.0..=1.0).contains(v)) {
+            lo = mid;
+            if enough(lo) {
+                break;
+            }
+        } else {
+            hi = mid
+        }
     }
     lo
 }
@@ -121,7 +152,11 @@ pub fn compress(rgb: [f64; 3], target: Target, c: &Compression) -> [f64; 3] {
         return rgb;
     }
     let dir = [lab[1] / chroma, lab[2] / chroma];
-    let edge = max_chroma(l, dir, target);
+    let to_rgb = target.from_xyz_oklab();
+    // Most colors lie well inside: the search stops once its chroma inside
+    // keeps `r` under the threshold. It only climbs from there, so the
+    // whole search would keep the color too, by the same steps.
+    let edge = search(&to_rgb, l, dir, |lo| chroma / lo < c.threshold);
     if edge <= 0.0 {
         return rgb;
     }
@@ -130,7 +165,6 @@ pub fn compress(rgb: [f64; 3], target: Target, c: &Compression) -> [f64; 3] {
         return rgb;
     }
     let r = compress_distance(r, c.threshold, c.limit, c.power).min(1.0);
-    let to_rgb = target.from_xyz_oklab();
     oklab_to(&to_rgb, [l, r * edge * dir[0], r * edge * dir[1]])
 }
 
@@ -225,14 +259,15 @@ pub struct FromOklab {
 
 impl Target {
     pub fn from_xyz_oklab(self) -> FromOklab {
-        FromOklab {
-            lab_to_lms: invert(&OKLAB_M2).expect("invertible"),
-            lms_to_rgb: mat_mul(
-                &invert(&self.to_xyz()).expect("invertible"),
-                &invert(&OKLAB_M1).expect("invertible"),
-            ),
-        }
+        self.matrices().from_xyz_oklab
     }
+}
+
+#[derive(Debug)]
+struct Matrices {
+    to_xyz: Mat3,
+    from_working: Mat3,
+    from_xyz_oklab: FromOklab,
 }
 
 /// Oklab to linear target RGB.
@@ -302,6 +337,109 @@ mod tests {
                 100.0 * past
             );
             assert!(past < 0.015, "{target:?}: {past}");
+        }
+    }
+
+    /// `compress` as it was before its shortcut: the edge always searched
+    /// for. The oracle for the shortcut.
+    fn compress_by_search(rgb: [f64; 3], target: Target, c: &Compression) -> [f64; 3] {
+        let lab = xyz_to_oklab(mul(&target.to_xyz(), rgb));
+        let (l, chroma) = (lab[0], lab[1].hypot(lab[2]));
+        if l <= 0.0 || l >= 1.0 || chroma <= 0.0 {
+            return rgb;
+        }
+        let dir = [lab[1] / chroma, lab[2] / chroma];
+        let edge = max_chroma(l, dir, target);
+        if edge <= 0.0 {
+            return rgb;
+        }
+        let r = chroma / edge;
+        if r < c.threshold {
+            return rgb;
+        }
+        let r = compress_distance(r, c.threshold, c.limit, c.power).min(1.0);
+        oklab_to(
+            &target.from_xyz_oklab(),
+            [l, r * edge * dir[0], r * edge * dir[1]],
+        )
+    }
+
+    /// Linear target RGB of an 8-bit code of Display P3 (the sRGB curve) or
+    /// Adobe RGB (gamma 563/256), the wider sources a non-RAW photo has.
+    fn source_rgb(code: u32, adobe: bool, target: Target) -> [f64; 3] {
+        let primaries = if adobe {
+            [[0.64, 0.33], [0.21, 0.71], [0.15, 0.06]]
+        } else {
+            Target::DisplayP3.primaries()
+        };
+        let curve = |v: f64| {
+            if adobe {
+                v.powf(563.0 / 256.0)
+            } else {
+                crate::srgb_decode(v)
+            }
+        };
+        let to_xyz = rgb_to_xyz(primaries, D65);
+        let m = mat_mul(&invert(&target.to_xyz()).unwrap(), &to_xyz);
+        let v = [code >> 16, code >> 8 & 255, code & 255].map(|c| curve(f64::from(c) / 255.0));
+        mul(&m, v)
+    }
+
+    /// The shortcut keeps exactly what the search would: over AP1 (dark,
+    /// bright, past white, and near black and white at full chroma, where
+    /// rays are shortest), and over every 97th 8-bit code of the wide
+    /// sources. `every_code` checks them all.
+    #[test]
+    fn the_shortcut_keeps_what_the_search_would() {
+        for target in [Target::Srgb, Target::DisplayP3] {
+            let (m, c) = (target.from_working(), target.compression());
+            let mut ap1 = ap1_sweep();
+            for w in ap1_surface(48) {
+                for scale in [1e-4, 1e-3, 0.002, 0.95, 0.99, 1.02, 1.5, 4.0] {
+                    ap1.push(w.map(|v| v * scale));
+                }
+            }
+            for w in ap1 {
+                let rgb = mul(&m, w);
+                assert_eq!(
+                    compress(rgb, target, &c),
+                    compress_by_search(rgb, target, &c),
+                    "{w:?}"
+                );
+            }
+            for adobe in [false, true] {
+                for code in (0..1 << 24).step_by(97) {
+                    let rgb = source_rgb(code, adobe, target);
+                    let got = compress(rgb, target, &c);
+                    assert_eq!(got, compress_by_search(rgb, target, &c), "{code:06x}");
+                }
+            }
+        }
+    }
+
+    /// Every 8-bit code of Display P3 and Adobe RGB in both targets (P3 in
+    /// P3 is not compressed): a few seconds in release, minutes in debug.
+    ///   cargo test --release -p genzo-color every_code -- --ignored
+    #[test]
+    #[ignore = "minutes in debug"]
+    fn every_code() {
+        for (adobe, target) in [
+            (false, Target::Srgb),
+            (true, Target::Srgb),
+            (true, Target::DisplayP3),
+        ] {
+            let c = target.compression();
+            std::thread::scope(|s| {
+                for t in 0..16u32 {
+                    s.spawn(move || {
+                        for code in (t..1 << 24).step_by(16) {
+                            let rgb = source_rgb(code, adobe, target);
+                            let got = compress(rgb, target, &c);
+                            assert_eq!(got, compress_by_search(rgb, target, &c), "{code:06x}");
+                        }
+                    });
+                }
+            });
         }
     }
 
