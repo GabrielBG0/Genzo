@@ -31,7 +31,7 @@ use genzo_pipeline::gpu::thread::RenderThread;
 use crate::EngineError;
 use crate::develop::{Applied, Session};
 use crate::history::PhotoEdits;
-use crate::preview::{ShownPreview, prepare};
+use crate::preview::{ShownPreview, prepare, prepare_behind};
 use crate::strip::{Decode, Direction};
 use genzo_color::output::Target;
 use genzo_imgio::Preview;
@@ -250,7 +250,7 @@ impl Worker {
     fn keep_preview(&self, id: u64, path: &std::path::Path) {
         let target = self.session.lock().expect("session").target;
         let kept: KeptPreview = self.decoder.preview(path).ok().flatten().and_then(|p| {
-            let shown = prepare(&p, target)?;
+            let shown = prepare_behind(&p, target)?;
             Some((Arc::new(p), Arc::new(shown)))
         });
         let bytes = kept

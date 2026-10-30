@@ -11,8 +11,11 @@
 //!   before.
 //! - Until contract 0.5.0 makes this the `PreviewShown` event, a sink the
 //!   caller registers receives it ([`crate::Engine::with_preview_sink`]).
+//! - It is prepared on a thread pool of its own. On rayon's global pool its
+//!   work would wait behind a decode's (the switch's own, or a neighbor's
+//!   in prefetch), which fills that pool for a second or more at 48 MP.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use genzo_color::output::{Target, fits, pixel};
 use genzo_imgio::Preview;
@@ -59,9 +62,32 @@ impl std::fmt::Debug for Sink {
     }
 }
 
-/// `p` upright and in `target`. `None` when its color encoding is one
-/// Genzo does not read (DEV-01, Stage 4), as for the image itself.
+/// The pool a switch's preview is prepared on, one thread per core. It
+/// shares the cores with a decode, but never waits for its work to drain.
+/// Only the switching thread uses it: the prefetch worker prepares its
+/// neighbors' previews on the global pool ([`prepare_behind`]), so the
+/// switch never waits behind one. Neither is a rayon thread; one on the
+/// global pool could run a decode's work while it waits here.
+fn pool() -> &'static rayon::ThreadPool {
+    static POOL: OnceLock<rayon::ThreadPool> = OnceLock::new();
+    POOL.get_or_init(|| {
+        rayon::ThreadPoolBuilder::new()
+            .thread_name(|i| format!("genzo-preview-{i}"))
+            .build()
+            .expect("the preview pool")
+    })
+}
+
+/// `p` upright and in `target`, for a switch to show at once. `None` when
+/// its color encoding is one Genzo does not read (DEV-01, Stage 4), as for
+/// the image itself.
 pub fn prepare(p: &Preview, target: Target) -> Option<ShownPreview> {
+    pool().install(|| prepare_behind(p, target))
+}
+
+/// As [`prepare`], on the global pool, behind any decode there: for the
+/// previews prefetch keeps.
+pub(crate) fn prepare_behind(p: &Preview, target: Target) -> Option<ShownPreview> {
     let (w, h) = (p.width, p.height);
     if w == 0 || h == 0 || p.rgba.len() != 4 * w as usize * h as usize {
         return None;
