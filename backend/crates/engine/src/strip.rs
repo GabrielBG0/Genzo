@@ -323,7 +323,7 @@ impl Engine {
         };
         // The first pixels, before anything decodes: the preview prefetch
         // kept; else none when its level 1 follows at once; else the
-        // file's own, read beside its decode.
+        // file's own, read before its decode.
         let kept = self.prefetch.preview(id, target, out);
         let level1 = edit.and_then(|e| self.prefetch.cached(id, &e));
         if kept.is_some() || level1.is_some() {
@@ -339,10 +339,15 @@ impl Engine {
         }
         // One being built: opened from the input its build holds.
         if !gpu.open_prefetching(id)? {
+            // The file's preview before its decode, which would share the
+            // cores with it. Its full-size pixels are freed after.
+            let read = kept.is_none().then(|| {
+                let (shown, full) = self.read_preview(&path, target, out);
+                self.show(id, shown);
+                full
+            });
             let decoding = self.spawn_decode(path.clone());
-            if kept.is_none() {
-                self.show(id, self.read_preview(&path, target, out));
-            }
+            drop(read);
             let decoded = decoding
                 .recv()
                 .unwrap_or_else(|_| Err(EngineError::Decode("the decoder stopped".into())));
@@ -458,19 +463,21 @@ impl Engine {
     }
 
     /// The file's embedded preview, read and prepared for `target` and the
-    /// viewport `fit` on the preview pool; `None` when it has none, cannot
-    /// be read, or no sink is there to show it.
+    /// viewport `fit` on the preview pool, and as read; `None` when it has
+    /// none, cannot be read, or no sink is there to show it.
     fn read_preview(
         &self,
         path: &Path,
         target: Target,
         fit: (u32, u32),
-    ) -> Option<Arc<ShownPreview>> {
-        self.preview_sink.as_ref()?;
+    ) -> (Option<Arc<ShownPreview>>, Option<Preview>) {
+        if self.preview_sink.is_none() {
+            return (None, None);
+        }
         let decoder = &self.decoder;
-        on_pool(|| {
-            let p = decoder.preview(path).ok()??;
-            prepare(&p, target, fit).map(Arc::new)
+        on_pool(|| match decoder.preview(path) {
+            Ok(Some(p)) => (prepare(&p, target, fit).map(Arc::new), Some(p)),
+            _ => (None, None),
         })
     }
 

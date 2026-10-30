@@ -1,6 +1,7 @@
-//! A switch's preview while a decode fills rayon's global pool (DEV-01,
-//! States: Opening): it is read and prepared on a pool of its own, so it
-//! never waits for the decode's work to drain.
+//! A switch's preview and the decodes that fill rayon's global pool (DEV-01,
+//! States: Opening). A cold switch reads its preview before its decode
+//! starts, so they do not share the cores; and on a pool of its own, so it
+//! never waits for a neighbor's decode to drain.
 //!
 //! A fake decoder holds every thread of the global pool for the names with
 //! "gate" in them, until the test opens the gate. A "big" one's preview is
@@ -71,6 +72,8 @@ impl Drop for OpenOnDrop {
 #[derive(Debug, Default)]
 struct Fake {
     gate: Arc<Gate>,
+    /// Decodes started and previews shown, in order.
+    events: Mutex<Vec<String>>,
 }
 
 fn source_for(name: &str) -> RawSource {
@@ -81,6 +84,7 @@ fn source_for(name: &str) -> RawSource {
 impl Decode for Fake {
     fn decode(&self, path: &Path) -> Result<(RawSource, u8), EngineError> {
         let name = path.file_name().unwrap().to_string_lossy().into_owned();
+        self.events.lock().unwrap().push(format!("decode {name}"));
         if name.contains("gate") && !self.gate.state.lock().unwrap().open {
             // Every global pool thread but this one, if it is one, waits
             // at the gate; then this one does.
@@ -187,10 +191,16 @@ impl Seen {
 
 fn engine(fake: &Arc<Fake>) -> Option<(Arc<Engine>, Arc<Seen>)> {
     let seen = Arc::new(Seen::default());
-    let s = seen.clone();
+    let (s, f) = (seen.clone(), fake.clone());
     let engine = Engine::new()
         .with_decoder(fake.clone())
         .with_preview_sink(Arc::new(move |shown| {
+            if shown.preview.is_some() {
+                f.events
+                    .lock()
+                    .unwrap()
+                    .push(format!("shown {}", shown.photo));
+            }
             s.shown.lock().unwrap().push(shown);
             s.changed.notify_all();
         }));
@@ -205,7 +215,7 @@ fn engine(fake: &Arc<Fake>) -> Option<(Arc<Engine>, Arc<Seen>)> {
 }
 
 #[test]
-fn a_cold_switch_shows_its_preview_while_its_decode_fills_the_pool() {
+fn a_cold_switch_shows_its_preview_before_it_decodes() {
     let _lock = ONE_DEVICE.lock().unwrap_or_else(|e| e.into_inner());
     let fake = Arc::new(Fake::default());
     let Some((engine, seen)) = engine(&fake) else {
@@ -225,15 +235,26 @@ fn a_cold_switch_shows_its_preview_while_its_decode_fills_the_pool() {
     engine.wait_prefetch_idle();
 
     // p4 is no neighbor of p0: the switch decodes it, and that decode
-    // holds the global pool.
+    // holds the global pool, but only once its preview is shown.
     let (e, far) = (engine.clone(), p[4]);
     let switch = std::thread::spawn(move || e.select_photo(far).map(|a| a.state.photo));
     let shown = seen.shown_within(p[4]);
     fake.gate.wait_holding("p4_gate.jpg");
     assert!(!switch.is_finished(), "its decode still holds the pool");
     fake.gate.open();
-    assert!(shown, "the preview waited for the decode");
+    assert!(shown, "no preview");
     assert_eq!(switch.join().unwrap().unwrap(), p[4]);
+    let events = fake.events.lock().unwrap();
+    let at = |e: &str| {
+        events
+            .iter()
+            .position(|x| x == e)
+            .unwrap_or_else(|| panic!("{e}: {events:?}"))
+    };
+    assert!(
+        at(&format!("shown {}", p[4])) < at("decode p4_gate.jpg"),
+        "{events:?}"
+    );
 }
 
 #[test]
