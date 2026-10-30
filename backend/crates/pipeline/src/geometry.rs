@@ -186,9 +186,10 @@ impl Geometry {
 /// - the angle is clamped to ±45°;
 /// - a rotated rectangle that leaves the oriented image shrinks about its
 ///   center, keeping its aspect, until it fits;
-/// - None when the result would be under 32 pixels on a side, or a value is
-///   not finite, so the delta is refused and the crop keeps its last valid
-///   state (owner, 2026-10-20). The center is never moved.
+/// - None when the result would be under 32 pixels on a side (or the
+///   image's whole side, when that is shorter), or a value is not finite,
+///   so the delta is refused and the crop keeps its last valid state
+///   (owner, 2026-10-20). The center is never moved.
 pub fn fit(crop: Crop, level0: (u32, u32), o: u8) -> Option<Crop> {
     // NaN would pass the clamps below (clamp keeps it, min drops it).
     if ![crop.cx, crop.cy, crop.w, crop.h, crop.angle]
@@ -228,8 +229,10 @@ pub fn fit(crop: Crop, level0: (u32, u32), o: u8) -> Option<Crop> {
         ..crop
     };
     let (cw, ch) = fitted.pixels(oriented);
-    // A hair under, from rounding in s, still counts as the minimum.
-    (cw >= MIN_CROP - 1e-9 && ch >= MIN_CROP - 1e-9).then_some(fitted)
+    // A hair under, from rounding in s, still counts as the minimum. An
+    // image shorter than the minimum is still shown whole.
+    let min = |side: f64| MIN_CROP.min(side) - 1e-9;
+    (cw >= min(w) && ch >= min(h)).then_some(fitted)
 }
 
 #[cfg(test)]
@@ -397,6 +400,35 @@ mod tests {
         };
         let got = fit(just, level0, 1).unwrap();
         assert!((got.w * 4000.0 - 32.0).abs() < 1e-9, "{}", got.w * 4000.0);
+        // An image under 32 px on a side: whole, it is the minimum on that
+        // side; anything smaller there, or turned, is refused. Stored
+        // 20 x 40 and turned a quarter (6), it shows 40 x 20.
+        let whole = Crop {
+            cx: 0.5,
+            cy: 0.5,
+            w: 1.0,
+            h: 1.0,
+            angle: 0.0,
+        };
+        for o in [1, 6] {
+            let got = fit(whole, (20, 40), o).unwrap();
+            assert_eq!((got.w, got.h), (1.0, 1.0), "{o}");
+        }
+        assert_eq!(fit(Crop { h: 0.9, ..whole }, (40, 20), 1), None);
+        assert_eq!(
+            fit(
+                Crop {
+                    angle: 5.0,
+                    ..whole
+                },
+                (40, 20),
+                1
+            ),
+            None
+        );
+        // The other side, 40 px, still has the 32 px minimum.
+        assert!(fit(Crop { w: 0.8, ..whole }, (40, 20), 1).is_some());
+        assert_eq!(fit(Crop { w: 0.75, ..whole }, (40, 20), 1), None);
         // Values that are not numbers: refused, not clamped into a crop.
         for bad in [
             Crop {
