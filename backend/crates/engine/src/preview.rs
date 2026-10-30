@@ -63,7 +63,9 @@ impl std::fmt::Debug for Sink {
 }
 
 /// The pool previews are prepared on, one thread per core. They share the
-/// cores with a decode, but never wait for its work to drain.
+/// cores with a decode, but never wait for its work to drain. Its callers,
+/// the switching thread and the prefetch worker, are not rayon threads: one
+/// on the global pool could run a decode's work while it waits.
 fn pool() -> &'static rayon::ThreadPool {
     static POOL: OnceLock<rayon::ThreadPool> = OnceLock::new();
     POOL.get_or_init(|| {
