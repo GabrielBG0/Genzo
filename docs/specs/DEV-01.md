@@ -579,7 +579,7 @@ The crop is defined on the image after the file's orientation, the quarter turns
 - `w`, `h`: its width and height, as fractions of the oriented image's width and height.
 - `angle`: the straighten angle in degrees, −45 to +45, positive clockwise, rotating the crop rectangle about its center. The rotation happens in pixel space: the rectangle is converted to pixels (`w × width` by `h × height`) first, so straightening never changes its aspect ratio.
 - **The rotated rectangle must lie inside the oriented image.** The engine clamps a delta that would break this, by shrinking `w` and `h` about the center by the same factor, so the aspect holds (`geometry::fit`). The angle is clamped to ±45°.
-- **The minimum crop** is 32 source pixels on each side.
+- **The minimum crop** is 32 source pixels on each side, or the image's whole side when that is shorter: an image under 32 px on a side shows whole, and on that side can be neither cropped nor straightened.
 - **A delta that cannot be met is refused**, and the crop keeps its last valid state (owner, 2026-10-20). That covers a center so near an edge that no 32 px crop fits about it, and a request under the minimum. The center is never moved.
 - **A quarter turn or flip** maps the existing crop into the new orientation, so the same region stays selected.
 

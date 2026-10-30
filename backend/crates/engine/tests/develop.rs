@@ -158,3 +158,26 @@ fn a_fit_frame_keeps_the_photos_aspect() {
     let cropped = engine.apply(&[half], Phase::End).unwrap();
     assert_eq!(size(&cropped), (68, 180));
 }
+
+/// A photo under 32 px on a side (the smallest crop) renders whole, at a
+/// view larger or smaller than itself, and takes edits.
+#[test]
+fn a_photo_under_the_smallest_crop_renders() {
+    let _lock = ONE_DEVICE.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(engine) = engine() else { return };
+    for (w, h) in [(30, 200), (20, 12), (2, 2)] {
+        engine
+            .open_source(with_camera_profile(scene_raw(w, h)), 1)
+            .unwrap_or_else(|e| panic!("{w} x {h}: {e}"));
+        for view in [ViewSpec::Fit((120, 90)), ViewSpec::Fit((10, 10))] {
+            let a = engine
+                .set_view(view, Target::Srgb)
+                .unwrap_or_else(|e| panic!("{w} x {h}, {view:?}: {e}"));
+            assert!(!pixels(&a).is_empty(), "{w} x {h}, {view:?}");
+        }
+        let a = engine
+            .apply(&[Change::Exposure(1.0)], Phase::End)
+            .unwrap_or_else(|e| panic!("{w} x {h}: {e}"));
+        assert!(!pixels(&a).is_empty(), "{w} x {h}");
+    }
+}
