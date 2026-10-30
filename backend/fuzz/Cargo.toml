@@ -98,6 +98,15 @@ test = false
 doc = false
 bench = false
 
+# imgio's band decode of a large preview against its whole decode. Seeds:
+# small JPEGs with restart markers (seeds/preview_bands).
+[[bin]]
+name = "preview_bands"
+path = "fuzz_targets/preview_bands.rs"
+test = false
+doc = false
+bench = false
+
 # imgio::capture::capture_time: the EXIF capture time of any format, for
 # the filmstrip's order (LIB-09). Seeds: the jpeg, tiff and preview seeds.
 [[bin]]

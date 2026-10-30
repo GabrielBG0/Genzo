@@ -7,6 +7,7 @@
 //! feature). rawler for CFA DNG and camera RAW, and JPEG, TIFF and PNG, are
 //! still to come.
 
+mod bands;
 #[cfg(feature = "raw")]
 mod camera;
 pub mod capture;
@@ -26,6 +27,11 @@ mod tiff_ifd;
 mod tiff_image;
 
 pub use raw::RawMetadata;
+
+#[doc(hidden)]
+pub use bands::check as check_preview_bands;
+#[doc(hidden)]
+pub use preview::check_bands_in;
 
 /// A file format Genzo recognizes from its first bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
