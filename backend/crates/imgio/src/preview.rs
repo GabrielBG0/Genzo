@@ -8,7 +8,11 @@
 //! ARW, RAF, ORF, RW2 and the rest, and still works on a file whose
 //! container is damaged. Of the candidates, the smallest whose long edge is
 //! at least `PREFERRED_EDGE` is decoded: big enough for a first frame, small
-//! enough to decode within the budget. Without one, the largest.
+//! enough to decode within the budget. Without one, the largest. Color
+//! streams come before grayscale ones: an iPhone ProRAW DNG stores its
+//! semantic mattes (sky, skin, hair) as grayscale JPEGs of the preview's
+//! size. A grayscale stream is still the preview of a file with no color
+//! one (a monochrome camera).
 //!
 //! A false match in compressed raw data is guarded against three ways: the
 //! header must hold DQT, SOF and SOS in order with sane values; the stream
@@ -38,6 +42,8 @@ pub(crate) struct Candidate {
     pub end: usize,
     pub width: u32,
     pub height: u32,
+    /// 1 for grayscale, 3 for color.
+    pub components: u8,
 }
 
 impl Candidate {
@@ -50,8 +56,9 @@ impl Candidate {
 }
 
 /// Reads a JPEG header at `start` (just past SOI) up to SOS; returns the
-/// frame size and where the entropy data begin, if the header is sane.
-fn header(data: &[u8], start: usize) -> Option<(u32, u32, usize)> {
+/// frame size, its number of components and where the entropy data begin,
+/// if the header is sane.
+fn header(data: &[u8], start: usize) -> Option<(u32, u32, u8, usize)> {
     let mut at = start + 2;
     let (mut dqt, mut frame) = (false, None);
     for _ in 0..64 {
@@ -84,13 +91,13 @@ fn header(data: &[u8], start: usize) -> Option<(u32, u32, usize)> {
                 if precision != 8 || !matches!(n, 1 | 3) || w == 0 || h == 0 || !sane_sampling {
                     return None;
                 }
-                frame = Some((w, h));
+                frame = Some((w, h, n as u8));
             }
             // Lossless, arithmetic or hierarchical frames: not a preview.
             0xC3 | 0xC5..=0xC7 | 0xC9..=0xCB | 0xCD..=0xCF => return None,
             0xDA => {
-                let (w, h) = frame?;
-                return dqt.then_some((w, h, at + 2 + len));
+                let (w, h, n) = frame?;
+                return dqt.then_some((w, h, n, at + 2 + len));
             }
             0xD9 => return None,
             _ => {}
@@ -115,7 +122,7 @@ pub(crate) fn candidates(data: &[u8]) -> Vec<Candidate> {
         if start == 0 {
             continue;
         }
-        let Some((width, height, entropy)) = header(data, start) else {
+        let Some((width, height, components, entropy)) = header(data, start) else {
             continue;
         };
         let end = match next_eoi {
@@ -134,6 +141,7 @@ pub(crate) fn candidates(data: &[u8]) -> Vec<Candidate> {
             end,
             width,
             height,
+            components,
         };
         // The stream must be able to hold the size it claims (at least a
         // bit per 8 x 8 block, as for JPEG files), and stay under the cap.
@@ -145,13 +153,15 @@ pub(crate) fn candidates(data: &[u8]) -> Vec<Candidate> {
     out
 }
 
-/// The candidates in the order they are tried: the smallest with a long
-/// edge of at least `PREFERRED_EDGE` first, then larger ones, then the
-/// smaller ones from largest down.
+/// The candidates in the order they are tried: color ones before grayscale
+/// ones, and among each, the smallest with a long edge of at least
+/// `PREFERRED_EDGE` first, then larger ones, then the smaller ones from
+/// largest down.
 pub(crate) fn preference(mut c: Vec<Candidate>) -> Vec<Candidate> {
     c.sort_by_key(|c| {
         let big = c.long_edge() >= PREFERRED_EDGE;
         (
+            c.components == 1,
             !big,
             if big {
                 c.pixels()
@@ -243,6 +253,7 @@ mod tests {
             end: width as usize + 1,
             width,
             height,
+            components: 3,
         }
     }
 
@@ -256,9 +267,51 @@ mod tests {
         assert_eq!(order[0].width, 640);
     }
 
+    /// An iPhone ProRAW DNG's semantic mattes are grayscale JPEGs of the
+    /// preview's size, and may come first in the file.
+    #[test]
+    fn prefers_color_to_grayscale() {
+        let gray = |w, h| Candidate {
+            components: 1,
+            ..c(w, h)
+        };
+        let order = preference(vec![gray(2016, 1512), c(2015, 1512), gray(2017, 1512)]);
+        let sizes: Vec<_> = order.iter().map(|c| c.width).collect();
+        assert_eq!(sizes, [2015, 2016, 2017]);
+        // A smaller color one still comes first.
+        let order = preference(vec![gray(2016, 1512), c(320, 240)]);
+        assert_eq!(order[0].components, 3);
+        // Only grayscale (a monochrome camera): the usual rule among them.
+        let order = preference(vec![gray(4000, 3000), gray(1620, 1080)]);
+        assert_eq!(order[0].width, 1620);
+    }
+
     fn fixture(name: &str) -> Vec<u8> {
         let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/images");
         std::fs::read(format!("{dir}/{name}")).unwrap()
+    }
+
+    /// The bytes as found: a grayscale stream first in the file, then a
+    /// color one of the same size. The color one is the preview.
+    #[test]
+    fn a_grayscale_stream_before_the_preview_is_passed_over() {
+        let mut file = b"II*\0".to_vec();
+        file.extend(fixture("jpeg-gray.jpg")); // 37 x 29, 1 component
+        file.extend(fixture("jpeg-420.jpg")); // 37 x 29, 3 components
+        let found = candidates(&file);
+        assert_eq!(
+            found.iter().map(|c| c.components).collect::<Vec<_>>(),
+            [1, 3]
+        );
+        let p = decode(&file, &FileHints::default()).unwrap();
+        assert!(
+            p.rgba
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .any(|px| px[0] != px[1] || px[1] != px[2]),
+            "the grayscale stream was decoded"
+        );
     }
 
     /// A big preview cut short, then a small intact one: strict decoding

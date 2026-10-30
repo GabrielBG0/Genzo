@@ -85,13 +85,29 @@ Samples: 9 cold switches and 12 neighbor switches per folder. The cold first pix
 
 No cold sample of the 27 waited for the decode. One run's p95 of 98.8 ms is within 2 ms of the budget, so the 48 MP cold first pixels are the tightest number here.
 
-**Result:** every budget measured here holds on the reference desktop.
+**The 48 MP preview in every table above was the wrong image** (found 2026-10-30). The iPhone ProRAW file stores semantic mattes (sky, skin, hair) as grayscale JPEGs beside its preview, and `imgio` took the 2016 × 1512 sky matte for the preview, since it is the smallest stream big enough. So the 48 MP first pixels above timed a matte, as did the 433 ms below. The iPhone 12 Pro file in the corpus had the same fault; no other corpus file did. `imgio` now tries color streams before grayscale ones. The file's real preview is its full-size 8064 × 6048 JPEG; it has no smaller one.
+
+**With the real preview** (2026-10-30, same setup, one run at 48 MP; p95, p50 in brackets):
+
+| Target | Budget | 48 MP |
+|---|---|---|
+| First pixels, a switch to a photo not prefetched | under 100 ms | **2834 ms** (2794) |
+| First pixels, a switch to a prefetched neighbor | under 100 ms | **none shown**: no samples |
+| Switch to a prefetched neighbor | under 150 ms | 87.8 ms (82.8) |
+| Full fit-view render, not prefetched | under 2 s | **3198 ms** (3142) |
+
+- **The decode of the preview alone takes about 270 ms** (zune-jpeg, 8064 × 6048).
+- **`prepare` converts every one of its 48 million pixels:** about 2 s into sRGB, where the conversion compresses the Display P3 gamut, and 550 ms into Display P3. The full-size result is 195 MB of RGBA for a 1920 × 1440 frame.
+- **The fit render slows from 1.3 s to 3.2 s** because that work shares the cores with the photo's decode.
+- **No neighbor keeps a preview:** its decoded and prepared pixels, about 390 MB, are larger than the 128 MB the prefetch keeps for previews, so a switch to a neighbor shows none until its level 1 does.
+
+**Result:** at 12 MP every budget holds on the reference desktop. At 48 MP, the first pixels and the fit render miss theirs with the real preview.
 
 **Room left:**
 - **The 48 MP switch is the closest:** 99 of 150 ms. Uploading the 98 MB level 1 dominates; DEV-01 measured the GPU part of the switch alone at 22.5 ms.
 - **The 48 MP first pixels read the whole 28 MB file** before the preview is found. Reading only the head would cut that, if the budget gets tight.
 - **A cold switch reads the file twice**, once for its preview and once for its decode, side by side: up to 99 ms of 100 at 48 MP. Reading it once for both would cut that.
-- **`prepare` takes 433 ms sequentially** for the 48 MP file's preview, and shares the cores with the decode. Making it cheaper is the next lever if the budget gets tighter.
+- **Preparing the preview at the frame's size**, not the preview's, would cut `prepare` and the kept previews by the ratio of their pixels (about 17 for this file at 1920 × 1440). The 270 ms decode stays: getting under 100 ms needs a decoder that scales in the DCT domain.
 
 **Still open:**
 - **The bench runs by hand.** `scripts/gpu-check.sh` doesn't run it yet, since it needs corpus copies. CI only runs a smoke test on small PNGs (`cli/tests/bench_open.rs`).

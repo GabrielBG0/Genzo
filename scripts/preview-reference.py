@@ -1,8 +1,10 @@
 """Ground truth for imgio's embedded-preview choice (tests/preview_corpus.rs).
 
 An independent parser finds every embedded baseline or progressive JPEG in
-each file (not the one at offset 0), applies the documented rule (the
-smallest whose long edge is at least 1280 px, else the largest), and
+each file (not the one at offset 0), applies the documented rule (color
+streams before grayscale ones, which are an iPhone ProRAW DNG's semantic
+mattes; then the smallest whose long edge is at least 1280 px, else the
+largest), and
 decodes that exact stream with libjpeg-turbo (Pillow) to its per-channel
 means. Genzo's preview of the file must have the same size and, within
 JPEG decoder tolerance, the same means.
@@ -36,11 +38,12 @@ def streams(d):
                 n = int.from_bytes(d[j + 2:j + 4], "big")
                 if m in (0xC0, 0xC1, 0xC2) and d[j + 4] == 8:
                     size = (int.from_bytes(d[j + 7:j + 9], "big"), int.from_bytes(d[j + 5:j + 7], "big"))
+                    components = d[j + 9]
                 if m == 0xDA:
                     break
                 j += 2 + n
             if size and size[0] and size[1]:
-                out.append((i, size))
+                out.append((i, size, components))
         i += 3
 
 
@@ -56,10 +59,13 @@ def decodable(d, start):
 for path in sys.argv[1:]:
     d = open(path, "rb").read()
     found = streams(d)
-    big = sorted((s for s in found if max(s[1]) >= PREFERRED_EDGE), key=lambda s: s[1][0] * s[1][1])
-    small = sorted((s for s in found if max(s[1]) < PREFERRED_EDGE), key=lambda s: -s[1][0] * s[1][1])
+    order = []
+    for color in (True, False):
+        kind = [s for s in found if (s[2] != 1) == color]
+        order += sorted((s for s in kind if max(s[1]) >= PREFERRED_EDGE), key=lambda s: s[1][0] * s[1][1])
+        order += sorted((s for s in kind if max(s[1]) < PREFERRED_EDGE), key=lambda s: -s[1][0] * s[1][1])
     name = path.replace("\\", "/").split("corpus/")[-1]
-    for start, (w, h) in big + small:
+    for start, (w, h), _ in order:
         rgb = decodable(d, start)
         if rgb is not None and rgb.shape[:2] == (h, w):
             means = [round(float(rgb[..., c].mean()), 3) for c in range(3)]
