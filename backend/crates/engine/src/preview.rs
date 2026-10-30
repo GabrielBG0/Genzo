@@ -11,8 +11,11 @@
 //!   before.
 //! - Until contract 0.5.0 makes this the `PreviewShown` event, a sink the
 //!   caller registers receives it ([`crate::Engine::with_preview_sink`]).
+//! - It is prepared on a thread pool of its own. On rayon's global pool its
+//!   work would wait behind a decode's (the switch's own, or a neighbor's
+//!   in prefetch), which fills that pool for a second or more at 48 MP.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use genzo_color::output::{Target, fits, pixel};
 use genzo_imgio::Preview;
@@ -59,6 +62,18 @@ impl std::fmt::Debug for Sink {
     }
 }
 
+/// The pool previews are prepared on, one thread per core. They share the
+/// cores with a decode, but never wait for its work to drain.
+fn pool() -> &'static rayon::ThreadPool {
+    static POOL: OnceLock<rayon::ThreadPool> = OnceLock::new();
+    POOL.get_or_init(|| {
+        rayon::ThreadPoolBuilder::new()
+            .thread_name(|i| format!("genzo-preview-{i}"))
+            .build()
+            .expect("the preview pool")
+    })
+}
+
 /// `p` upright and in `target`. `None` when its color encoding is one
 /// Genzo does not read (DEV-01, Stage 4), as for the image itself.
 pub fn prepare(p: &Preview, target: Target) -> Option<ShownPreview> {
@@ -89,30 +104,32 @@ pub fn prepare(p: &Preview, target: Target) -> Option<ShownPreview> {
             .collect()
     });
     let mut rgba = vec![0u8; 4 * sw as usize * sh as usize];
-    rgba.par_chunks_mut(4 * sw as usize)
-        .enumerate()
-        .for_each(|(y, row)| {
-            let b = (y as f64 + 0.5) / f64::from(sh);
-            for (x, out) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
-                let a = (x as f64 + 0.5) / f64::from(sw);
-                let at = |r: [f64; 3], n: u32| {
-                    ((r[0] * a + r[1] * b + r[2]) * f64::from(n)).floor() as u32
-                };
-                let (sx, sy) = (at(map[0], w).min(w - 1), at(map[1], h).min(h - 1));
-                let i = 4 * (sy as usize * w as usize + sx as usize);
-                let src = &p.rgba[i..i + 4];
-                match (&enc, &lin) {
-                    (Some(e), Some(lin)) => {
-                        let linear = [0, 1, 2].map(|c| lin[c][src[c] as usize]);
-                        let working = genzo_color::mul(&e.to_working, linear);
-                        let rgb = pixel(working, (x as u32, y as u32), target, compress, false);
-                        out[..3].copy_from_slice(&rgb);
+    pool().install(|| {
+        rgba.par_chunks_mut(4 * sw as usize)
+            .enumerate()
+            .for_each(|(y, row)| {
+                let b = (y as f64 + 0.5) / f64::from(sh);
+                for (x, out) in row.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+                    let a = (x as f64 + 0.5) / f64::from(sw);
+                    let at = |r: [f64; 3], n: u32| {
+                        ((r[0] * a + r[1] * b + r[2]) * f64::from(n)).floor() as u32
+                    };
+                    let (sx, sy) = (at(map[0], w).min(w - 1), at(map[1], h).min(h - 1));
+                    let i = 4 * (sy as usize * w as usize + sx as usize);
+                    let src = &p.rgba[i..i + 4];
+                    match (&enc, &lin) {
+                        (Some(e), Some(lin)) => {
+                            let linear = [0, 1, 2].map(|c| lin[c][src[c] as usize]);
+                            let working = genzo_color::mul(&e.to_working, linear);
+                            let rgb = pixel(working, (x as u32, y as u32), target, compress, false);
+                            out[..3].copy_from_slice(&rgb);
+                        }
+                        _ => out[..3].copy_from_slice(&src[..3]),
                     }
-                    _ => out[..3].copy_from_slice(&src[..3]),
+                    out[3] = src[3];
                 }
-                out[3] = src[3];
-            }
-        });
+            });
+    });
     Some(ShownPreview {
         width: sw,
         height: sh,

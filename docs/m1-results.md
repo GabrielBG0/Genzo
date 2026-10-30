@@ -73,14 +73,25 @@ Samples: 9 cold switches and 12 neighbor switches per folder. The cold first pix
 - `preview::prepare` converts the preview with rayon. On a cold switch it runs on the switching thread while the photo's decode fills rayon's pool, so its work can queue behind the decode's, for about 1.2 s.
 - Run sequentially, `prepare` takes 433 ms for this file's preview. Run in parallel, it normally takes about 60 ms.
 - The 2026-10-25 run above had no such sample, but the code was the same, so that was luck.
-- The fix comes next, in its own change.
 
-**Result:** every budget measured here holds on the reference desktop, except the 48 MP cold first pixels' outlier above.
+**With the preview prepared on its own pool** (2026-10-30, same setup, three runs at 48 MP, one at 12 MP; p95, p50 in brackets). `prepare` now runs on a rayon pool of its own, one thread per core. It still shares the cores with the decode, but its work no longer waits for the decode's to drain. That holds for a neighbor's decode in prefetch too, which `tests/preview_pool.rs` checks along with the switch's own:
+
+| Target | Budget | 12 MP | 48 MP |
+|---|---|---|---|
+| First pixels, a switch to a photo not prefetched | under 100 ms | 28.0 ms (15.5) | 67.5 to 98.8 ms (54.2 to 63.4) |
+| First pixels, a switch to a prefetched neighbor | under 100 ms | 0.0 ms | 0.0 ms |
+| Switch to a prefetched neighbor | under 150 ms | 19.6 ms (16.9) | 73.4 to 83.5 ms (55.1 to 60.7) |
+| Full fit-view render, not prefetched | under 1 s, under 2 s | 71 ms (56) | 1254 to 1335 ms (1185 to 1198) |
+
+No cold sample of the 27 waited for the decode. One run's p95 of 98.8 ms is within 2 ms of the budget, so the 48 MP cold first pixels are the tightest number here.
+
+**Result:** every budget measured here holds on the reference desktop.
 
 **Room left:**
 - **The 48 MP switch is the closest:** 99 of 150 ms. Uploading the 98 MB level 1 dominates; DEV-01 measured the GPU part of the switch alone at 22.5 ms.
 - **The 48 MP first pixels read the whole 28 MB file** before the preview is found. Reading only the head would cut that, if the budget gets tight.
-- **A cold switch reads the file twice**, once for its preview and once for its decode, side by side: 72 ms of 100 at 48 MP. Reading it once for both, or the preview first, would cut that.
+- **A cold switch reads the file twice**, once for its preview and once for its decode, side by side: up to 99 ms of 100 at 48 MP. Reading it once for both would cut that.
+- **`prepare` takes 433 ms sequentially** for the 48 MP file's preview, and shares the cores with the decode. Making it cheaper is the next lever if the budget gets tighter.
 
 **Still open:**
 - **The bench runs by hand.** `scripts/gpu-check.sh` doesn't run it yet, since it needs corpus copies. CI only runs a smoke test on small PNGs (`cli/tests/bench_open.rs`).
