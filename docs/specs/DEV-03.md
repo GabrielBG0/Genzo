@@ -19,14 +19,15 @@ Sources: the spec's feature table ("Histogram, clipping warnings, before and aft
 - **The whole photo, after crop.** The histogram is of the shown image (DEV-01, *Geometry*): the crop, rotation and flip applied, and nothing outside the crop counted. It does not depend on zoom or pan.
 - **At Fit**, the histogram comes from the frame itself: every pixel of the Fit frame is counted while it is written. While dragging at Fit, the frame is the half-size drag preview (DEV-01, *Re-runs*, Interactive), so the histogram updates with each drag frame from its pixels.
 - **At 1:1** (owner, 2026-10-30), only the visible tiles are rendered, so the histogram comes from a second, whole-photo render at the Fit size. It runs after the visible tiles' settled render, at the lowest priority, and a newer request cancels it. While dragging at 1:1, the histogram keeps its last values and updates once on release.
-  - **No new GPU memory.** The whole-photo render reuses the view's stage caches (DEV-01, *GPU memory*; the Fit size is never larger than the view). It writes counts only, no frame. Afterwards, the caches no longer hold the 1:1 view, so the next drag or pan at 1:1 samples again from the level-0 tile cache before it starts. The extra cost is one sampling, 2.5 ms at 48 MP on the RTX 3060 (DEV-01, the 1:1 pan bench).
+  - **No new GPU memory.** The whole-photo render reuses the view's stage caches (DEV-01, *GPU memory*; the Fit size is never larger than the view), since a second set at 2560 × 1440 would take about 88 MB of the 10 MB reserved. It writes counts only, no frame. Afterwards, the caches no longer hold the 1:1 view, so the next drag or pan at 1:1 first samples the view again from the level-0 tile cache, whose tiles are still there. That costs at most the 1:1 cold render, 5.9 ms for 48 MP Bayer on the RTX 3060 (DEV-01, the 1:1 bench, which also renders the tiles). The bench of criterion 9 measures the resample itself.
+  - **When the Fit frame reads level 0** (Decided: "Fit views larger than level 1": a photo whose level 1 is smaller than its Fit frame, such as 24 MP on a 3840 × 2160 view), a whole-photo render at the Fit size needs the whole image's level-0 tiles: 384 tiles for 6000 × 4000, against the cache's 448 slots, which the 1:1 view's own tiles share. **Pending the owner:** until decided, that render reads pyramid level 1 at its own size instead, and its histogram is close to the Fit one but not bin for bin (criterion 4). The other choice reads level 0 and accepts that it evicts the 1:1 view's tiles, which the next pan renders again (47 ms cold for 40 MP X-Trans).
   - The Fit size used is the one the view would have at Fit, so going from 1:1 back to Fit shows the same histogram.
 - **Counted per channel, 256 bins each.** Bin `n` of channel R holds the number of pixels whose R code is `n`, as the frame stores it (RGBA8). The counts are exact integers; nothing is sampled or smoothed.
 
 ### What counts as clipped (owner, 2026-10-30)
 
 - **A pixel's highlights clip** when any of its R, G and B codes is 255. **Its shadows clip** when any of them is 0.
-- A pixel can clip in both: for example, a saturated blue with R at 0 and B at 255.
+- A pixel can clip in both: for example, a saturated blue with R at 0 and B at 255. So a photo with fully saturated colors lights both markers, as in Lightroom: pure sRGB red (255, 0, 0) clips its highlights in R and its shadows in G and B.
 - The engine reports, for highlights and for shadows separately, the number of clipped pixels and which channels clip at all.
 
 ### The histogram panel
@@ -46,7 +47,7 @@ Sources: the spec's feature table ("Histogram, clipping warnings, before and aft
 
 ### Where the data come from
 
-- **The counts** come from stage 9's output shader. Each pixel it writes adds to the three bins of its codes and to the clipping counts, using workgroup-local atomics merged into one storage buffer per frame (3 × 256 + 4 counters, about 3 KB). The buffer is read back with the frame. It fits the 10 MB the GPU budget already reserves for the histogram and masks (DEV-01, *GPU memory*; `pipeline::budget::HISTOGRAM`).
+- **The counts** come from stage 9's output shader, and reach the frontend in a `HistogramReady` event (see *Inputs and shortcuts*). Each pixel it writes adds to the three bins of its codes and to the clipping counts, using workgroup-local atomics merged into one storage buffer per frame (3 × 256 + 4 counters, about 3 KB). The buffer is read back with the frame. It fits the 10 MB the GPU budget already reserves for the histogram and masks (DEV-01, *GPU memory*; `pipeline::budget::HISTOGRAM`).
 - **The clipping test** runs on the codes before the overlay: what is counted is the photo, never the overlay's colors.
 - **The EXIF values** come from `imgio`, which reads them from the EXIF IFD that `imgio::capture` already reads for the capture time: ExposureTime (tag 33434), FNumber (33437), the ISO (PhotographicSensitivity, 34855) and FocalLength (37386). The reader grows to return them with the capture time, for every format it covers (JPEG, TIFF and RAW files whose IFD0 is TIFF, PNG, HEIC, CR3 and the embedded preview's EXIF). It needs no new dependency.
 
@@ -68,8 +69,9 @@ While Alt is held during a drag of one of these sliders, the photo shows only wh
 
 - **Each pixel** is drawn in the color of its clipped channels: for highlights, a channel that is 255 is shown at full value and the others at 0 (red, yellow, white and so on); for shadows, a channel at 0 is shown at 0 and the others at full value (cyan, blue, black and so on), so that a pixel clipped in all three is black. A pixel that does not clip shows the background. These are the photo's own channel colors, not UI colors.
 - Stage 9 draws it, as it draws the J overlay. The drag preview's half size and every other drag rule stay as DEV-01 sets them; only stage 9's output changes.
-- **Releasing Alt** during the drag shows the photo again at once; pressing it again brings the preview back. Releasing the slider ends the preview whether Alt is held or not.
-- The other sliders ignore Alt: it previews nothing for them, and the drag behaves as without Alt.
+- **How it is sent.** The frontend sends `SetClippingPreview { preview }` with `Highlights` or `Shadows` when Alt goes down during the drag of one of these sliders, and `None` when Alt goes up. It is its own command, not a flag on `ApplyEditDelta`, because pressing or releasing Alt without moving the slider sends no delta. Each one renders again through stage 9 only.
+- **Releasing Alt** during the drag shows the photo again at once; pressing it again brings the preview back. Releasing the slider ends the preview whether Alt is held or not: the engine clears it when the gesture ends, so a lost key-up never leaves it on.
+- The other sliders ignore Alt: the frontend sends no preview for them, and the drag behaves as without Alt.
 - The histogram keeps counting the photo, not the preview.
 
 ## Inputs and shortcuts
@@ -81,13 +83,13 @@ Every command is in the shortcut registry, with its shortcut shown in its toolti
 | Show clipping (both overlays) | J | Develop only; also in the View menu and the photo's right-click menu (APP-06) |
 | Shadow clipping overlay | click the left marker | |
 | Highlight clipping overlay | click the right marker | |
-| Clipping preview | Alt while dragging Exposure, Highlights, Whites, Shadows or Blacks | |
+| Clipping preview | Alt while dragging Exposure, Highlights, Whites, Shadows or Blacks | `SetClippingPreview` |
 
 **Contract** (M1, contract 0.5.0):
 - `GetHistogram { photo }`, a query, as the plan lists it: the latest counts of the shown photo, or none.
-- `RenderFinished` carries the histogram of the frame it reports, when the frame changed it. The counts are numbers, not pixels, so they travel as JSON: three arrays of 256 integers, the highlight and shadow clipping counts with their channels, and the number of pixels counted.
+- `HistogramReady { photo, generation, histogram }`, a new event, sent whenever the counts change: with each frame at Fit (drag frames included), after the whole-photo render at 1:1, and for the embedded preview while Opening. At 1:1 it comes after the `RenderFinished` of the visible tiles, since its render runs later and produces no frame. The counts are numbers, not pixels, so they travel as JSON: three arrays of 256 integers, the highlight and shadow clipping counts with their channels, and the number of pixels counted.
 - `SetClippingOverlay { shadows, highlights, shadow_color, highlight_color }`, new: the overlays' state and their colors as RGBA8.
-- `ApplyEditDelta` gains a `clipping_preview` flag, set while Alt is held during a drag. The engine ignores it for the sliders that have no preview.
+- `SetClippingPreview { preview }`, new: `None`, `Highlights` or `Shadows`, for the Alt preview during a drag.
 - The EXIF values travel with the photo's metadata in `ListFolderPhotos`.
 
 ## States
@@ -121,13 +123,13 @@ Nothing is stored. The overlay state is the view's and is reset by a photo or mo
 
 1. **The counts are exact.** For frames rendered on lavapipe from the synthetic scene and from the decoder's fixtures, at Fit and in the drag preview, the GPU's counts equal a CPU count of the frame's read-back bytes, bin for bin, and the clipping counts and channels equal the CPU's. *Check:* a pipeline test.
 2. **What clips.** A synthetic frame with patches at codes (255, 128, 128), (255, 255, 255), (0, 128, 128), (0, 0, 255) and (128, 128, 128) gives highlight counts for the first, second and fourth patches, shadow counts for the third and fourth, the right channels for each, and none for the gray. *Check:* a pipeline test.
-3. **Gamut compression is respected.** A Display P3 JPEG of saturated colors inside P3, shown in an sRGB frame, counts no clipping where the compressed codes are under 255 and above 0. *Check:* a pipeline test on the decoder's P3 fixture.
-4. **The whole photo at 1:1.** At 1:1, panned to a corner, the histogram equals the one at Fit for the same edit and view size, bin for bin. After the whole-photo render, a drag at 1:1 renders the same frame it would have rendered without it. *Check:* an engine test.
+3. **Clipping is counted after gamut compression.** A synthetic Display P3 source of colors that a plain matrix conversion to sRGB puts below 0 or above 1 in a channel, and that compression brings to codes 1 to 254 (both checked on the CPU reference), shown in an sRGB frame, counts no clipped pixel. The same colors with compression off would count them. *Check:* a pipeline test.
+4. **The whole photo at 1:1.** At 1:1, panned to a corner, the histogram equals the one at Fit for the same edit and view size, bin for bin, for a photo whose Fit frame reads level 1 (see *At 1:1* for the level-0 case). After the whole-photo render, a drag at 1:1 renders the same frame it would have rendered without it. *Check:* an engine test.
 5. **The overlay.** With J on, every pixel whose highlights clip is `highlight_color` in the frame and every pixel whose shadows clip is `shadow_color`; red wins for a pixel that clips in both. Every other pixel is unchanged, byte for byte. The histogram is the same with the overlay on or off. *Check:* a pipeline test, and a golden image of the synthetic scene with both overlays.
-6. **The clipping preview.** Dragging Exposure with `clipping_preview` gives a black frame with each highlight-clipped pixel in its channel colors; Blacks gives a white frame with each shadow-clipped pixel in its colors; Contrast with the flag gives the normal frame. *Check:* a pipeline test, and a golden image for each of the two previews.
-7. **The EXIF row.** For every corpus file (DNG and ProRAW, NEF, RAF, ORF, RW2, ARW, CR3, IIQ, GPR, DCR, 3FR, TIFF) and the decoder's JPEG, HEIC and PNG fixtures that carry EXIF, ISO, exposure time, f-number and focal length equal what ExifTool 13 reports. *Check:* an `imgio` corpus test, with expectations written by a new `scripts/exif-reference.py` from ExifTool's output, as the other corpus tests take theirs from reference tools.
+6. **The clipping preview.** A drag frame with `Highlights` is black with each highlight-clipped pixel in its channel colors; with `Shadows` it is white with each shadow-clipped pixel in its colors; with `None` it is the normal frame. Ending the gesture with the preview still set gives the normal settled frame. *Check:* a pipeline test, an engine test for the end of the gesture, and a golden image for each of the two previews.
+7. **The EXIF row.** The new fields are read from the same IFD as the capture time, so they cover the files `capture_time` reads (`imgio/tests/capture_corpus.rs`; the formats it handles: JPEG, TIFF-based RAW and DNG, ORF, RW2, CR3, PNG, RAF and HEIF). For each such corpus file and each decoder fixture with EXIF, ISO, exposure time, f-number and focal length equal what ExifTool reports. *Check:* an `imgio` corpus test, with expectations written by a new `scripts/exif-reference.py` from ExifTool's output, as the other corpus tests take theirs from reference tools. ExifTool is not installed on the reference desktop yet; the script needs it, and its version goes in the expectations file.
 8. **Formatting.** 1/250 s, 1/8000 s, 0.3 s shown as 1/3 s, 1.3 s, 30 s; f/1.8, f/8, f/11; 6.86 mm shown as 6.9 mm, 24 mm, 105 mm; missing values left out. *Check:* a frontend unit test against the fake engine.
-9. **It costs little.** On the RTX 3060, counting adds under 0.2 ms to stage 9 at 2560 × 1440, and the slider budgets of `scripts/gpu-check.sh` hold within its 10 % rule. The whole-photo render at 1:1 takes under 20 ms at 48 MP. *Check:* a criterion bench of stage 9 with and without counting, and `bench gpu`.
+9. **It costs little.** On the RTX 3060, counting adds under 0.2 ms to stage 9 at 2560 × 1440, and the slider budgets of `scripts/gpu-check.sh` hold within its 10 % rule. The whole-photo render at 1:1 takes under 20 ms at 48 MP, and the resample after it is measured. *Check:* a criterion bench of stage 9 with and without counting, of the whole-photo render and of the resample, and `bench gpu`.
 10. **The panel.** Against the fake engine: the plot scales to the tallest bin from 1 to 254, the markers light in the clipped channels' colors and toggle their overlays, J toggles both, the tooltips give the share of pixels, and the empty states show as listed. *Check:* Vitest and Playwright.
 11. **The GPU budget holds.** The memory-accounting test (DEV-01) still passes with counting on and the 1:1 whole-photo render done, with no new item in `pipeline::budget`. *Check:* `pipeline/tests/memory.rs`.
 12. **Fuzzing.** The EXIF reader's new fields are covered by the existing `capture_time` fuzz target's inputs, and the target asserts that reading them never panics. *Check:* the fuzz target, run for 10 minutes before merge.

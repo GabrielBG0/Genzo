@@ -372,13 +372,13 @@ These come from `docs/m0-results.md` and decide how the steps below are built:
    - Done: `bench open FOLDER [W H N]` (with step 9), and its smoke test on small PNGs. Not yet in `scripts/gpu-check.sh`.
 
 ### Contract
-- Commands: `OpenFolder`, `SelectPhoto`, `SetView`, `ApplyEditDelta`, `ResetParam`, `PickWhiteBalance`, `SetClippingOverlay`, `Undo`, `Redo`, `ExportJpeg`.
+- Commands: `OpenFolder`, `SelectPhoto`, `SetView`, `ApplyEditDelta`, `ResetParam`, `PickWhiteBalance`, `SetClippingOverlay`, `SetClippingPreview`, `Undo`, `Redo`, `ExportJpeg`.
   - `PickWhiteBalance` carries a point on the shown image. The engine samples there, applies the white balance and records the step (DEV-02).
   - `SetView` carries the viewport size, the zoom (Fit or 1:1) and the visible rectangle, so the engine renders only what is seen.
   - `ApplyEditDelta` carries the gesture phase (start, update, end). The engine picks the drag preview from it, replacing the spike's `proxy` flag, and records one history step per finished gesture.
-  - `ApplyEditDelta` also carries `clipping_preview`, set while Alt is held during a tone slider's drag, and `SetClippingOverlay` carries J's two overlays and their token colors (DEV-03).
+  - `SetClippingOverlay` carries J's two overlays and their token colors; `SetClippingPreview` the Alt preview during a tone slider's drag (DEV-03).
 - Queries: `ListFolderPhotos`, `GetEdit`, `GetHistogram`.
-- Events: `PreviewShown`, `RenderFinished`, `ExportProgress`, `AdapterInfo` (for the software-fallback notice).
+- Events: `PreviewShown`, `RenderFinished`, `HistogramReady`, `ExportProgress`, `AdapterInfo` (for the software-fallback notice).
 - Frames: the tile protocol from M0.
 - The spike commands and events go. Bump to 0.5.0.
 
