@@ -21,6 +21,13 @@
 //!   bit for bit, and no pyramid is rendered. A settled new white waits for
 //!   the input; a view that wants level 0 is provisional until it comes,
 //!   then equals a fresh render.
+//! - **The histogram and the overlays** (DEV-03): at Fit each frame's
+//!   counts, the drag preview's included, are a CPU count of its bytes; at
+//!   1:1 there are none with the frame, and the whole-photo pass equals the
+//!   Fit histogram bin for bin where Fit reads level 1 (criterion 4). After
+//!   the pass, a 1:1 drag and its release render the frames they would
+//!   have without it, and no cache was made again. Turning an overlay on or
+//!   off re-runs stage 9 alone.
 
 use std::sync::{Mutex, MutexGuard};
 
@@ -33,6 +40,7 @@ use genzo_pipeline::gpu::develop::{
 use genzo_pipeline::gpu::raw_stages::{Level1, RawStages, TileConfig};
 use genzo_pipeline::gpu::synthetic::{scene_raw, with_camera_profile};
 use genzo_pipeline::gpu::{AdapterChoice, Gpu, GpuError};
+use genzo_pipeline::histogram::{self, Overlay, Preview};
 use genzo_pipeline::raw::RawSource;
 use genzo_pipeline::reference::sampling::ViewSpec;
 
@@ -582,4 +590,180 @@ fn a_level1_opened_over_a_photo_drops_its_state() {
         SMALL_FIT,
         "a level 1 over a held photo",
     );
+}
+
+/// Bright enough to clip highlights in places.
+fn clipping(mut e: Edit) -> Edit {
+    e.exposure = 1.5;
+    e.blacks = -40.0;
+    e
+}
+
+const J: Overlay = Overlay {
+    highlights: Some([255, 107, 107, 255]),
+    shadows: Some([91, 157, 255, 255]),
+    preview: Preview::None,
+};
+
+#[test]
+fn at_fit_the_histogram_is_the_frames() {
+    let Some((_lock, gpu)) = gpu() else { return };
+    let (mut d, defaults) = opened(&gpu);
+    let e = clipping(toned(defaults));
+    d.render(&gpu, &e, FIT, Target::Srgb, Phase::End).unwrap();
+    let h = d.histogram(&gpu).unwrap().expect("counted at Fit");
+    assert_eq!(h, histogram::count(&frame(&gpu, &d)));
+    assert!(h.highlights.pixels > 0 && h.shadows.pixels > 0, "{h:?}");
+    // The drag preview's frame, half size.
+    let moved = Edit {
+        exposure: 1.8,
+        ..e.clone()
+    };
+    d.render(&gpu, &moved, FIT, Target::Srgb, Phase::Update)
+        .unwrap();
+    let h = d.histogram(&gpu).unwrap().expect("counted while dragging");
+    let (w, ht) = d.view().frame_size();
+    assert_eq!(h.pixels, w * ht);
+    assert_eq!(h, histogram::count(&frame(&gpu, &d)));
+    // At 1:1 the frame is not the whole photo.
+    d.render(&gpu, &moved, ONE_TO_ONE, Target::Srgb, Phase::End)
+        .unwrap();
+    assert_eq!(d.histogram(&gpu).unwrap(), None);
+}
+
+#[test]
+fn an_overlay_re_runs_stage_9_alone() {
+    let Some((_lock, gpu)) = gpu() else { return };
+    let (mut d, defaults) = opened(&gpu);
+    let e = clipping(toned(defaults));
+    for view in [FIT, ONE_TO_ONE] {
+        d.set_overlay(Overlay::default());
+        d.render(&gpu, &e, view, Target::Srgb, Phase::End).unwrap();
+        let plain = frame(&gpu, &d);
+        let counted = d.histogram(&gpu).unwrap();
+        let only_output = Reran {
+            output: true,
+            ..NOTHING
+        };
+        d.set_overlay(J);
+        let r = d.render(&gpu, &e, view, Target::Srgb, Phase::End).unwrap();
+        assert_eq!(r, only_output, "{view:?}");
+        let drawn = frame(&gpu, &d);
+        let want: Vec<_> = plain.iter().map(|&px| J.apply(px)).collect();
+        assert_eq!(drawn, want, "{view:?}: J drawn over the frame");
+        assert_ne!(drawn, plain, "{view:?}: something clips");
+        // The counts are the photo's, not the overlay's.
+        assert_eq!(d.histogram(&gpu).unwrap(), counted, "{view:?}");
+        d.set_overlay(Overlay::default());
+        let r = d.render(&gpu, &e, view, Target::Srgb, Phase::End).unwrap();
+        assert_eq!(r, only_output, "{view:?}");
+        assert_eq!(frame(&gpu, &d), plain, "{view:?}: J off again");
+        // Nothing changed, nothing re-runs.
+        let r = d.render(&gpu, &e, view, Target::Srgb, Phase::End).unwrap();
+        assert_eq!(r, NOTHING, "{view:?}");
+    }
+}
+
+#[test]
+fn at_1_1_the_whole_photo_is_counted_at_the_fit_size() {
+    let Some((_lock, gpu)) = gpu() else { return };
+    let (mut d, defaults) = opened(&gpu);
+    // Turned and straightened, with a crop loose enough that SMALL_FIT
+    // still reads level 1; a 1:1 view of its size has its Fit size.
+    let mut e = clipping(toned(defaults));
+    e.quarter_turns = 1;
+    e.crop.w = 0.8;
+    e.crop.h = 0.85;
+    e.crop.angle = 6.0;
+    d.render(&gpu, &e, SMALL_FIT, Target::Srgb, Phase::End)
+        .unwrap();
+    let at_fit = d.histogram(&gpu).unwrap().expect("Fit");
+    let one_to_one = ViewSpec::Region {
+        out: SMALL_FIT.out(),
+        zoom: 1.0,
+        origin: (0.0, 0.0),
+    };
+    d.render(&gpu, &e, one_to_one, Target::Srgb, Phase::End)
+        .unwrap();
+    let bytes = (d.view().cache_bytes(), d.view().output_bytes());
+    // The 1:1 view's frames, without the pass.
+    let settled = frame(&gpu, &d);
+    let moved = Edit {
+        exposure: 1.7,
+        ..e.clone()
+    };
+    d.render(&gpu, &moved, one_to_one, Target::Srgb, Phase::Update)
+        .unwrap();
+    let dragged = frame(&gpu, &d);
+    d.render(&gpu, &e, one_to_one, Target::Srgb, Phase::End)
+        .unwrap();
+    assert_eq!(frame(&gpu, &d), settled);
+
+    let whole = d.count_whole(&gpu).unwrap().expect("counted");
+    assert_eq!(whole, at_fit, "the same counts as at Fit, bin for bin");
+    assert_eq!(
+        (d.view().cache_bytes(), d.view().output_bytes()),
+        bytes,
+        "in the view's own caches"
+    );
+    // The caches no longer hold the view: the drag samples it again.
+    let r = d
+        .render(&gpu, &moved, one_to_one, Target::Srgb, Phase::Update)
+        .unwrap();
+    assert!(r.sample, "{r:?}");
+    assert_eq!(frame(&gpu, &d), dragged, "the drag after the pass");
+    d.render(&gpu, &e, one_to_one, Target::Srgb, Phase::End)
+        .unwrap();
+    assert_eq!(frame(&gpu, &d), settled, "the release after the pass");
+    assert_eq!(
+        (d.view().cache_bytes(), d.view().output_bytes()),
+        bytes,
+        "nothing made again"
+    );
+
+    // Not after a drag's render, nor at Fit.
+    d.render(&gpu, &moved, one_to_one, Target::Srgb, Phase::Update)
+        .unwrap();
+    assert_eq!(d.count_whole(&gpu).unwrap(), None);
+    d.render(&gpu, &e, SMALL_FIT, Target::Srgb, Phase::End)
+        .unwrap();
+    assert_eq!(d.count_whole(&gpu).unwrap(), None);
+}
+
+#[test]
+fn where_fit_reads_level0_the_pass_reads_level1() {
+    let Some((_lock, gpu)) = gpu() else { return };
+    let (mut d, defaults) = opened(&gpu);
+    let e = clipping(toned(defaults));
+    // FIT is larger than level 1: its frame is 420 x 557, level 1's 389 x 515.
+    d.render(&gpu, &e, FIT, Target::Srgb, Phase::End).unwrap();
+    let at_fit = d.histogram(&gpu).unwrap().expect("Fit");
+    let one_to_one = ViewSpec::Region {
+        out: FIT.out(),
+        zoom: 1.0,
+        origin: (100.0, 200.0),
+    };
+    d.render(&gpu, &e, one_to_one, Target::Srgb, Phase::End)
+        .unwrap();
+    let settled = frame(&gpu, &d);
+    let whole = d.count_whole(&gpu).unwrap().expect("counted");
+    assert_eq!(whole.pixels, 389 * 515, "level 1's own size");
+    // Close to the Fit histogram, not equal: level 0 is sharper than
+    // level 1 at the synthetic scene's hard edges. Measured on the RTX
+    // 3060: the channels' means 2.2 codes apart at most, the share of
+    // highlight-clipped pixels 0.12 points apart (2026-10-31).
+    let mean = |h: &histogram::Histogram, c: usize| {
+        let sum: f64 = (0..256).map(|i| i as f64 * f64::from(h.bins[c][i])).sum();
+        sum / f64::from(h.pixels)
+    };
+    for c in 0..3 {
+        let (a, b) = (mean(&whole, c), mean(&at_fit, c));
+        assert!((a - b).abs() < 4.0, "channel {c}: {a} against {b}");
+    }
+    let share = |h: &histogram::Histogram| f64::from(h.highlights.pixels) / f64::from(h.pixels);
+    let (a, b) = (share(&whole), share(&at_fit));
+    assert!((a - b).abs() < 0.01, "highlights {a} against {b}");
+    d.render(&gpu, &e, one_to_one, Target::Srgb, Phase::End)
+        .unwrap();
+    assert_eq!(frame(&gpu, &d), settled);
 }

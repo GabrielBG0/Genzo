@@ -1,6 +1,7 @@
 //! Develop on the render thread (`gpu::thread`): latest-wins coalescing of
 //! Develop renders, renders for a photo that is no longer open, and renders
-//! held until the input of a photo opened from its level 1 comes.
+//! held until the input of a photo opened from its level 1 comes. The
+//! whole-photo histogram of a 1:1 view (DEV-03), and what cancels it.
 
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::sync::{Arc, Mutex};
@@ -13,6 +14,7 @@ use genzo_pipeline::gpu::raw_stages::{Level1, RawStages, TileConfig};
 use genzo_pipeline::gpu::synthetic::{scene_raw, with_camera_profile};
 use genzo_pipeline::gpu::thread::{DevelopFrame, DevelopRequest, RenderThread};
 use genzo_pipeline::gpu::{AdapterChoice, Gpu, GpuError};
+use genzo_pipeline::histogram::Overlay;
 use genzo_pipeline::reference::sampling::ViewSpec;
 
 static ONE_DEVICE: Mutex<()> = Mutex::new(());
@@ -43,6 +45,7 @@ fn request(generation: u64, photo: u64, edit: &Edit, view: ViewSpec) -> DevelopR
         view,
         target: Target::Srgb,
         phase: Phase::End,
+        overlay: Overlay::default(),
     }
 }
 
@@ -440,4 +443,47 @@ fn dropping_the_thread_stops_its_prefetches() {
         return;
     }
     panic!("no attempt was conclusive");
+}
+
+#[test]
+fn the_whole_photo_histogram_follows_the_last_render() {
+    let _lock = ONE_DEVICE.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(t) = thread() else { return };
+    let p = photo((2400, 1600));
+    let (_, kind) = genzo_pipeline::gpu::develop::as_shot(&p.src);
+    t.open(1, p).unwrap();
+    let e = Edit {
+        exposure: 1.0,
+        ..Edit::defaults(kind)
+    };
+    let fit = ViewSpec::Fit((600, 450));
+    let one_to_one = ViewSpec::Region {
+        out: (600, 450),
+        zoom: 1.0,
+        origin: (900.0, 500.0),
+    };
+    let whole = |generation| {
+        t.whole_histogram(1, generation)
+            .unwrap()
+            .recv()
+            .unwrap()
+            .unwrap()
+    };
+    // At Fit the frame brings its own.
+    let f = t.develop(request(1, 1, &e, fit)).unwrap().unwrap();
+    let at_fit = f.histogram.expect("counted at Fit");
+    assert_eq!(at_fit.pixels, 600 * 400);
+    assert_eq!(whole(1), None);
+    // At 1:1 it comes after, the same as at Fit.
+    let f = t.develop(request(2, 1, &e, one_to_one)).unwrap().unwrap();
+    assert_eq!(f.histogram, None);
+    assert_eq!(whole(2), Some(at_fit));
+    assert_eq!(whole(1), None, "not for an older render");
+    // A render that comes first cancels it.
+    let pending = t.submit(request(3, 1, &e, one_to_one)).unwrap();
+    assert_eq!(whole(2), None);
+    assert!(pending.recv().unwrap().unwrap().is_some());
+    // As does another photo.
+    t.open(2, photo((1200, 800))).unwrap();
+    assert_eq!(whole(3), None);
 }

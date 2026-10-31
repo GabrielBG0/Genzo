@@ -237,6 +237,7 @@ pub(crate) fn render_when(
             view: s.view,
             target: s.target,
             phase,
+            overlay: Default::default(),
         };
         (state(id, p), request)
     };

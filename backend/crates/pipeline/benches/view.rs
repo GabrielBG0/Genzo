@@ -86,12 +86,15 @@ fn view(c: &mut Criterion) {
     });
     view.set_ratio(None);
     // A crop dragged at Fit: the frame's size follows the crop's aspect,
-    // so each delta resizes the view's textures before sampling.
-    let mut narrower = false;
+    // so a delta that makes it wider or taller than the textures resizes
+    // them before sampling (a smaller one keeps them). One pixel wider and
+    // one taller in turn, so each delta resizes.
+    let mut wider = false;
     group.bench_function("sample the pyramid, resized each time", |b| {
         b.iter(|| {
-            narrower = !narrower;
-            view.sample(&gpu, p, 1, (out.0 - u32::from(narrower), out.1));
+            wider = !wider;
+            let n = u32::from(wider);
+            view.sample(&gpu, p, 1, (out.0 + n, out.1 + 1 - n));
             wait(&gpu);
         })
     });

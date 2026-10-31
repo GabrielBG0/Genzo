@@ -378,16 +378,17 @@ impl ViewStages {
             .iter()
             .filter(|t| t.is_some())
             .count() as u64;
-        caches * u64::from(self.size.0) * u64::from(self.size.1) * 8
+        let (w, h) = self.extent();
+        caches * u64::from(w) * u64::from(h) * 8
     }
 
     /// The bytes of the frame (RGBA8) and its two staging buffers that
     /// exist, DEV-01's output line.
     pub fn output_bytes(&self) -> u64 {
-        let frame = self
-            .frame
-            .as_ref()
-            .map_or(0, |_| u64::from(self.size.0) * u64::from(self.size.1) * 4);
+        let frame = self.frame.as_ref().map_or(0, |_| {
+            let (w, h) = self.extent();
+            u64::from(w) * u64::from(h) * 4
+        });
         frame + self.staging.as_ref().map_or(0, Staging::bytes)
     }
 
@@ -410,8 +411,22 @@ impl ViewStages {
         })
     }
 
+    /// The width and height of the caches and the frame as allocated: at
+    /// least the view's.
+    fn extent(&self) -> (u32, u32) {
+        self.sampled
+            .as_ref()
+            .map_or(self.size, |t| (t.width(), t.height()))
+    }
+
+    /// Makes the view `size`. The caches and the frame are kept when it fits
+    /// in them, so a view that shrinks allocates nothing, and the 1:1
+    /// whole-photo histogram (DEV-03), at the Fit size, reuses the 1:1
+    /// view's caches; else they are made again at `size`.
     fn resize(&mut self, gpu: &Gpu, size: (u32, u32)) {
-        if self.size == size && self.sampled.is_some() {
+        let extent = self.extent();
+        if self.sampled.is_some() && size.0 <= extent.0 && size.1 <= extent.1 {
+            self.size = size;
             return;
         }
         // The old caches go first, so the new ones never add to them.
@@ -619,7 +634,7 @@ impl ViewStages {
             .expect("sample first")
             .create_view(&Default::default());
         if self.toned.is_none() {
-            self.toned = Some(Self::cache(gpu, "stage 6", self.size));
+            self.toned = Some(Self::cache(gpu, "stage 6", self.extent()));
         }
         let (to, from) = crate::reference::look::prophoto();
         let curve = look.profile == Profile::GenzoStandard;
@@ -732,7 +747,7 @@ impl ViewStages {
         .expect("sample first")
         .create_view(&Default::default());
         if self.colored.is_none() {
-            self.colored = Some(Self::cache(gpu, "stage 7", self.size));
+            self.colored = Some(Self::cache(gpu, "stage 7", self.extent()));
         }
         let m = genzo_color::look::OklabMatrices::working();
         let y = genzo_color::WORKING_TO_XYZ[1];
@@ -783,7 +798,16 @@ impl ViewStages {
     /// Stage 9 from the latest cache (stage 7, 6 or the sampled one) into
     /// the frame.
     pub fn output(&mut self, gpu: &Gpu, target: Target, compress: bool, dither: bool) {
-        self.output_at(gpu, target, compress, dither, 1);
+        self.output_at(gpu, target, compress, dither, 1, true);
+    }
+
+    /// Stage 9's histogram of the latest cache, as [`Self::output`] would
+    /// count it, without writing the frame: the 1:1 whole-photo render
+    /// (DEV-03). Counts whether or not [`Self::set_counting`] is on.
+    pub fn count(&mut self, gpu: &Gpu, target: Target, compress: bool, dither: bool) {
+        let counting = std::mem::replace(&mut self.counting, true);
+        self.output_at(gpu, target, compress, dither, 1, false);
+        self.counting = counting;
     }
 
     /// The drag preview at Fit (DEV-01, Interactive): stage 9 at half size,
@@ -793,13 +817,23 @@ impl ViewStages {
     /// sends it as JPEG and replaces it with the full frame on release.
     pub fn output_half(&mut self, gpu: &Gpu, target: Target, compress: bool, dither: bool) {
         assert_eq!(self.offset, (0, 0), "the half-size preview is for Fit");
-        self.output_at(gpu, target, compress, dither, 2);
+        self.output_at(gpu, target, compress, dither, 2, true);
     }
 
-    fn output_at(&mut self, gpu: &Gpu, target: Target, compress: bool, dither: bool, scale: u32) {
+    fn output_at(
+        &mut self,
+        gpu: &Gpu,
+        target: Target,
+        compress: bool,
+        dither: bool,
+        scale: u32,
+        write: bool,
+    ) {
         assert!(self.sampled.is_some(), "sample first");
-        self.frame_scale = scale;
-        let out = self.frame_size();
+        if write {
+            self.frame_scale = scale;
+        }
+        let out = (self.size.0.div_ceil(scale), self.size.1.div_ceil(scale));
         let from = target.from_xyz_oklab();
         let c = target.compression();
         let lms = genzo_color::mat_mul(&genzo_color::output::OKLAB_M1, &target.to_xyz());
@@ -818,7 +852,12 @@ impl ViewStages {
             size: [out.0, out.1, EDGE_STEPS, u32::from(dither)],
             offset: [self.offset.0, self.offset.1, scale as i32, 0],
             overlay: overlay_uniforms(&self.overlay),
-            mode: [u32::from(self.counting), 1, 0, 0],
+            mode: [
+                u32::from(self.counting),
+                u32::from(write),
+                self.size.0,
+                self.size.1,
+            ],
         };
         gpu.queue
             .write_buffer(&self.output_uniforms, 0, bytemuck::bytes_of(&u));
