@@ -523,6 +523,9 @@ impl Develop {
                 From::Output
             }
             Some(_) => {
+                // The same frame, now settled: a drag's release with the
+                // drag's edit, whose whole photo can be counted.
+                self.shown = Some(shown);
                 self.reran = reran;
                 return Ok(reran);
             }

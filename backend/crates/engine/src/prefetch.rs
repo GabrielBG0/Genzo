@@ -132,6 +132,7 @@ pub(crate) struct Worker {
     pub gpu: Arc<RenderThread>,
     pub session: Arc<Mutex<Session>>,
     pub generations: Arc<Generations>,
+    pub histograms: Arc<crate::histogram::Histograms>,
     pub decoder: Arc<dyn Decode>,
 }
 
@@ -318,6 +319,7 @@ impl Worker {
             &self.gpu,
             &self.session,
             &self.generations,
+            &self.histograms,
             false,
             Phase::End,
             again,

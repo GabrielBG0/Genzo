@@ -6,11 +6,16 @@
 //! generation, so a newer request that replaces an older one loses nothing.
 //! A gesture's *end* records its step whether or not its render ran.
 //!
+//! The clipping overlays (DEV-03) are the session's, not a photo's: J's
+//! stays on across photo switches (owner, 2026-10-30), and the Alt preview
+//! lasts only as long as the gesture it was set in. Each change renders
+//! again, through stage 9 only.
+//!
 //! Until contract 0.5.0 these are Rust methods for the cli and the tests;
 //! the shell's commands come with it.
 
 use std::collections::HashMap;
-use std::sync::{Mutex, mpsc};
+use std::sync::{Arc, Mutex, mpsc};
 
 use genzo_jobs::Generations;
 
@@ -19,6 +24,7 @@ use genzo_pipeline::gpu::develop::{Photo, as_shot};
 use genzo_pipeline::gpu::thread::{DevelopFrame, DevelopRequest, RenderThread};
 use genzo_pipeline::raw::{RawError, RawSource};
 
+use crate::histogram::{Counted, Histograms, Key, Overlay, Preview};
 use crate::history::{PhotoEdits, Refused};
 use crate::{Engine, EngineError};
 
@@ -40,6 +46,8 @@ pub(crate) struct Session {
     /// The generation of the last Develop frame, if it came back
     /// provisional: drawn from level 1 before the photo's input came.
     pub(crate) provisional: Option<u64>,
+    /// The J overlay and the Alt preview, sent with each render.
+    pub(crate) overlay: Overlay,
 }
 
 impl Default for Session {
@@ -53,14 +61,17 @@ impl Default for Session {
             strip: Default::default(),
             issued: 0,
             provisional: None,
+            overlay: Overlay::default(),
         }
     }
 }
 
 impl Session {
     /// Ends the open photo's gesture, if one is in progress, recording its
-    /// step as its *end* would: before that photo goes.
+    /// step as its *end* would: before that photo goes. The Alt preview
+    /// ends with it.
     pub(crate) fn end_gesture(&mut self) {
+        self.overlay.preview = Preview::None;
         if let Some(open) = self.open
             && let Some(p) = self.edits.get_mut(&open)
             && p.in_gesture()
@@ -68,6 +79,13 @@ impl Session {
             // No change to apply, so nothing to refuse.
             let _ = p.apply(&[], Phase::End);
         }
+    }
+
+    /// Whether the open photo's gesture is in progress.
+    fn in_gesture(&self) -> bool {
+        self.open
+            .and_then(|id| self.edits.get(&id))
+            .is_some_and(PhotoEdits::in_gesture)
     }
 
     /// A new photo id, never given before this session.
@@ -177,6 +195,57 @@ impl Engine {
         self.history(PhotoEdits::redo)
     }
 
+    /// Turns the J overlays on or off, each with its color as RGBA8, and
+    /// renders the open photo again. They stay as set across photo
+    /// switches. `None` with no photo open: the state is kept for the next.
+    pub fn set_clipping_overlay(
+        &self,
+        shadows: Option<[u8; 4]>,
+        highlights: Option<[u8; 4]>,
+    ) -> Result<Option<Applied>, EngineError> {
+        let phase = {
+            let mut s = self.session.lock().expect("session");
+            s.overlay.shadows = shadows;
+            s.overlay.highlights = highlights;
+            if s.open.is_none() {
+                return Ok(None);
+            }
+            if s.in_gesture() {
+                Phase::Update
+            } else {
+                Phase::End
+            }
+        };
+        self.render(false, phase).map(Some)
+    }
+
+    /// Sets the Alt clipping preview of the gesture in progress and renders
+    /// its frame again. Outside a gesture there is none: `None`, nothing
+    /// rendered, as when the preview is already `preview`.
+    pub fn set_clipping_preview(&self, preview: Preview) -> Result<Option<Applied>, EngineError> {
+        {
+            let mut s = self.session.lock().expect("session");
+            if !s.in_gesture() || s.overlay.preview == preview {
+                return Ok(None);
+            }
+            s.overlay.preview = preview;
+        }
+        self.render(false, Phase::Update).map(Some)
+    }
+
+    /// The latest histogram of `photo`, if it is the one shown
+    /// (`GetHistogram`).
+    pub fn histogram(&self, photo: u64) -> Option<Counted> {
+        self.histograms.latest(photo)
+    }
+
+    /// Waits until every histogram count asked for is sent or dropped: for
+    /// the tests.
+    #[doc(hidden)]
+    pub fn wait_histograms_idle(&self) {
+        self.histograms.wait_idle();
+    }
+
     fn history(&self, f: fn(&mut PhotoEdits) -> bool) -> Result<Applied, EngineError> {
         let changed = {
             let mut s = self.session.lock().expect("session");
@@ -200,6 +269,7 @@ impl Engine {
             self.gpu()?,
             &self.session,
             &self.generations,
+            &self.histograms,
             recorded,
             phase,
             |_| true,
@@ -210,13 +280,16 @@ impl Engine {
 
 /// Renders the open photo's current edit with a new generation, and notes
 /// whether the frame came back provisional. The engine's renders and the
-/// prefetch worker's both come here. Nothing is issued, and the answer is
+/// prefetch worker's both come here, and so does each frame's histogram:
+/// its own at Fit, else the whole photo's asked for after a settled
+/// frame. Nothing is issued, and the answer is
 /// `None`, unless `when` holds of the session as the generation is taken:
 /// the check and the request are one step.
 pub(crate) fn render_when(
     gpu: &RenderThread,
-    session: &Mutex<Session>,
+    session: &Arc<Mutex<Session>>,
     generations: &Generations,
+    histograms: &Arc<Histograms>,
     recorded: bool,
     phase: Phase,
     when: impl FnOnce(&Session) -> bool,
@@ -229,6 +302,10 @@ pub(crate) fn render_when(
         }
         let generation = generations.next();
         s.issued = generation;
+        // A settled render shows no preview, whatever was set.
+        if phase == Phase::End || !s.in_gesture() {
+            s.overlay.preview = Preview::None;
+        }
         let p = &s.edits[&id];
         let request = DevelopRequest {
             generation,
@@ -237,17 +314,36 @@ pub(crate) fn render_when(
             view: s.view,
             target: s.target,
             phase,
-            overlay: Default::default(),
+            overlay: s.overlay,
         };
         (state(id, p), request)
     };
     let generation = request.generation;
+    let key = Key {
+        photo: request.photo,
+        edit: request.edit.clone(),
+        target: request.target,
+        view: request.view,
+    };
     let frame = gpu.develop(request)?;
     if let Some(f) = &frame {
-        let mut s = session.lock().expect("session");
-        // A frame older than the last one issued says nothing about it.
-        if s.issued == generation {
-            s.provisional = f.provisional.then_some(generation);
+        let last = {
+            let mut s = session.lock().expect("session");
+            // A frame older than the last one issued says nothing about it.
+            let last = s.issued == generation;
+            if last {
+                s.provisional = f.provisional.then_some(generation);
+            }
+            last
+        };
+        match &f.histogram {
+            Some(h) => histograms.deliver(Counted {
+                photo: key.photo,
+                generation,
+                histogram: h.clone(),
+            }),
+            None if last && !phase.interactive() => histograms.whole(gpu, session, generation, key),
+            None => {}
         }
     }
     Ok(Some(Applied {

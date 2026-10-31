@@ -86,6 +86,12 @@ pub(crate) fn on_pool<T: Send>(f: impl FnOnce() -> T + Send) -> T {
     pool().install(f)
 }
 
+/// Runs `f` on the preview pool without waiting: the count of a shown
+/// preview (DEV-03), once the switch has handed it over.
+pub(crate) fn spawn(f: impl FnOnce() + Send + 'static) {
+    pool().spawn(f)
+}
+
 /// `p` upright, in `target`, and reduced to fit in `fit` (the viewport),
 /// for a switch to show at once. `None` when its color encoding is one
 /// Genzo does not read (DEV-01, Stage 4), as for the image itself.

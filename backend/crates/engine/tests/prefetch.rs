@@ -351,6 +351,10 @@ fn a_provisional_frame_is_rendered_again_once_the_input_comes() {
     let sharp = engine.take_sharpened().expect("rendered again");
     let (pixels, provisional) = frame(&sharp);
     assert!(!provisional);
+    // Its histogram replaces the provisional frame's (DEV-03).
+    let latest = engine.histogram(p[1]).expect("counted");
+    assert_eq!(latest.generation, sharp.frame.as_ref().unwrap().generation);
+    assert_eq!(latest.histogram, genzo_pipeline::histogram::count(&pixels));
     assert!(engine.take_sharpened().is_none(), "taken once");
     assert!(
         pixels == fresh(&engine, "p1.jpg", LARGE),
