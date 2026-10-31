@@ -309,6 +309,8 @@ fn a_prefetch_and_its_switch_stay_within_the_budget() {
 /// The view at the largest size DEV-01 budgets (2560 x 1920): its sampled
 /// cache within the viewport caches' line, its frame and two staging buffers
 /// within the output's, after a 1:1 read of tiles at a pan that clips them.
+/// Counting the histogram, the half-size preview and the 1:1 whole-photo
+/// histogram's smaller render add nothing to them (DEV-03 criterion 11).
 #[test]
 fn the_view_stays_within_its_caps() {
     use genzo_color::output::Target;
@@ -385,6 +387,22 @@ fn the_view_stays_within_its_caps() {
             half - full
         );
         assert!(half - full <= 65_536, "{} bytes", half - full);
+    }
+    // The 1:1 whole-photo histogram (DEV-03): a smaller Fit-size render,
+    // counted, in the same caches.
+    view.sample(&gpu, p, 1, (2400, 1800));
+    view.tone(&gpu, &look, None, None);
+    view.color(&gpu, &look);
+    view.count(&gpu, Target::Srgb, false, false);
+    assert_eq!(view.read_histogram(&gpu).unwrap().pixels, 2400 * 1800);
+    let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+    assert_eq!((view.cache_bytes(), view.output_bytes()), (cache, frame));
+    if let (Some(full), Some(after)) = (full, allocated(&gpu)) {
+        println!(
+            "measured: {} bytes more after the whole-photo histogram",
+            after as i64 - full as i64
+        );
+        assert!(after <= full + 65_536, "{full} then {after}");
     }
 }
 

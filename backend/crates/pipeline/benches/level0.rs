@@ -8,14 +8,26 @@
 //!
 //! On a 48 MP Bayer and a 40 MP X-Trans synthetic sensor. Measured on the
 //! RTX 3060 (2026-10-19): Bayer cold 5.9 ms, pan 2.5 ms; X-Trans cold
-//! 47 ms, pan 6.6 ms. Skipped without a
-//! GPU adapter; `GENZO_ADAPTER=software` benchmarks the software adapter.
+//! 47 ms, pan 6.6 ms.
+//!
+//! The whole-photo histogram at 1:1 (DEV-03 criterion 9: under 20 ms at
+//! 48 MP), through `Develop` as the render thread runs it: the pass itself
+//! (sampled at the Fit size from the pyramid, stages 6 and 7, counted),
+//! and the settled 1:1 render after it, which samples the view again from
+//! the level-0 tiles still held. Measured on the RTX 3060 (2026-10-31):
+//! the pass 2.35 ms (the Fit size 1920 x 1440 reads level 2), the render
+//! after it 2.57 ms.
+//!
+//! Skipped without a GPU adapter; `GENZO_ADAPTER=software` benchmarks the
+//! software adapter.
 
 use std::time::{Duration, Instant};
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use genzo_color::output::Target;
+use genzo_model::edit::Edit;
 use genzo_pipeline::camera_color::camera_transform;
+use genzo_pipeline::gpu::develop::{Develop, Phase, Photo};
 use genzo_pipeline::gpu::level0::Level0Cache;
 use genzo_pipeline::gpu::raw_stages::{RawStages, TileConfig};
 use genzo_pipeline::gpu::synthetic::{scene_raw, scene_xtrans_raw};
@@ -78,5 +90,70 @@ fn one_to_one(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, one_to_one);
+fn whole_histogram(c: &mut Criterion) {
+    let Ok(gpu) = Gpu::open(AdapterChoice::from_env()) else {
+        eprintln!("skipped: no GPU adapter");
+        return;
+    };
+    let mut group = c.benchmark_group(format!("1:1 2560x1440 histogram on {}", gpu.info.name));
+    group.sample_size(10);
+    let mut d = Develop::new(&gpu, TileConfig::default());
+    d.open(
+        &gpu,
+        Photo {
+            src: scene_raw(8064, 6048),
+            orientation: 1,
+        },
+    )
+    .unwrap();
+    let e = Edit {
+        exposure: 0.4,
+        contrast: 20.0,
+        highlights: -40.0,
+        shadows: 30.0,
+        vibrance: 20.0,
+        ..Edit::defaults(d.kind().unwrap())
+    };
+    let view = ViewSpec::Region {
+        out: (2560, 1440),
+        zoom: 1.0,
+        origin: (1024.0, 2048.0),
+    };
+    let wait = |gpu: &Gpu| {
+        let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+    };
+    let render = |d: &mut Develop| {
+        d.render(&gpu, &e, view, Target::Srgb, Phase::End).unwrap();
+        wait(&gpu);
+    };
+    render(&mut d);
+    group.bench_function("Bayer 48MP, the whole-photo pass", |b| {
+        b.iter_custom(|iters| {
+            let mut total = Duration::ZERO;
+            for _ in 0..iters {
+                render(&mut d);
+                let start = Instant::now();
+                d.count_whole(&gpu).unwrap().expect("counted");
+                total += start.elapsed();
+            }
+            total
+        })
+    });
+    group.bench_function("Bayer 48MP, the 1:1 render after it", |b| {
+        b.iter_custom(|iters| {
+            let mut total = Duration::ZERO;
+            for _ in 0..iters {
+                render(&mut d);
+                d.count_whole(&gpu).unwrap().expect("counted");
+                let start = Instant::now();
+                render(&mut d);
+                total += start.elapsed();
+            }
+            total
+        })
+    });
+    group.finish();
+}
+
+criterion_group!(benches, one_to_one, whole_histogram);
 criterion_main!(benches);

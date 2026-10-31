@@ -22,6 +22,13 @@
 //!   render that needs the input (a settled new white, the pyramid made
 //!   again) fails with [`DevelopError::NeedsSource`].
 //!
+//! - **The histogram** (DEV-03) is counted by stage 9 at Fit, from the
+//!   frame itself, the half-size preview included. At any other view the
+//!   frame is not the whole photo, so [`Develop::count_whole`] counts a
+//!   whole-photo render at the Fit size instead, in the view's own caches.
+//!   The J overlay and the Alt preview ([`Develop::set_overlay`]) re-run
+//!   stage 9 only.
+//!
 //! [`Develop::reran`] says what the last render ran, so tests can hold it
 //! to DEV-01's re-run table. Only the render thread holds it.
 
@@ -41,6 +48,7 @@ use crate::camera_color::{
     CameraTransform, balanced_encoded_transform, camera_transform, drag_ratio, encoded_transform,
 };
 use crate::geometry::{Geometry, fit};
+use crate::histogram::{Histogram, Overlay};
 use crate::look::{BaseCurve, Look, Profile};
 use crate::raw::RawSource;
 use crate::reference::base::working_size;
@@ -167,6 +175,11 @@ struct Shown {
     dither: bool,
     /// Drawn from level 1 where level 0 was wanted, the input not attached.
     provisional: bool,
+    overlay: Overlay,
+    /// Stage 9 counted the frame: a Fit view.
+    counting: bool,
+    /// A gesture's start or update.
+    interactive: bool,
 }
 
 /// One photo's GPU state.
@@ -184,6 +197,8 @@ pub struct Develop {
     layer_for: Option<([f64; 2], [f32; 3], Geometry)>,
     rebuild: Option<Rebuild>,
     reran: Reran,
+    /// What the next renders draw over the photo.
+    overlay: Overlay,
 }
 
 #[derive(Debug)]
@@ -223,7 +238,14 @@ impl Develop {
             layer_for: None,
             rebuild: None,
             reran: Reran::default(),
+            overlay: Overlay::default(),
         }
+    }
+
+    /// What the next renders draw over the photo: the J overlay or the Alt
+    /// preview (DEV-03). Kept across photos; a change re-runs stage 9 only.
+    pub fn set_overlay(&mut self, overlay: Overlay) {
+        self.overlay = overlay;
     }
 
     /// Opens `photo` in place of the one held: its pyramid with the as-shot
@@ -466,7 +488,8 @@ impl Develop {
             reran.base_layer = true;
         }
 
-        let half = interactive && matches!(view, ViewSpec::Fit(_));
+        let counting = matches!(view, ViewSpec::Fit(_));
+        let half = interactive && counting;
         let dither = dithers(pyramid, edited);
         let provisional =
             p.src.is_none() && plan_view(size, &pyramid.level_sizes(), frame, view).level == 0;
@@ -480,6 +503,9 @@ impl Develop {
             half,
             dither,
             provisional,
+            overlay: self.overlay,
+            counting,
+            interactive,
         };
         let mut from = match &old {
             _ if reran.pyramid || reran.base_layer || reran.finished_rebuild => From::Sample,
@@ -487,7 +513,15 @@ impl Develop {
             Some(s) if moved || s.ratio != ratio || s.provisional != provisional => From::Sample,
             Some(s) if tone_inputs(&s.look) != tone_inputs(&look) => From::Tone,
             Some(s) if color_inputs(&s.look) != color_inputs(&look) => From::Color,
-            Some(s) if s.target != target || s.half != half || s.dither != dither => From::Output,
+            Some(s)
+                if s.target != target
+                    || s.half != half
+                    || s.dither != dither
+                    || s.overlay != shown.overlay
+                    || s.counting != counting =>
+            {
+                From::Output
+            }
             Some(_) => {
                 self.reran = reran;
                 return Ok(reran);
@@ -531,6 +565,8 @@ impl Develop {
         }
         let pyramid = self.stages.pyramid().expect("built above");
         let compress = compresses(pyramid, target);
+        self.view.set_counting(counting);
+        self.view.set_overlay(self.overlay);
         if half {
             self.view.output_half(gpu, target, compress, dither);
         } else {
@@ -540,6 +576,69 @@ impl Develop {
         self.shown = Some(shown);
         self.reran = reran;
         Ok(reran)
+    }
+
+    /// The last frame's histogram, at Fit; `None` at any other view, whose
+    /// frame is not the whole photo ([`Develop::count_whole`]).
+    pub fn histogram(&self, gpu: &Gpu) -> Result<Option<Histogram>, GpuError> {
+        match &self.shown {
+            Some(s) if s.counting => self.view.read_histogram(gpu).map(Some),
+            _ => Ok(None),
+        }
+    }
+
+    /// The whole photo's histogram while the view is not Fit (DEV-03, *At
+    /// 1:1*): the last render's edit rendered at the size its Fit view
+    /// would have, in the view's own caches, counted and not written. When
+    /// that Fit view would read level 0, it reads level 1 at level 1's own
+    /// size instead, so no level-0 tile is evicted. The caches then no
+    /// longer hold the view, so the next render samples it again. `None`
+    /// at Fit, before a render, after a drag's render, or while the rest of
+    /// a rebuild is pending.
+    pub fn count_whole(&mut self, gpu: &Gpu) -> Result<Option<Histogram>, GpuError> {
+        let (Some(p), Some(s)) = (self.photo.as_ref(), self.shown.as_ref()) else {
+            return Ok(None);
+        };
+        let Some(pyramid) = self.stages.pyramid() else {
+            return Ok(None);
+        };
+        if s.counting || s.interactive || self.rebuild.is_some() {
+            return Ok(None);
+        }
+        let size = p.info.size;
+        let levels = pyramid.level_sizes();
+        let fit = s.frame.fit_in(size, s.view.out());
+        let mut plan = plan_view(size, &levels, s.frame, ViewSpec::Fit(fit));
+        let mut out = fit;
+        if plan.level == 0 {
+            // Level 1's own size: the framed image scaled as level 1 is.
+            let (w, h) = s.frame.pixel_size(size);
+            let k = f64::from(levels[0].0) / f64::from(size.0);
+            let level1 = (
+                ((f64::from(w) * k).ceil() as u32).clamp(1, fit.0),
+                ((f64::from(h) * k).ceil() as u32).clamp(1, fit.1),
+            );
+            out = s.frame.fit_in(size, level1);
+            plan = plan_view_without_level0(size, &levels, s.frame, ViewSpec::Fit(out));
+        }
+        let (look, target, dither) = (s.look, s.target, s.dither);
+        self.view.set_ratio(None);
+        self.view.sample_with(gpu, pyramid, None, &plan, out);
+        // From here the caches hold this render, not the view.
+        self.shown = None;
+        if !look.tone_is_identity() {
+            let curve = (look.profile == Profile::GenzoStandard)
+                .then_some(p.curve.as_ref())
+                .flatten();
+            let layer = look.is_local().then_some(&self.layer);
+            self.view.tone(gpu, &look, curve, layer);
+        }
+        if !look.color_is_identity() {
+            self.view.color(gpu, &look);
+        }
+        self.view
+            .count(gpu, target, compresses(pyramid, target), dither);
+        self.view.read_histogram(gpu).map(Some)
     }
 }
 
