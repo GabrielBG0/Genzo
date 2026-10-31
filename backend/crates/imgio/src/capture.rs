@@ -129,14 +129,15 @@ pub fn can_lie_past_the_head(head: &[u8]) -> bool {
 }
 
 /// The capture in a TIFF structure: in the IFD IFD0's ExifIFD tag points
-/// to when `via_exif_ifd`, else in IFD0 itself.
+/// to when `via_exif_ifd` and IFD0 has that tag, else in IFD0 itself.
 fn from_tiff(tiff: &[u8], via_exif_ifd: bool) -> Option<Capture> {
     let t = Tiff::new(tiff)?;
     let ifd0 = t.ifd(t.u32(4)? as usize).ok()?;
-    let exif = if via_exif_ifd {
-        t.ifd(t.first_int(&ifd0, EXIF_IFD)? as usize).ok()?
-    } else {
-        ifd0
+    // Without an ExifIFD pointer, IFD0 itself, where TIFF/EP files (an old
+    // Kodak DCR) keep the EXIF tags, as ExifTool reads them.
+    let exif = match find(&ifd0, EXIF_IFD).filter(|_| via_exif_ifd) {
+        Some(e) => t.ifd(*t.ints(e).ok()?.first()? as usize).ok()?,
+        None => ifd0,
     };
     let time = find(&exif, DATE_TIME_ORIGINAL)
         .and_then(|e| t.blob(e).ok())
@@ -449,6 +450,26 @@ mod tests {
         let text = exif_tiff(&[(F_NUMBER, 2, 4, b"2.8\0".to_vec())], false);
         assert_eq!(capture(&text).shooting.f_number, None);
         assert!(capture(b"not a photo").is_empty());
+    }
+
+    #[test]
+    fn without_an_exif_ifd_ifd0_holds_the_tags() {
+        // TIFF/EP: the EXIF tags in IFD0 itself. The EXIF IFD of
+        // `exif_tiff`, at 26, made IFD0.
+        let mut t = exif_tiff(
+            &[
+                (EXPOSURE_TIME, 5, 1, rational_bytes(1, 160, false)),
+                (DATE_TIME_ORIGINAL, 2, 20, b"2001:02:03 04:05:06\0".to_vec()),
+            ],
+            false,
+        );
+        t[4..8].copy_from_slice(&26u32.to_le_bytes());
+        let c = capture(&t);
+        assert_eq!(
+            c.shooting.exposure_time,
+            Some(Rational { num: 1, den: 160 })
+        );
+        assert_eq!(c.time.map(|t| t.year), Some(2001));
     }
 
     #[test]
