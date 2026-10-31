@@ -23,7 +23,13 @@ TAGS = ["ISO", "ExposureTime", "FNumber", "FocalLength"]
 
 def run(exiftool, args):
     cmd = (["perl", exiftool] if exiftool.endswith((".pl", "exiftool")) and os.path.isfile(exiftool) else [exiftool]) + args
-    return subprocess.run(cmd, check=True, capture_output=True).stdout
+    # Status 1 is a file ExifTool could not read; the others still report.
+    r = subprocess.run(cmd, capture_output=True)
+    if r.stderr:
+        sys.stderr.write(r.stderr.decode(errors="replace"))
+    if r.returncode not in (0, 1) or not r.stdout:
+        raise SystemExit(f"exiftool failed with status {r.returncode}")
+    return r.stdout
 
 
 def first(v):

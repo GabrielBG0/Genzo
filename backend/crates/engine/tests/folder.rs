@@ -101,17 +101,21 @@ fn shot_tiff(gap: usize) -> Vec<u8> {
     out.resize(exif_at, 0);
     let data_at = (exif_at + 2 + 4 * 12 + 4) as u32;
     out.extend(4u16.to_le_bytes());
-    // ExposureTime, FNumber and FocalLength (RATIONAL), ISO (SHORT).
-    for (i, tag) in [33434u16, 33437, 37386].into_iter().enumerate() {
+    // In tag order: ExposureTime, FNumber (RATIONAL), ISO (SHORT),
+    // FocalLength (RATIONAL); the rationals' values follow in that order.
+    let rational = |out: &mut Vec<u8>, tag: u16, slot: u32| {
         out.extend(tag.to_le_bytes());
         out.extend(5u16.to_le_bytes());
         out.extend(1u32.to_le_bytes());
-        out.extend((data_at + 8 * i as u32).to_le_bytes());
-    }
+        out.extend((data_at + 8 * slot).to_le_bytes());
+    };
+    rational(&mut out, 33434, 0);
+    rational(&mut out, 33437, 1);
     out.extend(34855u16.to_le_bytes());
     out.extend(3u16.to_le_bytes());
     out.extend(1u32.to_le_bytes());
     out.extend(400u32.to_le_bytes());
+    rational(&mut out, 37386, 2);
     out.extend(0u32.to_le_bytes());
     for (num, den) in [(1u32, 250u32), (28, 10), (686, 100)] {
         out.extend(num.to_le_bytes());
