@@ -7,13 +7,16 @@
 //!   capture time, by file name with numbers compared as numbers. Undated
 //!   files come after the dated ones.
 //! - Capture times are read from each file's metadata in parallel, never
-//!   its pixels.
+//!   its pixels, with the shooting values of the same EXIF IFD (DEV-03:
+//!   the histogram's EXIF row).
 
 use std::cmp::Ordering;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use genzo_imgio::capture::{CaptureTime, can_lie_past_the_head, capture_time};
+use genzo_imgio::capture::{
+    Capture, CaptureTime, Shooting, can_lie_past_the_head, capture, capture_time,
+};
 use rayon::prelude::*;
 
 use crate::EngineError;
@@ -39,6 +42,7 @@ pub struct FolderPhoto {
     pub path: PathBuf,
     pub file_name: String,
     pub capture_time: Option<CaptureTime>,
+    pub shooting: Shooting,
 }
 
 /// The photos directly inside `folder`, in the filmstrip's order.
@@ -56,10 +60,14 @@ pub fn list_folder(folder: &Path) -> Result<Vec<FolderPhoto>, EngineError> {
     }
     let mut photos: Vec<FolderPhoto> = paths
         .into_par_iter()
-        .map(|(path, file_name)| FolderPhoto {
-            capture_time: read_capture_time(&path),
-            path,
-            file_name,
+        .map(|(path, file_name)| {
+            let c = read_capture(&path);
+            FolderPhoto {
+                capture_time: c.time,
+                shooting: c.shooting,
+                path,
+                file_name,
+            }
         })
         .collect();
     photos.sort_by(order);
@@ -98,18 +106,19 @@ fn worth_the_rest(head: &[u8]) -> bool {
     head.len() as u64 == HEAD && can_lie_past_the_head(head)
 }
 
-fn read_capture_time(path: &Path) -> Option<CaptureTime> {
-    let mut file = std::fs::File::open(path).ok()?;
+fn read_capture(path: &Path) -> Capture {
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return Capture::default();
+    };
     let mut head = Vec::new();
-    file.by_ref().take(HEAD).read_to_end(&mut head).ok()?;
-    if let Some(t) = capture_time(&head) {
-        return Some(t);
+    if file.by_ref().take(HEAD).read_to_end(&mut head).is_err() {
+        return Capture::default();
     }
-    if !worth_the_rest(&head) {
-        return None;
+    let c = capture(&head);
+    if c.time.is_some() || !worth_the_rest(&head) || file.read_to_end(&mut head).is_err() {
+        return c;
     }
-    file.read_to_end(&mut head).ok()?;
-    capture_time(&head)
+    capture(&head)
 }
 
 /// The filmstrip's order: dated before undated, by time, then by name.

@@ -19,7 +19,7 @@ use std::sync::mpsc::Receiver;
 
 use genzo_color::output::Target;
 use genzo_imgio::Preview;
-use genzo_imgio::capture::CaptureTime;
+use genzo_imgio::capture::{CaptureTime, Shooting};
 use genzo_model::edit::Phase;
 use genzo_pipeline::gpu::develop::{Photo, as_shot};
 use genzo_pipeline::raw::RawSource;
@@ -135,6 +135,8 @@ pub struct StripPhoto {
     pub id: u64,
     pub file_name: String,
     pub capture_time: Option<CaptureTime>,
+    /// ISO, exposure time, f-number and focal length (DEV-03: the EXIF row).
+    pub shooting: Shooting,
     /// Whether it renders, once it was decoded.
     pub kind: PhotoKind,
     /// Its edit differs from its defaults: the blue dot.
@@ -253,6 +255,7 @@ impl Engine {
                     id: *id,
                     file_name: p.file_name.clone(),
                     capture_time: p.capture_time,
+                    shooting: p.shooting,
                     kind: s.strip.kinds.get(id).cloned().unwrap_or_default(),
                     edited: s.edits.get(id).is_some_and(PhotoEdits::is_edited),
                 })
