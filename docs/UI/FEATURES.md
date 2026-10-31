@@ -247,7 +247,7 @@ Spec template for each feature: **Behavior** (what it does, step by step), **Inp
 ### DEV-03 · Histogram and clipping warnings
 - Priority: P0 · Screens: D1
 - Scope: RGB histogram with EXIF row, clipping corner markers, J toggles shadow (blue) and highlight (red) overlays, Alt-drag on sliders previews clipping.
-- Spec: _to be written_
+- Spec: [DEV-03](../specs/DEV-03.md)
 
 ### DEV-04 · Tone curve
 - Priority: P0 · Screens: D2
