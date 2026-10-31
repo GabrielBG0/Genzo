@@ -9,6 +9,7 @@ pub mod budget;
 pub mod camera_color;
 pub mod geometry;
 pub mod gpu;
+pub mod histogram;
 pub mod look;
 pub mod picker;
 pub mod raw;

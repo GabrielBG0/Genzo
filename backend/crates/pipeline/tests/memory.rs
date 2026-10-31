@@ -338,27 +338,39 @@ fn the_view_stays_within_its_caps() {
     };
     view.tone(&gpu, &look, None, None);
     view.color(&gpu, &look);
+    // Counting, with the J overlay on (DEV-03).
+    view.set_counting(true);
+    view.set_overlay(genzo_pipeline::histogram::Overlay {
+        highlights: Some([255, 0, 0, 255]),
+        shadows: Some([0, 0, 255, 255]),
+        preview: genzo_pipeline::histogram::Preview::None,
+    });
     view.output(&gpu, Target::Srgb, false, false);
+    view.read_histogram(&gpu).unwrap();
     let tiles = genzo_pipeline::gpu::readback::visible_tiles((1, 1), (2560, 1920), (4000, 3000));
     let rects: Vec<_> = tiles.iter().map(|t| t.frame).collect();
     view.read_rects(&gpu, &rects).unwrap();
     let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
     let (cache, frame) = (view.cache_bytes(), view.output_bytes());
+    let histogram = view.histogram_bytes();
     println!(
-        "computed: viewport caches {:.1} MB (cap {:.0}), frame and staging {:.1} MB (cap {:.0})",
+        "computed: viewport caches {:.1} MB (cap {:.0}), frame and staging {:.1} MB (cap {:.0}), \
+         histogram {histogram} bytes (cap {:.0} MB)",
         cache as f64 / MB,
         budget::VIEWPORT_CACHES as f64 / MB,
         frame as f64 / MB,
-        budget::OUTPUT as f64 / MB
+        budget::OUTPUT as f64 / MB,
+        budget::HISTOGRAM as f64 / MB
     );
     assert!(cache <= budget::VIEWPORT_CACHES && frame <= budget::OUTPUT);
+    assert!(histogram <= budget::HISTOGRAM);
     let full = allocated(&gpu);
     if let (Some(before), Some(after)) = (before, full) {
         let used = after - before;
         println!("measured: {:.1} MB for the view", used as f64 / MB);
         // Plus uniforms and the driver's padding.
         assert!(
-            used as f64 <= (cache + frame) as f64 * 1.07 + 2e6,
+            used as f64 <= (cache + frame + histogram) as f64 * 1.07 + 2e6,
             "{used} bytes"
         );
     }

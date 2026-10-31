@@ -4,6 +4,9 @@
 //! a change re-runs from the earliest stage it touches; then stage 9 into
 //! an RGBA8 frame from the latest of them. A view that skips stages 6 and 7
 //! shows the sampled cache as Genzo Linear would.
+//!
+//! Stage 9 also counts the frame's histogram and draws the J overlay or the
+//! Alt preview over it (DEV-03, [`crate::histogram`]), each off until set.
 
 use std::sync::mpsc;
 
@@ -16,6 +19,7 @@ use super::level0::{Level0Cache, Level0Error};
 use super::raw_stages::{Pass, Pyramid, RawStages, Slot, padded_row, pass_with};
 use super::readback::Staging;
 use super::{Gpu, GpuError};
+use crate::histogram::{self, Histogram, Overlay, Preview};
 use crate::look::{BaseCurve, Look, Profile};
 use crate::raw::RawSource;
 use crate::reference::base::{T_FLOOR, view_to_working};
@@ -82,6 +86,8 @@ struct OutputUniforms {
     compression: [f32; 4],
     size: [u32; 4],
     offset: [i32; 4],
+    overlay: [u32; 4],
+    mode: [u32; 4],
 }
 
 #[repr(C)]
@@ -182,6 +188,13 @@ pub struct ViewStages {
     offset: (i32, i32),
     /// The white balance drag the next samplings apply, if any.
     ratio: Option<[[f32; 3]; 3]>,
+    /// Stage 9's histogram ([`histogram::WORDS`] words), and the buffer it
+    /// is copied to for reading, never left mapped across an output.
+    histogram: wgpu::Buffer,
+    histogram_read: wgpu::Buffer,
+    /// Whether the next outputs count, and what they draw over the photo.
+    counting: bool,
+    overlay: Overlay,
 }
 
 impl ViewStages {
@@ -242,7 +255,11 @@ impl ViewStages {
                 device,
                 "view output",
                 include_str!("shaders/view_output.wgsl"),
-                &[Slot::Float, Slot::Store(wgpu::TextureFormat::R32Uint)],
+                &[
+                    Slot::Float,
+                    Slot::Store(wgpu::TextureFormat::R32Uint),
+                    Slot::StorageRw,
+                ],
                 false,
             ),
             sample_uniforms: uniforms("view sample", size_of::<SampleUniforms>()),
@@ -279,7 +296,65 @@ impl ViewStages {
             sampling: None,
             offset: (0, 0),
             ratio: None,
+            histogram: device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("histogram"),
+                size: HISTOGRAM_BYTES,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_SRC
+                    | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }),
+            histogram_read: device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("histogram readback"),
+                size: HISTOGRAM_BYTES,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            }),
+            counting: false,
+            overlay: Overlay::default(),
         }
+    }
+
+    /// Whether the next outputs count the frame's histogram
+    /// ([`Self::read_histogram`]). Off by default; at 1:1 the frame is not
+    /// the whole photo, so the engine leaves it off there (DEV-03).
+    pub fn set_counting(&mut self, on: bool) {
+        self.counting = on;
+    }
+
+    /// What the next outputs draw over the photo: the J overlay or the Alt
+    /// preview (DEV-03). None by default.
+    pub fn set_overlay(&mut self, overlay: Overlay) {
+        self.overlay = overlay;
+    }
+
+    /// The histogram of the last output that counted. Empty before one.
+    pub fn read_histogram(&self, gpu: &Gpu) -> Result<Histogram, GpuError> {
+        let buffer = &self.histogram_read;
+        let (tx, rx) = mpsc::channel();
+        buffer.map_async(wgpu::MapMode::Read, .., move |r| {
+            let _ = tx.send(r);
+        });
+        gpu.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .map_err(|e| GpuError::Readback(e.to_string()))?;
+        rx.recv()
+            .map_err(|e| GpuError::Readback(e.to_string()))?
+            .map_err(|e| GpuError::Readback(e.to_string()))?;
+        let words: Vec<u32> = {
+            let mapped = buffer
+                .get_mapped_range(..)
+                .map_err(|e| GpuError::Readback(e.to_string()))?;
+            bytemuck::cast_slice(&mapped).to_vec()
+        };
+        buffer.unmap();
+        Ok(Histogram::from_words(&words))
+    }
+
+    /// The bytes of the histogram and its readback buffer, inside DEV-01's
+    /// histogram line ([`crate::budget::HISTOGRAM`]).
+    pub fn histogram_bytes(&self) -> u64 {
+        2 * HISTOGRAM_BYTES
     }
 
     /// Applies the white balance drag `m` ([`crate::camera_color::drag_ratio`])
@@ -742,6 +817,8 @@ impl ViewStages {
             ],
             size: [out.0, out.1, EDGE_STEPS, u32::from(dither)],
             offset: [self.offset.0, self.offset.1, scale as i32, 0],
+            overlay: overlay_uniforms(&self.overlay),
+            mode: [u32::from(self.counting), 1, 0, 0],
         };
         gpu.queue
             .write_buffer(&self.output_uniforms, 0, bytemuck::bytes_of(&u));
@@ -767,9 +844,33 @@ impl ViewStages {
                     binding: 2,
                     resource: wgpu::BindingResource::TextureView(&frame),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: self.histogram.as_entire_binding(),
+                },
             ],
         });
-        self.dispatch(gpu, &self.output, &group, out);
+        // One submit: the counts cleared, the pass, and the copy to read.
+        let mut encoder = gpu.device.create_command_encoder(&Default::default());
+        if self.counting {
+            encoder.clear_buffer(&self.histogram, 0, None);
+        }
+        {
+            let mut cp = encoder.begin_compute_pass(&Default::default());
+            cp.set_pipeline(&self.output.pipeline);
+            cp.set_bind_group(0, &group, &[]);
+            cp.dispatch_workgroups(out.0.div_ceil(WG), out.1.div_ceil(WG), 1);
+        }
+        if self.counting {
+            encoder.copy_buffer_to_buffer(
+                &self.histogram,
+                0,
+                &self.histogram_read,
+                0,
+                HISTOGRAM_BYTES,
+            );
+        }
+        gpu.queue.submit([encoder.finish()]);
     }
 
     /// The size of what the frame holds: the view's, or half of it rounded
@@ -841,6 +942,21 @@ impl ViewStages {
             .expect("made with the frame")
             .read(gpu, frame, rects)
     }
+}
+
+const HISTOGRAM_BYTES: u64 = (histogram::WORDS * 4) as u64;
+
+/// view_output.wgsl's `overlay`: the two colors packed R low, which are on,
+/// and the preview.
+fn overlay_uniforms(o: &Overlay) -> [u32; 4] {
+    let pack = |c: Option<[u8; 4]>| c.map_or(0, |c| u32::from_le_bytes([c[0], c[1], c[2], 0]));
+    let on = u32::from(o.highlights.is_some()) | u32::from(o.shadows.is_some()) << 1;
+    let preview = match o.preview {
+        Preview::None => 0,
+        Preview::Highlights => 1,
+        Preview::Shadows => 2,
+    };
+    [pack(o.highlights), pack(o.shadows), on, preview]
 }
 
 /// A rectangle of an RGBA16F texture as RGB, row by row.
