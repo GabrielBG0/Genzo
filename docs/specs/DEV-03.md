@@ -53,7 +53,8 @@ Sources: the spec's feature table ("Histogram, clipping warnings, before and aft
 
 ### The J overlay
 
-- **J turns both overlays on or off together.** A marker click turns one on or off (see above). Their state is the view's and follows the Decided row "Module state (APP-01)": switching photos or modules turns both off, and nothing is saved.
+- **J turns both overlays on or off together.** A marker click turns one on or off (see above). **Their state stays on across photo switches** (owner, 2026-10-30), as in Lightroom, so a whole shoot can be checked for clipping: it holds until J or a marker turns it off. It is the one exception to the Decided row "Module state (APP-01)". Leaving Develop turns both off, as that row says, and nothing is saved when the app closes.
+- **A setting from M2.** The Preferences window (APP-11, M2) gets an Interface option, "Keep clipping overlays on when switching photos", on by default. Turned off, each photo starts with both overlays off. M1 has no settings store, so it always keeps them on.
 - **What it shows:** on the photo, every pixel whose highlights clip is drawn in `label.red`; every pixel whose shadows clip is drawn in `label.blue`. A pixel that clips in both is drawn red.
 - **Drawn by stage 9 into the frame.** The overlay is part of the frame's pixels, so it needs no second image over the binary tile protocol, and it is right at Fit and at 1:1, while dragging too. The frontend sends the two colors from its token set with the overlay state (`SetClippingOverlay`, below), so no color is hard-coded in the engine. The overlay is flat, with no blend or blur.
 - Turning an overlay on or off renders the frame again from the stage 7 cache, through stage 9 only (DEV-01, *Re-runs*).
@@ -107,7 +108,7 @@ Every command is in the shortcut registry, with its shortcut shown in its toolti
 
 ## Data
 
-Nothing is stored. The overlay state is the view's and is reset by a photo or module switch, like the zoom (Decided: "Module state (APP-01)"). The histogram is computed again with every frame. The EXIF values are read from the file each time it is opened.
+Nothing is stored in M1. The overlay state is the view's: kept across photo switches, reset when leaving Develop, and gone when the app closes. From M2, the APP-11 setting above is stored with the other preferences. The histogram is computed again with every frame. The EXIF values are read from the file each time it is opened.
 
 ## Edge cases
 

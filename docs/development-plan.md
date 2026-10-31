@@ -113,7 +113,7 @@ Parked decisions that have been settled, with the date and what follows from eac
 | Minimum OS versions | Windows 10 and 11; macOS 13 Ventura or newer; Linux with WebKitGTK 4.1 (Ubuntu 22.04, Fedora 38 or newer) | 2026-10-14 | CI pins `ubuntu-22.04` and `windows-2022` and builds macOS with `MACOSX_DEPLOYMENT_TARGET=13.0`; the bundle declares macOS 13.0. GitHub has no Windows 10 or macOS 13 runners, so those two are checked by hand before a release |
 | Undo scope (APP-10) | Per photo. Each photo has its own history; Ctrl Z undoes the last change to the current photo | 2026-10-14 | The M1 `Undo` and `Redo` commands take the photo they act on. History steps are stored per photo (the catalog's History step entity already is). In M2, library actions such as ratings, flags and labels join the history of the photo they change |
 | HEVC patent position | Ship libde265 (inside a bundled libheif) on every platform, and accept the patent risk. Revisit before the first public release | 2026-10-14 | See `docs/licenses.md`, which also explains how to cut HEIC support |
-| Module state (APP-01) | Not remembered. Zoom, pan and open panels are neither kept per photo nor per module; switching modules or photos starts from the defaults | 2026-10-14 | No view-state store is needed in M1 |
+| Module state (APP-01) | Not remembered. Zoom, pan and open panels are neither kept per photo nor per module; switching modules or photos starts from the defaults | 2026-10-14 | No view-state store is needed in M1. One exception (owner, 2026-10-30): the clipping overlays (J, DEV-03) stay on across photo switches, and from M2 an APP-11 setting can turn that off |
 | ICC library | moxcms (pure Rust), not lcms2 | 2026-10-14 | No C build for color management. lcms2 stays the fallback; see `docs/licenses.md` |
 | Working space | Linear light on the ACES AP1 primaries with a D65 white | 2026-10-14 | Rec. 2020 does not fully contain Display P3 (its red is just outside), so it fails the spec's requirement. AP1 contains both. The D65 white matches the display spaces, so no chromatic adaptation is needed. See `docs/m0-results.md` |
 | Camera priority order | Canon CR3, Sony ARW, Nikon NEF (lossless and lossy compressed) and Fujifilm RAF first (about 86 percent of users); then phone DNG including Apple ProRAW; then Panasonic, OM and Leica or Pentax DNG; then Nikon High Efficiency; medium format and legacy last; GoPro GPR out for now | 2026-10-15 | The table and its sources are in `docs/m0-results.md`. Based on a market estimate from a prior-art project, not our data. rawler stays the main decoder (it reads 16 of 19 corpus files against 13 of 20 for LightCraft's crate) |
@@ -514,7 +514,7 @@ One PR per numbered item, unless it says otherwise. The frontend track (item 9) 
 11. **APP-02**: the compact app menu (Menu-2) gains the Library items.
 12. **APP-04 Command search (Ctrl K, W5)**: commands, collections and photos, with filter chips and a ">" prefix for commands. Presets are added in M3.
 13. **APP-05 Shortcut sheet (Ctrl /, W6)**: read-only for now, with Windows and macOS layouts.
-14. **APP-11 Preferences and catalog settings**: import defaults, previews, GPU/performance, backups.
+14. **APP-11 Preferences and catalog settings**: import defaults, previews, GPU/performance, backups. Interface: whether the clipping overlays stay on across photo switches (DEV-03; on by default).
 15. **APP-03**: Library quick action defaults (Import, Export, Quick Collection, Undo, Redo).
 16. Develop now opens photos from the catalog.
 
