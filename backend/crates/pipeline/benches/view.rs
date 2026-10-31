@@ -24,6 +24,11 @@
 //! Stage 9 and its readback, as a drag at Fit sends them: 3.2 ms for the
 //! half-size preview (1280 x 960, 4.9 MB), 12.0 ms for the full frame
 //! (2026-10-22).
+//! Stage 9 counting the histogram (DEV-03), its clear and copy included:
+//! 1.47 ms with the gamut compression against 1.35 ms, 0.50 ms without it
+//! against 0.37 ms, so about 0.12 ms at 2560 x 1920 (DEV-03 criterion 9
+//! allows 0.2 ms at 2560 x 1440); the J overlay adds nothing measurable,
+//! 0.50 ms (2026-10-31).
 //!
 //! Skipped without a GPU adapter. `GENZO_ADAPTER=software` benchmarks the
 //! software adapter.
@@ -38,6 +43,7 @@ use genzo_pipeline::gpu::readback::visible_tiles;
 use genzo_pipeline::gpu::synthetic::scene_raw;
 use genzo_pipeline::gpu::view::ViewStages;
 use genzo_pipeline::gpu::{AdapterChoice, Gpu};
+use genzo_pipeline::histogram::{Overlay, Preview};
 use genzo_pipeline::look::{BaseCurve, Look, Profile};
 use genzo_pipeline::reference::sampling::{Frame, ViewSpec, plan_view_without_level0};
 
@@ -126,6 +132,32 @@ fn view(c: &mut Criterion) {
             })
         });
     }
+    // DEV-03: the histogram counted, then with J's overlay drawn too.
+    view.set_counting(true);
+    for (name, compress) in [
+        ("stage 9, gamut compressed, counting", true),
+        ("stage 9, counting", false),
+    ] {
+        group.bench_function(name, |b| {
+            b.iter(|| {
+                view.output(&gpu, Target::Srgb, compress, true);
+                wait(&gpu);
+            })
+        });
+    }
+    view.set_overlay(Overlay {
+        highlights: Some([255, 107, 107, 255]),
+        shadows: Some([91, 157, 255, 255]),
+        preview: Preview::None,
+    });
+    group.bench_function("stage 9, counting, J overlay", |b| {
+        b.iter(|| {
+            view.output(&gpu, Target::Srgb, false, true);
+            wait(&gpu);
+        })
+    });
+    view.set_overlay(Overlay::default());
+    view.set_counting(false);
     let base = BaseCurve::new(&src.color);
     let standard = Look {
         exposure: 0.3,

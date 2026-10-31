@@ -6,6 +6,11 @@
 // added), so at 1:1 it does not depend on the pan. Each pixel goes out as
 // one u32 texel, R in the low byte. The half-size drag preview takes each
 // pixel from the mean of a 2 x 2 block of the cache, in linear light.
+//
+// The histogram (DEV-03, pipeline::histogram) is counted from the codes
+// before anything is drawn over them: per workgroup in shared atomics,
+// merged into the storage buffer. Then the Alt preview replaces the pixel,
+// or the J overlay draws a clipped one in its color.
 
 struct Output {
     // AP1 to linear target RGB, one row per vec4.
@@ -24,11 +29,29 @@ struct Output {
     // The view's whole-pixel offset (view_sample.wgsl), and 2 for the
     // half-size preview or 1.
     offset: vec4<i32>,
+    // The J overlay's highlight and shadow colors (RGBA8, R low), 1 when
+    // each is on (bit 0 highlights, bit 1 shadows), and the preview: 0
+    // none, 1 highlights, 2 shadows.
+    overlay: vec4<u32>,
+    // 1 to count, 1 to write the frame.
+    mode: vec4<u32>,
 }
 
 @group(0) @binding(0) var<uniform> out: Output;
 @group(0) @binding(1) var sampled: texture_2d<f32>;
 @group(0) @binding(2) var frame: texture_storage_2d<r32uint, write>;
+// pipeline::histogram::WORDS: R, G and B bins, highlight pixels and
+// channels, shadow pixels and channels, pixels counted.
+@group(0) @binding(3) var<storage, read_write> histogram: array<atomic<u32>, 773>;
+
+const WORDS: u32 = 773u;
+const HIGH_PIXELS: u32 = 768u;
+const HIGH_CHANNELS: u32 = 769u;
+const LOW_PIXELS: u32 = 770u;
+const LOW_CHANNELS: u32 = 771u;
+const PIXELS: u32 = 772u;
+
+var<workgroup> local: array<atomic<u32>, 773>;
 
 fn m3(m: array<vec4<f32>, 3>, v: vec3<f32>) -> vec3<f32> {
     return vec3<f32>(dot(m[0].xyz, v), dot(m[1].xyz, v), dot(m[2].xyz, v));
@@ -132,20 +155,89 @@ fn quantize(v: f32, noise: f32) -> u32 {
     return u32(clamp(floor(v * 255.0 + 0.5 + noise), 0.0, 255.0));
 }
 
+// R, G and B set to `on` where `mask` has their bit and `off` elsewhere,
+// opaque.
+fn by_mask(mask: u32, on: u32, off: u32) -> u32 {
+    var rgba = 255u << 24u;
+    for (var c = 0u; c < 3u; c++) {
+        rgba |= select(off, on, (mask & (1u << c)) != 0u) << (8u * c);
+    }
+    return rgba;
+}
+
+// What is written for the photo's pixel (pipeline::histogram::Overlay::apply).
+fn drawn(rgba: u32, high: u32, low: u32) -> u32 {
+    let preview = out.overlay.w;
+    if (preview == 1u) {
+        return by_mask(high, 255u, 0u);
+    }
+    if (preview == 2u) {
+        return by_mask(low, 0u, 255u);
+    }
+    if ((out.overlay.z & 1u) != 0u && high != 0u) {
+        return out.overlay.x | (255u << 24u);
+    }
+    if ((out.overlay.z & 2u) != 0u && low != 0u) {
+        return out.overlay.y | (255u << 24u);
+    }
+    return rgba;
+}
+
 @compute @workgroup_size(16, 16)
-fn main(@builtin(global_invocation_id) id: vec3<u32>) {
-    if (id.x >= out.size.x || id.y >= out.size.y) {
-        return;
+fn main(
+    @builtin(global_invocation_id) id: vec3<u32>,
+    @builtin(local_invocation_index) li: u32,
+) {
+    // No early return: the barriers need every invocation.
+    let counting = out.mode.x != 0u;
+    if (counting) {
+        for (var i = li; i < WORDS; i += 256u) {
+            atomicStore(&local[i], 0u);
+        }
     }
-    var rgb = m3(out.to_target, source(vec2<i32>(id.xy)));
-    if (out.compression.w != 0.0) {
-        rgb = compress(rgb);
+    workgroupBarrier();
+    if (id.x < out.size.x && id.y < out.size.y) {
+        var rgb = m3(out.to_target, source(vec2<i32>(id.xy)));
+        if (out.compression.w != 0.0) {
+            rgb = compress(rgb);
+        }
+        let at = bitcast<vec2<u32>>(vec2<i32>(id.xy) + out.offset.xy);
+        let noise = select(0.0, dither(at.x, at.y), out.size.w != 0u);
+        let r = quantize(srgb_encode(clamp(rgb.x, 0.0, 1.0)), noise);
+        let g = quantize(srgb_encode(clamp(rgb.y, 0.0, 1.0)), noise);
+        let b = quantize(srgb_encode(clamp(rgb.z, 0.0, 1.0)), noise);
+        let rgba = r | (g << 8u) | (b << 16u) | (255u << 24u);
+        let high = u32(r == 255u) | (u32(g == 255u) << 1u) | (u32(b == 255u) << 2u);
+        let low = u32(r == 0u) | (u32(g == 0u) << 1u) | (u32(b == 0u) << 2u);
+        if (counting) {
+            atomicAdd(&local[r], 1u);
+            atomicAdd(&local[256u + g], 1u);
+            atomicAdd(&local[512u + b], 1u);
+            if (high != 0u) {
+                atomicAdd(&local[HIGH_PIXELS], 1u);
+                atomicOr(&local[HIGH_CHANNELS], high);
+            }
+            if (low != 0u) {
+                atomicAdd(&local[LOW_PIXELS], 1u);
+                atomicOr(&local[LOW_CHANNELS], low);
+            }
+            atomicAdd(&local[PIXELS], 1u);
+        }
+        if (out.mode.y != 0u) {
+            textureStore(frame, vec2<i32>(id.xy), vec4<u32>(drawn(rgba, high, low), 0u, 0u, 0u));
+        }
     }
-    let at = bitcast<vec2<u32>>(vec2<i32>(id.xy) + out.offset.xy);
-    let noise = select(0.0, dither(at.x, at.y), out.size.w != 0u);
-    let r = quantize(srgb_encode(clamp(rgb.x, 0.0, 1.0)), noise);
-    let g = quantize(srgb_encode(clamp(rgb.y, 0.0, 1.0)), noise);
-    let b = quantize(srgb_encode(clamp(rgb.z, 0.0, 1.0)), noise);
-    let rgba = r | (g << 8u) | (b << 16u) | (255u << 24u);
-    textureStore(frame, vec2<i32>(id.xy), vec4<u32>(rgba, 0u, 0u, 0u));
+    workgroupBarrier();
+    if (counting) {
+        for (var i = li; i < WORDS; i += 256u) {
+            let v = atomicLoad(&local[i]);
+            if (v != 0u) {
+                if (i == HIGH_CHANNELS || i == LOW_CHANNELS) {
+                    atomicOr(&histogram[i], v);
+                } else {
+                    atomicAdd(&histogram[i], v);
+                }
+            }
+        }
+    }
 }
