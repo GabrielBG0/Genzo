@@ -9,7 +9,8 @@
 //! - Criterion 5: with J on, each pixel is `Overlay::apply` of the same
 //!   frame without it, byte for byte; the histogram does not change.
 //! - Criterion 6: the two Alt previews, the same way.
-//! - Goldens of a clipping image with both overlays and with each preview.
+//! - Goldens of a clipping image with both overlays and with each preview,
+//!   one test each.
 
 use std::sync::{Mutex, MutexGuard};
 
@@ -67,10 +68,18 @@ fn bright_scene(gpu: &Gpu, stages: &mut RawStages, view: &mut ViewStages, out: (
     view.color(gpu, &look);
 }
 
-/// An sRGB image of 8 × 8 px squares, one per combination of the codes 0,
-/// 96, 200 and 255 in R, G and B: highlights, shadows and both clip.
-/// Sampled to `out`, a different size, so the frame is resampled.
-fn clipping_squares(gpu: &Gpu, stages: &mut RawStages, view: &mut ViewStages, out: (u32, u32)) {
+/// An sRGB image of squares of `2 × scale` px, one per combination of the
+/// codes 0, 96, 200 and 255 in R, G and B: highlights, shadows and both
+/// clip. Sampled to `out`, so the frame is resampled; or, with None, to
+/// level 1's own size, which the view copies (each square `scale` px).
+/// Returns the size sampled to.
+fn clipping_squares(
+    gpu: &Gpu,
+    stages: &mut RawStages,
+    view: &mut ViewStages,
+    scale: u32,
+    out: Option<(u32, u32)>,
+) -> (u32, u32) {
     let levels = [0u16, 96, 200, 255];
     let mut colors = vec![];
     for r in levels {
@@ -81,13 +90,12 @@ fn clipping_squares(gpu: &Gpu, stages: &mut RawStages, view: &mut ViewStages, ou
         }
     }
     let (size, rgba) = blocks(&colors, 8);
-    // Each 2 x 2 block four times as large, so most of a square keeps its
-    // color after sampling.
-    let big = (size.0 * 4, size.1 * 4);
+    // Each 2 x 2 block `scale` times as large.
+    let big = (size.0 * scale, size.1 * scale);
     let mut up = vec![0u16; (big.0 * big.1 * 4) as usize];
     for y in 0..big.1 {
         for x in 0..big.0 {
-            let from = (((y / 4) * size.0 + x / 4) * 4) as usize;
+            let from = (((y / scale) * size.0 + x / scale) * 4) as usize;
             let to = ((y * big.0 + x) * 4) as usize;
             up[to..to + 4].copy_from_slice(&rgba[from..from + 4]);
         }
@@ -95,7 +103,9 @@ fn clipping_squares(gpu: &Gpu, stages: &mut RawStages, view: &mut ViewStages, ou
     let src = RawSource::from_encoded(big, &up, &InputEncoding::srgb()).unwrap();
     let p = pyramid(gpu, stages, &src);
     assert!(!compresses(p, Target::Srgb));
+    let out = out.unwrap_or(p.size);
     view.sample(gpu, p, 1, out);
+    out
 }
 
 /// Stage 9 into an sRGB frame with counting on, dithered, and `overlay`:
@@ -136,7 +146,7 @@ fn the_counts_are_the_frames() {
         let (_, again) = output(&gpu, &mut view, true, Overlay::default(), half);
         assert_eq!(again, h, "half size: {half}");
     }
-    clipping_squares(&gpu, &mut stages, &mut view, (480, 400));
+    clipping_squares(&gpu, &mut stages, &mut view, 4, Some((480, 400)));
     for half in [false, true] {
         let (frame, h) = output(&gpu, &mut view, false, Overlay::default(), half);
         assert_eq!(h, count(&frame), "half size: {half}");
@@ -214,7 +224,7 @@ fn the_overlay_and_the_previews_draw_over_the_counted_frame() {
     let Some((_lock, gpu)) = gpu() else { return };
     let mut stages = RawStages::new(&gpu, TileConfig::default());
     let mut view = ViewStages::new(&gpu);
-    clipping_squares(&gpu, &mut stages, &mut view, (480, 400));
+    clipping_squares(&gpu, &mut stages, &mut view, 4, Some((480, 400)));
     let (plain, h) = output(&gpu, &mut view, false, Overlay::default(), false);
     let both_sides = plain
         .iter()
@@ -263,52 +273,65 @@ fn the_overlay_and_the_previews_draw_over_the_counted_frame() {
     }
 }
 
-/// The stored goldens: the clipping squares with J's two overlays, and
-/// with each preview.
-#[test]
-fn golden_overlays() {
+/// A stored golden: the clipping squares at level 1's size with
+/// `overlay`, not dithered. The overlay is a threshold, so a frame that
+/// differed by a code between adapters would flip pixels between the
+/// photo and a color: here every code is exact (0 and 255 copied, and the
+/// rest far from either). One test per case, so a missing golden does not
+/// hide the next one's render.
+fn golden(name: &str, overlay: Overlay) {
     let Some((_lock, gpu)) = gpu() else { return };
     let mut stages = RawStages::new(&gpu, TileConfig::default());
     let mut view = ViewStages::new(&gpu);
-    let out = (240, 200);
-    clipping_squares(&gpu, &mut stages, &mut view, out);
-    for (name, overlay) in [
-        (
-            "view/clipping-overlay",
-            Overlay {
-                highlights: Some(RED),
-                shadows: Some(BLUE),
-                preview: Preview::None,
-            },
-        ),
-        (
-            "view/clipping-preview-highlights",
-            Overlay {
-                preview: Preview::Highlights,
-                ..Overlay::default()
-            },
-        ),
-        (
-            "view/clipping-preview-shadows",
-            Overlay {
-                preview: Preview::Shadows,
-                ..Overlay::default()
-            },
-        ),
-    ] {
-        let (frame, _) = output(&gpu, &mut view, false, overlay, false);
-        let pixels = frame
-            .iter()
-            .map(|f| [0, 1, 2].map(|c| f32::from(f[c]) / 255.0))
-            .collect();
-        let case = genzo_golden::Case::new(
-            env!("CARGO_MANIFEST_DIR"),
-            name,
-            genzo_golden::Space::DisplaySrgb,
-            genzo_golden::Producer::Gpu {
-                adapter: gpu.info.name.clone(),
-            },
-        );
-        genzo_golden::check(&case, &genzo_golden::Image::new(out.0, out.1, pixels));
-    }
+    let out = clipping_squares(&gpu, &mut stages, &mut view, 16, None);
+    view.set_overlay(overlay);
+    view.output(&gpu, Target::Srgb, false, false);
+    let frame = view.read_frame(&gpu).unwrap();
+    let pixels = frame
+        .iter()
+        .map(|f| [0, 1, 2].map(|c| f32::from(f[c]) / 255.0))
+        .collect();
+    let case = genzo_golden::Case::new(
+        env!("CARGO_MANIFEST_DIR"),
+        name,
+        genzo_golden::Space::DisplaySrgb,
+        genzo_golden::Producer::Gpu {
+            adapter: gpu.info.name.clone(),
+        },
+    );
+    genzo_golden::check(&case, &genzo_golden::Image::new(out.0, out.1, pixels));
+}
+
+#[test]
+fn golden_clipping_overlay() {
+    golden(
+        "view/clipping-overlay",
+        Overlay {
+            highlights: Some(RED),
+            shadows: Some(BLUE),
+            preview: Preview::None,
+        },
+    );
+}
+
+#[test]
+fn golden_clipping_preview_highlights() {
+    golden(
+        "view/clipping-preview-highlights",
+        Overlay {
+            preview: Preview::Highlights,
+            ..Overlay::default()
+        },
+    );
+}
+
+#[test]
+fn golden_clipping_preview_shadows() {
+    golden(
+        "view/clipping-preview-shadows",
+        Overlay {
+            preview: Preview::Shadows,
+            ..Overlay::default()
+        },
+    );
 }
