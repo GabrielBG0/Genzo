@@ -33,7 +33,9 @@ struct Output {
     // each is on (bit 0 highlights, bit 1 shadows), and the preview: 0
     // none, 1 highlights, 2 shadows.
     overlay: vec4<u32>,
-    // 1 to count, 1 to write the frame.
+    // 1 to count, 1 to write the frame, and the view's width and height:
+    // the cache's textures can be larger (ViewStages keeps them when the
+    // view shrinks), so the half-size preview clamps at the view's edge.
     mode: vec4<u32>,
 }
 
@@ -120,7 +122,7 @@ fn compress(rgb: vec3<f32>) -> vec3<f32> {
 fn source(p: vec2<i32>) -> vec3<f32> {
     var rgb = textureLoad(sampled, p, 0).rgb;
     if (out.offset.z == 2) {
-        let last = vec2<i32>(textureDimensions(sampled)) - 1;
+        let last = vec2<i32>(out.mode.zw) - 1;
         let q = 2 * p;
         let sum = textureLoad(sampled, min(q, last), 0).rgb
             + textureLoad(sampled, min(q + vec2(1, 0), last), 0).rgb

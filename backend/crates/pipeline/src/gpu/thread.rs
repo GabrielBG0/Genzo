@@ -15,6 +15,11 @@
 //! request waits and after the rest of the open photo's rebuild. A build
 //! stops between tiles for any request and resumes after it. Each holds its
 //! photo's input until it is done or cancelled.
+//!
+//! **The whole-photo histogram** of a view other than Fit (DEV-03, *At
+//! 1:1*; [`RenderThread::whole_histogram`]) runs while no request waits,
+//! after the rest of a rebuild and before the prefetch. Any Develop render
+//! or photo opening that comes first cancels it.
 
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
@@ -30,6 +35,7 @@ use super::raw_stages::{Level1, Level1Build, TileConfig};
 use super::spike::{BayerImage, Frame, SpikeParams, SpikePipeline};
 use super::{AdapterChoice, Gpu, GpuError, GpuInfo};
 use crate::camera_color::CameraTransform;
+use crate::histogram::{Histogram, Overlay};
 use crate::raw::RawSource;
 use crate::reference::sampling::ViewSpec;
 
@@ -77,7 +83,19 @@ enum Request {
         id: u64,
         reply: Reply<bool>,
     },
+    /// The whole photo's histogram after Develop render `generation`.
+    Histogram(Whole),
 }
+
+/// A whole-photo histogram waiting for the thread to be idle.
+struct Whole {
+    photo: u64,
+    generation: u64,
+    reply: Reply<Option<Histogram>>,
+}
+
+/// The receiving end of [`RenderThread::whole_histogram`].
+pub type PendingHistogram = Receiver<Result<Option<Histogram>, GpuError>>;
 
 /// A neighbor's level 1, queued or being built.
 struct Queued {
@@ -113,6 +131,8 @@ pub struct DevelopRequest {
     pub view: ViewSpec,
     pub target: Target,
     pub phase: Phase,
+    /// The J overlay and the Alt preview (DEV-03).
+    pub overlay: Overlay,
 }
 
 /// What a Develop render sends.
@@ -121,6 +141,9 @@ pub struct DevelopFrame {
     pub generation: u64,
     pub readback: Readback,
     pub reran: Reran,
+    /// The frame's histogram, at Fit (DEV-03); at other views see
+    /// [`RenderThread::whole_histogram`].
+    pub histogram: Option<Histogram>,
     /// Drawn from level 1 where level 0 was wanted, the photo's input not
     /// attached yet ([`Develop::provisional`]): the caller renders it again
     /// after [`RenderThread::attach`].
@@ -276,6 +299,26 @@ impl RenderThread {
         Ok(rx)
     }
 
+    /// Queues the whole photo's histogram for the view of Develop render
+    /// `generation` of `photo`, when that view is not Fit (DEV-03, *At
+    /// 1:1*), without waiting. It runs once the thread is idle. The answer
+    /// is `None` when a newer render or another photo came first, the view
+    /// is Fit (its frame's histogram came with it), or that render was a
+    /// drag's. Afterwards the next render at the view samples it again.
+    pub fn whole_histogram(
+        &self,
+        photo: u64,
+        generation: u64,
+    ) -> Result<PendingHistogram, GpuError> {
+        let (reply, rx) = mpsc::channel();
+        self.send(Request::Histogram(Whole {
+            photo,
+            generation,
+            reply,
+        }))?;
+        Ok(rx)
+    }
+
     /// [`Self::submit`] and wait.
     pub fn develop(&self, request: DevelopRequest) -> Result<Option<DevelopFrame>, GpuError> {
         self.submit(request)?
@@ -322,6 +365,10 @@ fn run(gpu: Gpu, rx: Receiver<Request>) {
     let mut held: Option<Held> = None;
     // Neighbors' level 1, first in first built.
     let mut prefetch: VecDeque<Box<Queued>> = VecDeque::new();
+    // The whole-photo histogram asked for, and the last Develop render
+    // that ran, as (photo, generation).
+    let mut whole: Option<Whole> = None;
+    let mut last: Option<(u64, u64)> = None;
     loop {
         // Between requests: the rest of a white balance rebuild, stopped as
         // soon as a request comes (DEV-01, Generations). A failed rest
@@ -340,6 +387,19 @@ fn run(gpu: Gpu, rx: Receiver<Request>) {
                 })
                 .map_err(develop_error)
             });
+        }
+        // Then the whole-photo histogram, for the render that ran last.
+        if queued.is_empty()
+            && !develop.as_ref().is_some_and(Develop::rebuilding)
+            && let Some(w) = whole.take()
+        {
+            let answer = match develop.as_mut() {
+                Some(d) if last == Some((w.photo, w.generation)) => {
+                    guarded(&gpu, || d.count_whole(&gpu))
+                }
+                _ => Ok(None),
+            };
+            let _ = w.reply.send(answer);
         }
         // Then a neighbor's level 1, stopped the same way.
         if queued.is_empty()
@@ -405,6 +465,17 @@ fn run(gpu: Gpu, rx: Receiver<Request>) {
             .iter()
             .rposition(|r| matches!(r, Request::Develop { .. }));
         for (i, req) in batch.into_iter().enumerate() {
+            // A render or an opening replaces what the histogram was for.
+            if matches!(
+                req,
+                Request::Develop { .. }
+                    | Request::Open { .. }
+                    | Request::OpenLevel1 { .. }
+                    | Request::OpenPrefetching { .. }
+            ) && let Some(w) = whole.take()
+            {
+                let _ = w.reply.send(Ok(None));
+            }
             match req {
                 Request::SetImage(image, reply) => {
                     let result = guarded(&gpu, || {
@@ -461,7 +532,7 @@ fn run(gpu: Gpu, rx: Receiver<Request>) {
                         if result.is_ok()
                             && let Some(h) = held.take()
                         {
-                            held = develop_render(&gpu, d, h);
+                            held = develop_render(&gpu, d, h, &mut last);
                         }
                     }
                     let _ = reply.send(result);
@@ -472,6 +543,11 @@ fn run(gpu: Gpu, rx: Receiver<Request>) {
                     let _ = reply.send(Ok(None));
                 }
                 Request::Prefetch(q) => prefetch.push_back(q),
+                Request::Histogram(w) => {
+                    if let Some(old) = whole.replace(w) {
+                        let _ = old.reply.send(Ok(None));
+                    }
+                }
                 Request::KeepPrefetching { keep, reply } => {
                     let (kept, gone) = prefetch.drain(..).partition(|q| keep.contains(&q.id));
                     prefetch = kept;
@@ -500,7 +576,7 @@ fn run(gpu: Gpu, rx: Receiver<Request>) {
                         let _ = reply.send(Ok(None));
                         continue;
                     };
-                    held = develop_render(&gpu, d, Held { request, reply });
+                    held = develop_render(&gpu, d, Held { request, reply }, &mut last);
                 }
             }
         }
@@ -521,10 +597,16 @@ fn drop_held(held: &mut Option<Held>) {
 }
 
 /// Runs a Develop render and answers it, or gives it back to be held when
-/// it needs the photo's input.
-fn develop_render(gpu: &Gpu, d: &mut Develop, h: Held) -> Option<Held> {
+/// it needs the photo's input. A render that ran is noted in `last`.
+fn develop_render(
+    gpu: &Gpu,
+    d: &mut Develop,
+    h: Held,
+    last: &mut Option<(u64, u64)>,
+) -> Option<Held> {
     let r = &*h.request;
     let result = guarded(gpu, || {
+        d.set_overlay(r.overlay);
         let reran = match d.render(gpu, &r.edit, r.view, r.target, r.phase) {
             Err(DevelopError::NeedsSource) => return Ok(None),
             reran => reran.map_err(develop_error)?,
@@ -532,6 +614,7 @@ fn develop_render(gpu: &Gpu, d: &mut Develop, h: Held) -> Option<Held> {
         Ok(Some(DevelopFrame {
             generation: r.generation,
             readback: d.read_back(gpu)?,
+            histogram: d.histogram(gpu)?,
             reran,
             provisional: d.provisional(),
         }))
@@ -539,6 +622,7 @@ fn develop_render(gpu: &Gpu, d: &mut Develop, h: Held) -> Option<Held> {
     match result {
         Ok(None) => Some(h),
         result => {
+            *last = result.is_ok().then_some((r.photo, r.generation));
             let _ = h.reply.send(result);
             None
         }
