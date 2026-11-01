@@ -95,11 +95,16 @@ export class DevelopSession {
     await this.idle();
     // A later switch went first.
     if (this.strip.current !== photo) return;
-    const r = await this.engine.execute({ type: 'selectPhoto', photo });
-    if (r.type !== 'selected') throw new Error(`selectPhoto answered ${r.type}`);
-    // A later switch wins over this one.
-    if (this.strip.current !== photo) return;
-    this.opened(r.edit, r.reason);
+    try {
+      const r = await this.engine.execute({ type: 'selectPhoto', photo });
+      if (r.type !== 'selected') throw new Error(`selectPhoto answered ${r.type}`);
+      // A later switch wins over this one.
+      if (this.strip.current !== photo) return;
+      this.opened(r.edit, r.reason);
+    } catch (e) {
+      // Said in the status bar, as a failed edit command is.
+      if (this.strip.current === photo) this.notice = e instanceof Error ? e.message : String(e);
+    }
   }
 
   /** The viewport's size in device pixels, at Fit. */

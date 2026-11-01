@@ -75,6 +75,13 @@ describe('DevelopSession', () => {
     expect(session.edit?.undo).toBe('Exposure');
   });
 
+  it('says why a switch failed', async () => {
+    const { session } = await open();
+    await session.select(99);
+    expect(session.photo).toBe(99);
+    expect(session.notice).toBe('photo 99 is not in the strip');
+  });
+
   it('ends a gesture before a switch, so the photo it leaves keeps its step', async () => {
     const update = gate();
     const { engine, session } = await open((m) => (m.type === 'applyEditDelta' && m.phase === 'Update' ? update.shut : 0));
