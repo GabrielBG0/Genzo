@@ -721,10 +721,16 @@ fn at_1_1_the_whole_photo_is_counted_at_the_fit_size() {
         "nothing made again"
     );
 
-    // Not after a drag's render, nor at Fit.
+    // Not after a drag's render, nor at Fit; but after its release with
+    // the drag's edit, which renders nothing again.
     d.render(&gpu, &moved, one_to_one, Target::Srgb, Phase::Update)
         .unwrap();
     assert_eq!(d.count_whole(&gpu).unwrap(), None);
+    let r = d
+        .render(&gpu, &moved, one_to_one, Target::Srgb, Phase::End)
+        .unwrap();
+    assert_eq!(r, NOTHING);
+    assert!(d.count_whole(&gpu).unwrap().is_some());
     d.render(&gpu, &e, SMALL_FIT, Target::Srgb, Phase::End)
         .unwrap();
     assert_eq!(d.count_whole(&gpu).unwrap(), None);

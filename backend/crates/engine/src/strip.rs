@@ -421,6 +421,7 @@ impl Engine {
                 gpu,
                 session: self.session.clone(),
                 generations: self.generations.clone(),
+                histograms: self.histograms.clone(),
                 decoder: self.decoder.clone(),
             };
             *worker = std::thread::Builder::new()
@@ -484,10 +485,17 @@ impl Engine {
         })
     }
 
-    /// Hands photo `id`'s first pixels to the sink, if there is one.
+    /// Hands photo `id`'s first pixels to the sink, if there is one, then
+    /// counts them for the histogram off this thread (DEV-03, Opening).
     fn show(&self, id: u64, preview: Option<Arc<ShownPreview>>) {
         if let Some(sink) = &self.preview_sink {
-            (sink.0)(Shown { photo: id, preview });
+            (sink.0)(Shown {
+                photo: id,
+                preview: preview.clone(),
+            });
+        }
+        if let Some(p) = preview {
+            self.histograms.preview(id, self.generations.next(), p);
         }
     }
 }

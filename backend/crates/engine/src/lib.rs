@@ -25,6 +25,7 @@ pub mod contract;
 pub mod develop;
 pub mod files;
 pub mod folder;
+pub mod histogram;
 pub mod history;
 mod prefetch;
 pub mod preview;
@@ -138,6 +139,8 @@ pub struct Engine {
     worker: Mutex<Option<std::thread::JoinHandle<()>>>,
     /// Receives what each strip switch shows at once.
     preview_sink: Option<preview::Sink>,
+    /// The histogram's counts, their sink and the latest (DEV-03).
+    histograms: Arc<histogram::Histograms>,
 }
 
 #[derive(Debug, Default)]
@@ -224,6 +227,7 @@ impl Engine {
             prefetch: Arc::default(),
             worker: Mutex::new(None),
             preview_sink: None,
+            histograms: Arc::default(),
         }
     }
 
@@ -237,6 +241,13 @@ impl Engine {
     /// before the photo decodes (until contract 0.5.0's `PreviewShown`).
     pub fn with_preview_sink(mut self, sink: preview::PreviewSink) -> Self {
         self.preview_sink = Some(preview::Sink(sink));
+        self
+    }
+
+    /// This engine, handing each histogram count to `sink` (until contract
+    /// 0.5.0's `HistogramReady`).
+    pub fn with_histogram_sink(mut self, sink: histogram::HistogramSink) -> Self {
+        self.histograms = Arc::new(histogram::Histograms::with_sink(sink));
         self
     }
 
