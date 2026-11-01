@@ -1,57 +1,47 @@
 {
   "_meta": {
     "method": "p95 is the slowest p95 across runs, p50 the median",
-    "runs": 8,
+    "runs": 5,
     "threshold_pct": 25.0
   },
-  "gpu/exposure drag preview/engine": {
-    "p50_ms": 48.662227,
-    "p95_ms": 53.709609,
-    "runs": 2
+  "develop/exposure drag/engine": {
+    "p50_ms": 234.83839,
+    "p95_ms": 241.83874,
+    "runs": 5
   },
-  "gpu/exposure drag preview/gpu": {
-    "p50_ms": 43.429036499999995,
-    "p95_ms": 46.938016,
-    "runs": 2
+  "develop/exposure drag/gpu": {
+    "p50_ms": 227.154075,
+    "p95_ms": 233.842371,
+    "runs": 5
   },
-  "gpu/exposure drag/engine": {
-    "p50_ms": 46.8873115,
-    "p95_ms": 79.32495200000001,
-    "runs": 8
+  "develop/exposure settled/engine": {
+    "p50_ms": 522.535379,
+    "p95_ms": 534.775279,
+    "runs": 5
   },
-  "gpu/exposure drag/gpu": {
-    "p50_ms": 38.0408465,
-    "p95_ms": 61.710289,
-    "runs": 8
+  "develop/exposure settled/gpu": {
+    "p50_ms": 512.528225,
+    "p95_ms": 523.36922,
+    "runs": 5
   },
-  "gpu/white balance drag preview/engine": {
-    "p50_ms": 114.34182849999999,
-    "p95_ms": 144.821103,
-    "runs": 2
+  "develop/white balance drag/engine": {
+    "p50_ms": 1530.710131,
+    "p95_ms": 1542.473763,
+    "runs": 5
   },
-  "gpu/white balance drag preview/gpu": {
-    "p50_ms": 107.71078449999999,
-    "p95_ms": 137.497511,
-    "runs": 2
+  "develop/white balance drag/gpu": {
+    "p50_ms": 1523.104262,
+    "p95_ms": 1535.368087,
+    "runs": 5
   },
-  "gpu/white balance drag/engine": {
-    "p50_ms": 112.7865245,
-    "p95_ms": 146.024253,
-    "runs": 8
+  "develop/white balance settled/engine": {
+    "p50_ms": 8806.982988,
+    "p95_ms": 8969.229661,
+    "runs": 5
   },
-  "gpu/white balance drag/gpu": {
-    "p50_ms": 104.7920105,
-    "p95_ms": 137.598912,
-    "runs": 8
-  },
-  "gpu/white balance settled/engine": {
-    "p50_ms": 2344.414984,
-    "p95_ms": 3818.634861,
-    "runs": 8
-  },
-  "gpu/white balance settled/gpu": {
-    "p50_ms": 2335.4291494999998,
-    "p95_ms": 3810.207023,
-    "runs": 8
+  "develop/white balance settled/gpu": {
+    "p50_ms": 8793.826429,
+    "p95_ms": 8959.884633,
+    "runs": 5
   }
 }

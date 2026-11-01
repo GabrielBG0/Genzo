@@ -42,6 +42,7 @@ use super::base::BaseLayer;
 use super::level0::Level0Cache;
 use super::raw_stages::{Level1, Level1Build, RawStages, Rebuild, TileConfig, level0_reach};
 use super::readback::{ViewTile, visible_tiles};
+use super::timer::SpanTimer;
 use super::view::{ViewStages, compresses, dithers};
 use super::{Gpu, GpuError};
 use crate::camera_color::{
@@ -200,6 +201,8 @@ pub struct Develop {
     reran: Reran,
     /// What the next renders draw over the photo.
     overlay: Overlay,
+    /// Times each render on the GPU, with timestamp queries.
+    timer: Option<SpanTimer>,
 }
 
 #[derive(Debug)]
@@ -240,6 +243,7 @@ impl Develop {
             rebuild: None,
             reran: Reran::default(),
             overlay: Overlay::default(),
+            timer: SpanTimer::new(gpu),
         }
     }
 
@@ -408,8 +412,35 @@ impl Develop {
     /// last render. The frame is then in [`Develop::view`]: at Fit during a
     /// gesture, the half-size preview in its top left. A Fit view's size is
     /// the viewport's: the frame is the framed image fitted into it
-    /// ([`Frame::fit_in`]).
+    /// ([`Frame::fit_in`]). Its GPU time is [`Develop::gpu_ms`].
     pub fn render(
+        &mut self,
+        gpu: &Gpu,
+        edit: &Edit,
+        view: ViewSpec,
+        target: Target,
+        phase: Phase,
+    ) -> Result<Reran, DevelopError> {
+        if let Some(t) = self.timer.as_mut() {
+            t.start(gpu);
+        }
+        let reran = self.render_stages(gpu, edit, view, target, phase)?;
+        if let Some(t) = self.timer.as_mut() {
+            t.stop(gpu);
+        }
+        Ok(reran)
+    }
+
+    /// The last render's GPU time in ms, from its first stage to its last
+    /// (`timer`), without the readback; `None` without timestamp queries.
+    pub fn gpu_ms(&mut self, gpu: &Gpu) -> Result<Option<f64>, GpuError> {
+        match self.timer.as_mut() {
+            Some(t) => t.read(gpu),
+            None => Ok(None),
+        }
+    }
+
+    fn render_stages(
         &mut self,
         gpu: &Gpu,
         edit: &Edit,

@@ -322,6 +322,12 @@ impl Engine {
         }
     }
 
+    /// Whether the GPU has timestamp queries, so renders carry their GPU
+    /// time (`RenderFinished.gpu_ms`).
+    pub fn gpu_timestamps(&self) -> bool {
+        self.gpu.as_ref().is_some_and(|g| g.info().timestamps)
+    }
+
     /// Checks the frontend's contract version against the engine's.
     pub fn handshake(&self, hello: &Handshake) -> HandshakeResult {
         let ours = ContractVersion::current();

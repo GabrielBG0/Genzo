@@ -24,6 +24,7 @@ use genzo_jobs::Generations;
 use genzo_model::api::Event;
 use genzo_model::edit::{Change, Edit, Phase};
 use genzo_pipeline::gpu::develop::{Photo, as_shot};
+use genzo_pipeline::gpu::synthetic;
 use genzo_pipeline::gpu::thread::{DevelopFrame, DevelopRequest, Picked, RenderThread};
 use genzo_pipeline::raw::{RawError, RawSource};
 
@@ -163,6 +164,16 @@ impl Engine {
         gpu.open(id, Photo { src, orientation })?;
         self.session.lock().expect("session").open = Some(id);
         Ok(id)
+    }
+
+    /// Opens a synthetic RAW of about `width` × `height` (even sizes, so
+    /// the CFA pattern stays whole) with a camera profile, so a white
+    /// balance change moves stage 4: what `cli bench gpu` renders.
+    pub fn open_synthetic(&self, width: u32, height: u32) -> Result<u64, EngineError> {
+        crate::check_size(width, height)?;
+        let (w, h) = ((width & !1).max(2), (height & !1).max(2));
+        let src = synthetic::with_camera_profile(synthetic::scene_raw(w, h));
+        self.open_source(src, 1)
     }
 
     /// The open photo's edit, history labels and edited flag.
@@ -474,7 +485,7 @@ pub(crate) fn render_when(
                     generation,
                     tile_count: count,
                     render_ms: started.elapsed().as_secs_f64() * 1000.0,
-                    gpu_ms: None,
+                    gpu_ms: f.gpu_ms,
                 });
             }
         }

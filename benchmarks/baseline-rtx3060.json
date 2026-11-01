@@ -1,0 +1,34 @@
+{
+  "develop/exposure drag/engine": {
+    "p50_ms": 5.2023,
+    "p95_ms": 5.4307
+  },
+  "develop/exposure drag/gpu": {
+    "p50_ms": 0.728064,
+    "p95_ms": 0.746496
+  },
+  "develop/exposure settled/engine": {
+    "p50_ms": 12.892000000000001,
+    "p95_ms": 13.678299999999998
+  },
+  "develop/exposure settled/gpu": {
+    "p50_ms": 1.847296,
+    "p95_ms": 1.887232
+  },
+  "develop/white balance drag/engine": {
+    "p50_ms": 9.1892,
+    "p95_ms": 9.3402
+  },
+  "develop/white balance drag/gpu": {
+    "p50_ms": 4.808704,
+    "p95_ms": 4.820992
+  },
+  "develop/white balance settled/engine": {
+    "p50_ms": 35.3594,
+    "p95_ms": 36.3614
+  },
+  "develop/white balance settled/gpu": {
+    "p50_ms": 23.831552,
+    "p95_ms": 24.849408
+  }
+}

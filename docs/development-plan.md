@@ -371,10 +371,12 @@ These come from `docs/m0-results.md` and decide how the steps below are built:
 10. `export`: basic JPEG with size and quality, through the same GPU pipeline, tiled, with an embedded sRGB profile.
 11. `cli`: `open`, `render`, `export`, `bench open` (first pixels, fit render, neighbor switch) and the golden-image tests.
    - Done: `bench open FOLDER [W H N]` (with step 9), and its smoke test on small PNGs. Not yet in `scripts/gpu-check.sh`.
+   - Done: `bench gpu [W H N]` on the Develop path (see Contract), and its smoke test.
 
 ### Contract
 - **In two parts** (owner, 2026-11-01): contract 0.5.0 carries everything here but export; `ExportJpeg` and `ExportProgress` come in 0.6.0 with step 10. The spike commands stay until `bench gpu` measures the Develop path, in its own change with a new RTX 3060 baseline.
   - Done before it, in the engine: Develop's frames kept as tile messages (`engine::frames`), the commands that name a photo checked against the open one as they act (a delta sent before a switch changes nothing), and the white balance picker (`pick_white_balance`, on the render thread, whose step is "White balance: picked").
+  - Done after it: `bench gpu` measures the Develop path, with `ApplyEditDelta` at Fit in a 2560 px viewport (drags and settled deltas of exposure and white balance, `benchmarks/README.md`), and Develop's renders carry their GPU time from timestamp queries (`pipeline::gpu::timer`, also in `RenderFinished`). Both baselines are rebuilt for its cases, and the RTX 3060's is checked in. The spike commands still drive the in-app autobench (the *Slider input to pixels* row), so they go when it moves to Develop's commands, with the Develop screens. Removing them breaks the contract: they go in 0.6.0 with export, or in a version of their own if they come first.
   - Done: contract 0.5.0, without export (`model::api`, `engine::messages`, `engine/tests/messages.rs`). The shell builds the engine in Tauri's `setup` with an event sink that emits each event. `cli run FILE` runs the same commands and queries as JSON lines.
   - **Each command answers with a typed result** (`CommandResult`, as `QueryResult` does for queries), not with an event. The commands that change an edit answer with the photo's edit (`Edit`), as APP-10 and DEV-02 ask. `SelectPhoto` answers `Selected` and `OpenFolder` answers `Folder`. What the user can act on comes back as data: a refused pick with its reason, a photo that does not render with the status bar's reason. A failure of the engine, such as no GPU, is the command's error.
   - **Every event goes through one sink**, from whichever thread sends it. `RenderFinished` names its photo, and the prefetch's sharper render sends one too. A frame's `RenderFinished` goes before its `HistogramReady`. The spike's events go through the same sink.
@@ -388,7 +390,7 @@ These come from `docs/m0-results.md` and decide how the steps below are built:
 - Queries: `ListFolderPhotos`, `GetEdit`, `GetHistogram`.
 - Events: `PreviewShown`, `RenderFinished`, `HistogramReady`, `ExportProgress`, `AdapterInfo` (for the software-fallback notice).
 - Frames: the tile protocol from M0.
-- The spike commands and events go (after `bench gpu` moves to the Develop path; see *In two parts*). Bump to 0.5.0.
+- The spike commands and events go (after the in-app autobench moves to Develop's commands; see *In two parts*). Bump to 0.5.0.
 
 ### Frontend (screens D1, D9; components Top bar, Left panel · Develop, Histogram + tool strip, Slider row, Panel header, Filmstrip, Status bar, Menu)
 1. **APP-01 Module switcher**: pill tabs. Develop is active (D). Library is disabled until M2. The Export tab opens the basic export view. Map and Print tabs appear only when those modules ship (Later).

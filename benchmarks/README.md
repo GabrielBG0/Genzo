@@ -15,6 +15,21 @@ Baselines only mean something on the machine class that made them, so there is o
 per CI runner. Today that is `baseline-lavapipe.json`, from the `gpu` job (ubuntu-22.04,
 lavapipe software Vulkan). Numbers from a developer GPU or from WARP must not go in it.
 
+## What `bench gpu` measures
+
+A synthetic 12 MP RAW (4032 × 3024, with a camera profile) open in Develop at Fit in
+a 2560 px viewport, driven by the same `ApplyEditDelta` commands the UI sends. Four
+cases of N steps each: an exposure drag and a white balance drag (the updates of one
+gesture, each a half-size preview sent as JPEG tiles), and exposure and white balance
+settled (single deltas, each a step; a new white rebuilds the pyramid). Per case,
+`develop/<case>/engine` is the request until its tiles are kept (render, readback,
+encoding) and `develop/<case>/gpu` the render's GPU time, from timestamp queries
+around the whole render (`pipeline::gpu::timer`).
+
+Until 2026-11-01 it measured the M0 spike pipeline (`gpu/<case>/...` metrics). Those
+numbers are not comparable: `baseline-rtx3060.json` was made for the Develop cases
+from five gpu-check candidates, and `baseline-lavapipe.json` from five CI runs (below).
+
 ## Why the lavapipe baseline uses 25 percent and the slowest run
 
 The `gpu` job runs on a shared GitHub runner, and the hardware behind `ubuntu-22.04`
@@ -31,7 +46,7 @@ a fast runner that means roughly 2x for the long stages and 1.5x for the short o
 It catches a big regression like the 4x one fixed in 0.E, not a 15 percent drift.
 
 A metric baselined from fewer than 5 runs is **advisory**: it is printed and flagged
-but cannot fail the build yet. The `... preview` metrics were baselined from 2 runs.
+but cannot fail the build yet.
 
 The 10 percent rule is meant for a stable device. The owner's RTX 3060 desktop is that
 device, checked by hand rather than by CI: `scripts/gpu-check.sh` checks the adapter,
