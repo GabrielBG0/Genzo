@@ -24,6 +24,7 @@ export const ICONS = {
   smart: 'M4 5h16l-6 7v6l-4 2v-8z',
   photos: 'M4 5h16v14H4zM4 10h16',
   drive: 'M4 5h16v14H4zM4 10h16',
+  picker: 'M14 4l6 6M12.5 5.5l6 6M16 9l-9 9H4v-3l9-9',
 } as const;
 
 export type IconName = keyof typeof ICONS;

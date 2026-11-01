@@ -25,6 +25,10 @@ export const DEFAULT_COMMANDS: CommandSpec[] = [
   { id: 'develop.remove', label: 'Remove', keys: ['Q'], scope: 'develop', group: 'Develop' },
   { id: 'develop.masking', label: 'Masking', keys: ['Shift+W'], scope: 'develop', group: 'Develop' },
   { id: 'develop.clipping', label: 'Show clipping', keys: ['J'], scope: 'develop', group: 'Develop' },
+  // Basic panel (DEV-02)
+  { id: 'develop.treatment', label: 'Color / B&W', keys: ['V'], scope: 'develop', group: 'Develop' },
+  { id: 'develop.picker', label: 'White balance picker', keys: ['W'], scope: 'develop', group: 'Develop' },
+  { id: 'develop.pickerCancel', label: 'Cancel the picker', keys: ['Escape'], scope: 'develop', group: 'Develop' },
   // View (APP-08)
   { id: 'view.sidePanels', label: 'Hide side panels', keys: ['Tab'], group: 'View' },
   { id: 'view.allPanels', label: 'Hide all panels', keys: ['Shift+Tab'], group: 'View' },

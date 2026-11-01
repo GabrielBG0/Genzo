@@ -11,7 +11,7 @@ use ts_rs::TS;
 ///
 /// While the major version is 0, a minor bump is a breaking change.
 /// From 1.0 on, a major bump is.
-pub const CONTRACT_VERSION: &str = "0.5.0";
+pub const CONTRACT_VERSION: &str = "0.5.1";
 
 /// A parsed contract version.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize, TS)]

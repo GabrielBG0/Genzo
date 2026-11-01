@@ -12,10 +12,11 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use genzo_color::white_balance::Preset;
 use genzo_jobs::Generations;
 use genzo_model::api::{
     AdapterInfo, AdapterKind, Command, CommandResult, EngineInfo, Event, Handshake,
-    HandshakeResult, Query, QueryResult, SpikeSource,
+    HandshakeResult, Query, QueryResult, SpikeSource, WhiteBalancePreset,
 };
 use genzo_model::contract::ContractVersion;
 use genzo_model::frame::PixelFormat;
@@ -319,6 +320,17 @@ impl Engine {
             contract_version: genzo_model::CONTRACT_VERSION.into(),
             adapter: self.adapter.clone(),
             autobench: self.autobench.is_some(),
+            white_balance_presets: Preset::ALL
+                .into_iter()
+                .map(|p| {
+                    let (temp, tint) = p.temp_tint();
+                    WhiteBalancePreset {
+                        name: p.name().into(),
+                        temp: temp as f32,
+                        tint: tint as f32,
+                    }
+                })
+                .collect(),
         }
     }
 
@@ -708,6 +720,27 @@ mod tests {
             contract_version: "nope".into(),
         });
         assert!(!garbage.compatible);
+    }
+
+    #[test]
+    fn info_lists_the_white_balance_presets_in_order() {
+        let presets = Engine::headless().info().white_balance_presets;
+        let names: Vec<_> = presets.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(
+            names,
+            [
+                "Daylight",
+                "Cloudy",
+                "Shade",
+                "Tungsten",
+                "Fluorescent",
+                "Flash"
+            ]
+        );
+        for (p, preset) in presets.iter().zip(Preset::ALL) {
+            let (temp, tint) = preset.temp_tint();
+            assert_eq!((p.temp, p.tint), (temp as f32, tint as f32), "{}", p.name);
+        }
     }
 
     #[test]

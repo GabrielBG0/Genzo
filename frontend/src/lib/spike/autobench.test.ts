@@ -7,6 +7,7 @@ const INFO: EngineInfo = {
   contractVersion: '0.0.0',
   adapter: { kind: 'none', name: 'test', backend: 'none', fallbackReason: null },
   autobench: true,
+  whiteBalancePresets: [],
 };
 
 const NONE: Diagnostics = {
