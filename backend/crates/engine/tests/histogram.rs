@@ -406,6 +406,21 @@ fn while_opening_the_preview_is_counted() {
         "as shown"
     );
     assert!(early.histogram.highlights.pixels > 0 && early.histogram.shadows.pixels > 0);
+    // Kept as lossless tiles under the same generation.
+    let (kept, n) = first.frame.expect("kept");
+    assert_eq!(kept, early.generation);
+    let bytes = engine.frame(kept).expect("kept");
+    let tiles = genzo_engine::split_frame(&bytes).unwrap();
+    assert_eq!(tiles.len() as u32, n);
+    assert_eq!(
+        genzo_engine::covered_area(&tiles),
+        u64::from(preview.width * preview.height)
+    );
+    assert!(
+        tiles
+            .iter()
+            .all(|(h, _)| (h.image_width, h.image_height) == (preview.width, preview.height))
+    );
     gate.let_through();
     let opened = opening.join().unwrap();
     let frame = opened.first.expect("one photo").unwrap();

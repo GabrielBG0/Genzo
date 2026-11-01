@@ -25,6 +25,7 @@ pub mod contract;
 pub mod develop;
 pub mod files;
 pub mod folder;
+mod frames;
 pub mod histogram;
 pub mod history;
 mod prefetch;
@@ -51,11 +52,11 @@ const KEPT_FRAMES: usize = 4;
 
 /// JPEG quality of drag previews. The frame is replaced by a lossless one when
 /// the slider is released, so this trades softness for bytes.
-const PROXY_JPEG_QUALITY: u8 = 80;
+pub(crate) const PROXY_JPEG_QUALITY: u8 = 80;
 
 /// Most bands a drag preview is split into. Each band is encoded on its own
 /// thread and decoded in its own `createImageBitmap` call in the webview.
-const PROXY_MAX_BANDS: usize = 4;
+pub(crate) const PROXY_MAX_BANDS: usize = 4;
 
 #[derive(Debug, thiserror::Error)]
 pub enum EngineError {
@@ -122,8 +123,9 @@ pub struct Engine {
     /// The prefetch worker holds it too.
     gpu: Option<Arc<RenderThread>>,
     generations: Arc<Generations>,
-    /// Finished frames by generation: the concatenated tile messages.
-    frames: Mutex<FrameStore>,
+    /// Finished frames by generation: the concatenated tile messages. The
+    /// prefetch worker stores its renders here too.
+    frames: Arc<Mutex<FrameStore>>,
     /// Where the autobench report goes (`GENZO_AUTOBENCH`), if the app was
     /// started to benchmark itself.
     autobench: Option<PathBuf>,
@@ -144,13 +146,13 @@ pub struct Engine {
 }
 
 #[derive(Debug, Default)]
-struct FrameStore {
+pub(crate) struct FrameStore {
     by_generation: BTreeMap<u64, Vec<u8>>,
     order: VecDeque<u64>,
 }
 
 impl FrameStore {
-    fn put(&mut self, generation: u64, bytes: Vec<u8>) {
+    pub(crate) fn put(&mut self, generation: u64, bytes: Vec<u8>) {
         self.by_generation.insert(generation, bytes);
         self.order.push_back(generation);
         while self.order.len() > KEPT_FRAMES {
@@ -219,7 +221,7 @@ impl Engine {
             adapter,
             gpu: gpu.map(Arc::new),
             generations: Arc::new(Generations::new()),
-            frames: Mutex::new(FrameStore::default()),
+            frames: Arc::default(),
             autobench: None,
             session: Arc::default(),
             switching: Mutex::new(()),
@@ -443,53 +445,27 @@ impl Engine {
         frame: &genzo_pipeline::gpu::spike::Frame,
         format: PixelFormat,
     ) -> Option<u32> {
-        use rayon::prelude::*;
-
-        let (w, h) = (frame.width as usize, frame.height as usize);
-        // Band heights are multiples of the 16-row JPEG block, so no band
-        // pads or blurs across its edge.
-        let bands = rayon::current_num_threads().clamp(1, PROXY_MAX_BANDS);
-        let band_h = (h.div_ceil(bands)).div_ceil(16) * 16;
-        let rows: Vec<(usize, usize)> = (0..h)
-            .step_by(band_h)
-            .map(|y| (y, band_h.min(h - y)))
-            .collect();
-        let encoded: Vec<Vec<u8>> = rows
-            .par_iter()
-            .map(|&(y, rows)| {
-                genzo_imgio::jpeg::encode_rgba(
-                    &frame.rgba[y * w * 4..(y + rows) * w * 4],
-                    w as u32,
-                    rows as u32,
-                    PROXY_JPEG_QUALITY,
-                )
-                .ok()
-            })
-            .collect::<Option<_>>()?;
+        let size = (frame.width, frame.height);
+        let encoded = frames::bands(&frame.rgba, size)?;
         if self.generations.is_stale(generation) {
             return None;
         }
         let mut message = Vec::with_capacity(
-            encoded.iter().map(Vec::len).sum::<usize>()
+            encoded.iter().map(|(_, j)| j.len()).sum::<usize>()
                 + encoded.len() * genzo_model::frame::TILE_HEADER_LEN,
         );
-        for (&(y, rows), jpeg) in rows.iter().zip(&encoded) {
+        for (rect, jpeg) in &encoded {
             let header = TileHeader {
                 generation,
-                rect: Rect {
-                    x: 0,
-                    y: y as u32,
-                    width: w as u32,
-                    height: rows as u32,
-                },
+                rect: *rect,
                 mip_level: 0,
                 format: format.as_jpeg(),
-                image_width: w as u32,
-                image_height: h as u32,
+                image_width: size.0,
+                image_height: size.1,
             };
             message.extend_from_slice(&header.encode(jpeg));
         }
-        let count = rows.len() as u32;
+        let count = encoded.len() as u32;
         self.frames
             .lock()
             .expect("frame store poisoned")

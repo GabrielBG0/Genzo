@@ -133,6 +133,7 @@ pub(crate) struct Worker {
     pub session: Arc<Mutex<Session>>,
     pub generations: Arc<Generations>,
     pub histograms: Arc<crate::histogram::Histograms>,
+    pub frames: Arc<Mutex<crate::FrameStore>>,
     pub decoder: Arc<dyn Decode>,
 }
 
@@ -315,15 +316,14 @@ impl Worker {
                 && s.provisional == Some(s.issued)
                 && !s.edits.get(&id).is_some_and(PhotoEdits::in_gesture)
         };
-        let Ok(Some(a)) = crate::develop::render_when(
-            &self.gpu,
-            &self.session,
-            &self.generations,
-            &self.histograms,
-            false,
-            Phase::End,
-            again,
-        ) else {
+        let to = crate::develop::To {
+            gpu: &self.gpu,
+            session: &self.session,
+            generations: &self.generations,
+            histograms: &self.histograms,
+            frames: &self.frames,
+        };
+        let Ok(Some(a)) = crate::develop::render_when(&to, false, Phase::End, again) else {
             return;
         };
         if a.frame.as_ref().is_some_and(|f| !f.provisional) {

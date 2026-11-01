@@ -422,6 +422,7 @@ impl Engine {
                 session: self.session.clone(),
                 generations: self.generations.clone(),
                 histograms: self.histograms.clone(),
+                frames: self.frames.clone(),
                 decoder: self.decoder.clone(),
             };
             *worker = std::thread::Builder::new()
@@ -488,14 +489,25 @@ impl Engine {
     /// Hands photo `id`'s first pixels to the sink, if there is one, then
     /// counts them for the histogram off this thread (DEV-03, Opening).
     fn show(&self, id: u64, preview: Option<Arc<ShownPreview>>) {
+        let frame = preview.as_ref().map(|p| {
+            let generation = self.generations.next();
+            let (bytes, count) =
+                crate::frames::whole(generation, &p.rgba, (p.width, p.height), p.target);
+            self.frames
+                .lock()
+                .expect("frame store poisoned")
+                .put(generation, bytes);
+            (generation, count)
+        });
         if let Some(sink) = &self.preview_sink {
             (sink.0)(Shown {
                 photo: id,
                 preview: preview.clone(),
+                frame,
             });
         }
-        if let Some(p) = preview {
-            self.histograms.preview(id, self.generations.next(), p);
+        if let (Some(p), Some((generation, _))) = (preview, frame) {
+            self.histograms.preview(id, generation, p);
         }
     }
 }

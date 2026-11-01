@@ -50,6 +50,7 @@ use crate::camera_color::{
 use crate::geometry::{Geometry, fit};
 use crate::histogram::{Histogram, Overlay};
 use crate::look::{BaseCurve, Look, Profile};
+use crate::picker::PickError;
 use crate::raw::RawSource;
 use crate::reference::base::working_size;
 use crate::reference::sampling::{Frame, ViewSpec, plan_view, plan_view_without_level0};
@@ -301,6 +302,23 @@ impl Develop {
     /// Whether the last frame was drawn from level 1 where level 0 was
     /// wanted, because the input was not attached: it renders again once
     /// it is.
+    /// The white balance picker's Temp and Tint for `point` on the shown
+    /// image of `edit` (DEV-02, *The picker*), read from the photo's input
+    /// on the CPU: `NeedsSource` while only its level 1 is there.
+    pub fn pick(
+        &self,
+        edit: &Edit,
+        point: (f64, f64),
+    ) -> Result<Result<(f64, f64), PickError>, DevelopError> {
+        let p = self.photo.as_ref().ok_or(DevelopError::NoPhoto)?;
+        let src = p.src.as_ref().ok_or(DevelopError::NeedsSource)?;
+        let file = p.info.orientation;
+        let mut geometry = Geometry::from(edit);
+        geometry.crop = fit(geometry.crop, p.info.size, geometry.orientation(file))
+            .ok_or(DevelopError::CropDoesNotFit)?;
+        Ok(crate::picker::pick(src, Frame::of(&geometry, file), point))
+    }
+
     pub fn provisional(&self) -> bool {
         self.shown.as_ref().is_some_and(|s| s.provisional)
     }
@@ -682,8 +700,11 @@ pub enum Readback {
         pixels: Vec<[u8; 4]>,
     },
     /// At 1:1, the visible 256 px tiles of the shown image, each RGBA8 row
-    /// by row.
-    Tiles(Vec<(ViewTile, Vec<u8>)>),
+    /// by row, and the shown image's size, which places them.
+    Tiles {
+        shown: (u32, u32),
+        tiles: Vec<(ViewTile, Vec<u8>)>,
+    },
 }
 
 impl Develop {
@@ -701,7 +722,10 @@ impl Develop {
             let tiles = visible_tiles(self.view.offset(), s.view.out(), shown);
             let rects: Vec<Rect> = tiles.iter().map(|t| t.frame).collect();
             let bytes = self.view.read_rects(gpu, &rects)?;
-            return Ok(Readback::Tiles(tiles.into_iter().zip(bytes).collect()));
+            return Ok(Readback::Tiles {
+                shown,
+                tiles: tiles.into_iter().zip(bytes).collect(),
+            });
         }
         Ok(Readback::Frame {
             size: self.view.frame_size(),
