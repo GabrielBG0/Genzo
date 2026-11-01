@@ -78,6 +78,11 @@
   }: Props = $props();
 
   let trackEl: HTMLDivElement | undefined = $state();
+  let handleEl: HTMLDivElement | undefined = $state();
+  /** Where the pointer took the handle, from its center: a drag keeps it there. */
+  let grab = 0;
+  /** The last press was on the handle. The track captures the pointer, so a double-click lands there. */
+  let onHandle = false;
   let fieldEl: HTMLInputElement | undefined = $state();
   let dragging = $state(false);
   /** An arrow key is held: one gesture until it is released. */
@@ -118,12 +123,20 @@
     if (disabled || e.button !== 0) return;
     dragging = true;
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    set(valueAt(e.clientX));
+    // A press on the track jumps there; one on the handle takes it as it is.
+    onHandle = handleEl !== undefined && e.target === handleEl;
+    if (onHandle && handleEl) {
+      const r = handleEl.getBoundingClientRect();
+      grab = e.clientX - (r.left + r.width / 2);
+    } else {
+      grab = 0;
+      set(valueAt(e.clientX));
+    }
     onstart?.(value);
   }
 
   function onpointermove(e: PointerEvent) {
-    if (dragging && set(valueAt(e.clientX))) oninput?.(value);
+    if (dragging && set(valueAt(e.clientX - grab))) oninput?.(value);
   }
 
   function onpointerup() {
@@ -227,6 +240,7 @@
     {onpointermove}
     {onpointerup}
     onpointercancel={onpointerup}
+    ondblclick={(e) => onHandle && reset(e)}
   >
     {#if track === 'plain'}
       <div
@@ -235,7 +249,7 @@
         style:width="{Math.abs(pos - origin) * 100}%"
       ></div>
     {/if}
-    <div class="handle" style:left="{pos * 100}%" ondblclick={reset}></div>
+    <div class="handle" bind:this={handleEl} style:left="{pos * 100}%"></div>
   </div>
   {#if typing}
     <input

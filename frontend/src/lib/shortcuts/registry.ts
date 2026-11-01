@@ -29,6 +29,8 @@ export interface Command extends Required<Pick<CommandSpec, 'id' | 'label' | 'sc
   keys: string[];
   run: () => void;
   enabled: () => boolean;
+  /** The label as it reads now ("Undo Exposure"); the static label otherwise. */
+  current?: () => string;
 }
 
 interface Chord {
@@ -130,11 +132,22 @@ export class ShortcutRegistry {
     return cmd;
   }
 
-  /** Replaces what a registered command does, keeping its keys and label. */
-  bind(id: string, run: () => void, enabled?: () => boolean): void {
+  /**
+   * Replaces what a registered command does, keeping its keys. `label`
+   * gives the label as it reads now, for menus and tooltips (APP-10:
+   * "Undo Exposure").
+   */
+  bind(id: string, run: () => void, enabled?: () => boolean, label?: () => string): void {
     const cmd = this.get(id);
     cmd.run = run;
     if (enabled) cmd.enabled = enabled;
+    if (label) cmd.current = label;
+  }
+
+  /** The label of a command as it reads now. */
+  label(id: string): string {
+    const cmd = this.get(id);
+    return cmd.current?.() ?? cmd.label;
   }
 
   get(id: string): Command {
@@ -160,7 +173,7 @@ export class ShortcutRegistry {
   /** `Label  Shortcut`, for tooltips and aria labels. */
   title(id: string): string {
     const s = this.shortcut(id);
-    const label = this.get(id).label;
+    const label = this.label(id);
     return s ? `${label}  ${s}` : label;
   }
 

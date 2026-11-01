@@ -30,9 +30,12 @@ test('a drag is one step that Ctrl Z undoes and Ctrl Shift Z redoes (APP-10)', a
   const exposure = page.getByRole('slider', { name: 'Exposure' });
   await expect(exposure).toHaveAttribute('aria-valuetext', '+2.00');
   await expect(undo(page)).toBeEnabled();
+  // The tooltip names the step (APP-10).
+  await expect(undo(page)).toHaveAttribute('title', 'Undo Exposure  Ctrl Z');
   await page.keyboard.press('Control+z');
   await expect(exposure).toHaveAttribute('aria-valuetext', '0.00');
   await expect(undo(page)).toBeDisabled();
+  await expect(redo(page)).toHaveAttribute('title', 'Redo Exposure  Ctrl Shift Z');
   await page.keyboard.press('Control+Shift+z');
   await expect(exposure).toHaveAttribute('aria-valuetext', '+2.00');
   await expect(redo(page)).toBeDisabled();
@@ -93,4 +96,20 @@ test('each photo keeps its own edit; the filmstrip marks edited photos', async (
   await expect(page.getByRole('slider', { name: 'Shadows' })).toHaveAttribute('aria-disabled', 'true');
   await frames.nth(0).click();
   await expect(page.getByRole('slider', { name: 'Shadows' })).toHaveAttribute('aria-valuetext', '+20');
+});
+
+test('a double-click on the handle resets as one step, without a jump first', async ({ page }) => {
+  await develop(page);
+  const exposure = page.getByRole('slider', { name: 'Exposure' });
+  await exposure.getByText('0.00').click();
+  await page.getByRole('textbox', { name: 'Exposure value' }).fill('1');
+  await page.keyboard.press('Enter');
+  await expect(exposure).toHaveAttribute('aria-valuetext', '+1.00');
+  const handle = await exposure.locator('.handle').boundingBox();
+  if (!handle) throw new Error('no handle');
+  // Off the handle's center: a press there must not move the value.
+  await page.mouse.dblclick(handle.x + handle.width / 2 + 5, handle.y + handle.height / 2);
+  await expect(exposure).toHaveAttribute('aria-valuetext', '0.00');
+  await page.keyboard.press('Control+z');
+  await expect(exposure).toHaveAttribute('aria-valuetext', '+1.00');
 });

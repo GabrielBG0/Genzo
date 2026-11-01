@@ -30,6 +30,17 @@ describe('ShortcutRegistry', () => {
     expect(() => r.register({ id: 'b', label: 'B', keys: ['Mod+Z'] })).toThrow(/both use/);
   });
 
+  it('reads a bound label as it is now, in titles too', () => {
+    const r = new ShortcutRegistry('mac');
+    r.register({ id: 'u', label: 'Undo', keys: ['Mod+Z'] });
+    let last: string | null = null;
+    r.bind('u', () => {}, undefined, () => (last ? `Undo ${last}` : 'Undo'));
+    expect(r.title('u')).toBe('Undo  ⌘Z');
+    last = 'Exposure';
+    expect(r.label('u')).toBe('Undo Exposure');
+    expect(r.title('u')).toBe('Undo Exposure  ⌘Z');
+  });
+
   it('lets different scopes share a key', () => {
     const r = new ShortcutRegistry('other');
     r.register({ id: 'd', label: 'D', keys: ['R'], scope: 'develop' });

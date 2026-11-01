@@ -142,6 +142,16 @@ describe('FakeEngine, Develop', () => {
     expect(strip.strip.photos.map((p) => p.edited)).toEqual([false, true, false, false, false]);
   });
 
+  it('ends a gesture on a switch, and keeps edits when the folder opens again', async () => {
+    const { engine } = await opened();
+    await engine.execute({ type: 'applyEditDelta', photo: 1, changes: [{ Exposure: 0.4 }], phase: 'Start' });
+    await engine.execute({ type: 'selectPhoto', photo: 2 });
+    const reopened = await engine.execute({ type: 'openFolder', path: 'demo' });
+    expect(reopened).toMatchObject({ type: 'folder', edit: { photo: 1, undo: 'Exposure', edited: true } });
+    if (reopened.type !== 'folder') throw new Error(reopened.type);
+    expect(reopened.strip.photos[0]?.edited).toBe(true);
+  });
+
   it('answers a photo that does not render with its reason', async () => {
     const { engine } = await opened();
     expect(await engine.execute({ type: 'selectPhoto', photo: 5 })).toEqual({

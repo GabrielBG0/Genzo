@@ -144,11 +144,11 @@ export class FakeEngine implements Engine {
   /** The last report sent with `saveAutobenchReport`. */
   autobenchReport: string | null = null;
   /**
-   * How long each reply takes, in ms. Tests set it to deliver replies out
-   * of order, as the shell can: the answer is made at once (the edit, the
-   * render), only its delivery waits.
+   * How long each reply takes: ms, or a promise the test resolves. Tests
+   * set it to deliver replies out of order, as the shell can: the answer
+   * is made at once (the edit, the render), only its delivery waits.
    */
-  latency: (message: Command | Query) => number = () => 0;
+  latency: (message: Command | Query) => number | Promise<void> = () => 0;
   /** Every command executed, oldest first, for tests. */
   readonly sent: Command[] = [];
   private folder: FakePhoto[] = [];
@@ -205,8 +205,9 @@ export class FakeEngine implements Engine {
   }
 
   private async deliver(message: Command | Query) {
-    const ms = this.latency(message);
-    if (ms > 0) await new Promise((resolve) => setTimeout(resolve, ms));
+    const delay = this.latency(message);
+    if (typeof delay !== 'number') await delay;
+    else if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
   }
 
   private run(command: Command): CommandResult {
@@ -235,11 +236,13 @@ export class FakeEngine implements Engine {
         this.autobenchReport = command.report;
         return DONE;
       }
-      // Every path opens the demo folder, its first photo selected.
+      // Every path opens the demo folder, its first photo selected. Its
+      // ids are the same each time, so edits are kept, as the engine keeps
+      // them for a file it has seen this session.
       case 'openFolder': {
+        this.endGesture();
         this.folder = demoFolder();
-        this.edits.clear();
-        this.histograms.clear();
+        for (const p of this.folder) p.photo.edited = this.edits.get(p.photo.id)?.state().edited ?? false;
         this.strip = { photos: this.folder.map((p) => p.photo), current: null, direction: 'next' };
         const first = this.folder[0]?.photo.id;
         const selected = first === undefined ? null : this.select(first);
@@ -281,6 +284,7 @@ export class FakeEngine implements Engine {
     const index = this.folder.findIndex((p) => p.photo.id === id);
     const fake = this.folder[index];
     if (!fake) throw new Error(`photo ${id} is not in the strip`);
+    if (id !== this.strip.current) this.endGesture();
     const previous = this.folder.findIndex((p) => p.photo.id === this.strip.current);
     if (previous >= 0 && index !== previous) this.strip.direction = index > previous ? 'next' : 'previous';
     this.strip.current = id;
@@ -292,6 +296,19 @@ export class FakeEngine implements Engine {
     }
     this.renderPhoto(false);
     return { edit: edits.state(), reason: null };
+  }
+
+  /**
+   * Ends the open photo's gesture, recording its step as its *end* would,
+   * before that photo goes: mirrors `Session::end_gesture`.
+   */
+  private endGesture() {
+    const open = this.strip.current;
+    const p = open === null ? undefined : this.edits.get(open);
+    if (!p?.inGesture()) return;
+    p.apply([], 'End');
+    const entry = this.strip.photos.find((s) => s.id === open);
+    if (entry) entry.edited = p.state().edited;
   }
 
   /**

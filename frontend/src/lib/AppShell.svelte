@@ -26,11 +26,13 @@
     'edit.undo',
     () => session.undo(),
     () => session.canUndo,
+    () => (session.canUndo && session.edit?.undo ? `Undo ${session.edit.undo}` : 'Undo'),
   );
   registry.bind(
     'edit.redo',
     () => session.redo(),
     () => session.canRedo,
+    () => (session.canRedo && session.edit?.redo ? `Redo ${session.edit.redo}` : 'Redo'),
   );
   registry.bind(
     'develop.treatment',

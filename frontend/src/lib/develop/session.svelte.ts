@@ -21,6 +21,9 @@ type EditCommand = Extract<Command, { type: 'applyEditDelta' | 'resetParam' | 'p
  * - **Optimistic values.** A gesture's changes show at once, applied to the
  *   newest edit, and stay until every edit command sent has answered, so
  *   a reply that predates the latest move cannot snap a slider back.
+ * - **A switch waits.** It ends a gesture in progress with its latest
+ *   value, and goes after every edit command sent, so it cannot overtake
+ *   an *end* and leave the photo it leaves mid-gesture.
  */
 export class DevelopSession {
   strip: Strip = $state({ photos: [], current: null, direction: 'next' });
@@ -45,6 +48,9 @@ export class DevelopSession {
   private inFlight = false;
   private frame: number | null = null;
   private pendingUpdate: Change[] | null = null;
+  /** The gesture's latest changes, for an *end* a switch sends. */
+  private gestureChanges: Change[] | null = null;
+  private idlers: (() => void)[] = [];
 
   constructor(
     private readonly engine: Engine,
@@ -77,12 +83,18 @@ export class DevelopSession {
 
   async select(photo: number): Promise<void> {
     if (photo === this.strip.current) return;
-    this.endGestureLocally();
+    if (this.inGesture && this.gestureChanges) this.change(this.gestureChanges, 'End');
+    this.cancelUpdate();
+    this.inGesture = false;
+    this.optimistic = null;
     this.strip.current = photo;
     this.edit = null;
     this.reason = null;
     this.notice = null;
     this.picking = false;
+    await this.idle();
+    // A later switch went first.
+    if (this.strip.current !== photo) return;
     const r = await this.engine.execute({ type: 'selectPhoto', photo });
     if (r.type !== 'selected') throw new Error(`selectPhoto answered ${r.type}`);
     // A later switch wins over this one.
@@ -111,6 +123,7 @@ export class DevelopSession {
     if (photo === null || !this.editable) return;
     this.optimistic = changes.reduce((e, c) => applyChange(e, c, kindOf(e)), this.shown as Edit);
     this.inGesture = phase !== 'End';
+    this.gestureChanges = this.inGesture ? changes : null;
     if (phase === 'Update') {
       this.pendingUpdate = changes;
       this.frame ??= requestAnimationFrame(() => {
@@ -173,6 +186,12 @@ export class DevelopSession {
     else this.edit = null;
   }
 
+  /** Resolves once every edit command sent has answered. */
+  private idle(): Promise<void> {
+    if (!this.inFlight && this.queue.length === 0) return Promise.resolve();
+    return new Promise((resolve) => this.idlers.push(resolve));
+  }
+
   private send(command: EditCommand) {
     this.queue.push(command);
     void this.drain();
@@ -203,6 +222,7 @@ export class DevelopSession {
       // Every command sent has answered: the engine's edit is the truth,
       // clamped as it clamps.
       if (!this.inGesture && this.frame === null) this.optimistic = null;
+      for (const resolve of this.idlers.splice(0)) resolve();
     }
   }
 
@@ -212,12 +232,6 @@ export class DevelopSession {
     this.pendingUpdate = null;
   }
 
-  /** A switch mid-gesture: the engine is told nothing more of it. */
-  private endGestureLocally() {
-    this.cancelUpdate();
-    this.inGesture = false;
-    this.optimistic = null;
-  }
 }
 
 function resetCommand(photo: number, param: Extract<Command, { type: 'resetParam' }>['param']): EditCommand {

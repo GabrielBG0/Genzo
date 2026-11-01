@@ -3,6 +3,13 @@ import type { Command } from '$contract/genzo';
 import { FakeEngine } from '../engine/fake';
 import { DevelopSession } from './session.svelte';
 
+/** A gate a test opens: replies held until then. */
+function gate() {
+  let open = () => {};
+  const shut = new Promise<void>((resolve) => (open = resolve));
+  return { shut, open };
+}
+
 const nextFrame = () => new Promise((resolve) => requestAnimationFrame(resolve));
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -45,19 +52,46 @@ describe('DevelopSession', () => {
   });
 
   it('keeps a dragged value when an older reply arrives during the gesture', async () => {
-    // Replies take long: the start's answers 0.1 after the slider moved on.
-    const { session } = await open((m) => (m.type === 'applyEditDelta' && m.phase !== 'End' ? 100 : 0));
+    // The start's reply is held, then the update's: each answers after the
+    // slider moved on.
+    const start = gate();
+    const update = gate();
+    const { session } = await open((m) =>
+      m.type === 'applyEditDelta' ? (m.phase === 'Start' ? start.shut : m.phase === 'Update' ? update.shut : 0) : 0,
+    );
     session.change([{ Exposure: 0.1 }], 'Start');
     session.change([{ Exposure: 0.8 }], 'Update');
     expect(session.shown?.exposure).toBeCloseTo(0.8);
+    await nextFrame();
+    start.open();
+    await wait(0);
     // The start has answered; the update is still in flight.
-    await wait(150);
     expect(session.edit?.edit.exposure).toBeCloseTo(0.1);
     expect(session.shown?.exposure).toBeCloseTo(0.8);
+    update.open();
     session.change([{ Exposure: 0.8 }], 'End');
     await settled(session);
     expect(session.shown?.exposure).toBeCloseTo(0.8);
     expect(session.edit?.undo).toBe('Exposure');
+  });
+
+  it('ends a gesture before a switch, so the photo it leaves keeps its step', async () => {
+    const update = gate();
+    const { engine, session } = await open((m) => (m.type === 'applyEditDelta' && m.phase === 'Update' ? update.shut : 0));
+    session.change([{ Exposure: 0.1 }], 'Start');
+    session.change([{ Exposure: 0.4 }], 'Update');
+    await nextFrame();
+    session.change([{ Exposure: 0.7 }], 'Update');
+    // Released, then the next photo at once, while an update is in flight.
+    const away = session.select(2);
+    update.open();
+    await away;
+    await session.select(1);
+    expect(session.edit).toMatchObject({ undo: 'Exposure', edit: { exposure: expect.closeTo(0.7, 5) } });
+    expect(session.canUndo).toBe(true);
+    // The end went before the switch.
+    const order = engine.sent.map((c) => (c.type === 'applyEditDelta' ? c.phase : c.type));
+    expect(order.indexOf('End')).toBeLessThan(order.indexOf('selectPhoto'));
   });
 
   it('takes an edit reply only when its revision is the newest seen', async () => {
