@@ -10,7 +10,8 @@
 //! - The last move's direction is kept for the prefetch order. On opening
 //!   a folder it is next.
 //!
-//! Until contract 0.5.0 these are Rust methods for the cli and the tests.
+//! Contract 0.5.0's `OpenFolder`, `SelectPhoto` and `ListFolderPhotos` come
+//! here (`crate::messages`).
 
 use std::fmt::Debug;
 use std::path::{Path, PathBuf};
@@ -424,6 +425,7 @@ impl Engine {
                 histograms: self.histograms.clone(),
                 frames: self.frames.clone(),
                 decoder: self.decoder.clone(),
+                events: self.events.clone(),
             };
             *worker = std::thread::Builder::new()
                 .name("genzo-prefetch".into())

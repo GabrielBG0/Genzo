@@ -13,6 +13,7 @@
     connectEngine()
       .then(async (engine) => {
         const result = await engine.query({ type: 'getEngineInfo' });
+        if (result.type !== 'engineInfo') throw new Error(`getEngineInfo answered ${result.type}`);
         status = { kind: 'ready', engine, info: result.info };
       })
       .catch((e: unknown) => {

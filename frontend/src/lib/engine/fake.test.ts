@@ -53,4 +53,22 @@ describe('FakeEngine', () => {
     expect(tiles[0]?.header.imageWidth).toBe(600);
     expect(tiles[0]?.header.imageHeight).toBe(400);
   });
+
+  it('answers Develop as an engine with an empty folder open', async () => {
+    const engine = new FakeEngine();
+    const empty = { photos: [], current: null, direction: 'next' };
+    expect(await engine.execute({ type: 'openFolder', path: '/photos' })).toEqual({
+      type: 'folder',
+      strip: empty,
+      edit: null,
+      reason: null,
+    });
+    expect(await engine.execute({ type: 'setView', width: 800, height: 600, view: { type: 'fit' }, space: 'srgb' })).toEqual({
+      type: 'done',
+    });
+    expect(await engine.query({ type: 'listFolderPhotos' })).toEqual({ type: 'folderPhotos', strip: empty });
+    expect(await engine.query({ type: 'getEdit', photo: 1 })).toEqual({ type: 'edit', edit: null });
+    expect(await engine.query({ type: 'getHistogram', photo: 1 })).toEqual({ type: 'histogram', counted: null });
+    await expect(engine.execute({ type: 'undo', photo: 1 })).rejects.toThrow('photo 1 was not opened this session');
+  });
 });

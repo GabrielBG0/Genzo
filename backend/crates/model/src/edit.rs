@@ -10,10 +10,12 @@
 //!   While white balance is as shot, Temp and Tint hold the as-shot values
 //!   for the sliders and are left out of that comparison.
 //!
-//! Contract 0.5.0 exports it to TypeScript with the session commands.
+//! Contract 0.5.0 exports it to TypeScript with the session commands, with
+//! the names it is stored under; the unknown fields stay in the engine.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use ts_rs::TS;
 
 /// The schema this build writes. A change to a field or to the crop
 /// coordinates bumps it.
@@ -23,7 +25,7 @@ pub const SCHEMA_VERSION: u32 = 1;
 pub type Unknown = Map<String, Value>;
 
 /// The camera profile.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 pub enum Profile {
     /// RAW: the camera matrix plus the base curve (DEV-02). The RAW default.
     GenzoStandard,
@@ -33,14 +35,14 @@ pub enum Profile {
     Embedded,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
 pub enum Treatment {
     #[default]
     Color,
     Monochrome,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, TS)]
 pub enum WhiteBalanceMode {
     #[default]
     AsShot,
@@ -50,12 +52,13 @@ pub enum WhiteBalanceMode {
 /// White balance (DEV-01, *White balance: what Temp and Tint mean*). RAW:
 /// `temp` in kelvin, `tint` on the DNG SDK's scale. Non-RAW: both are
 /// relative shifts, 0 being the encoded white.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 pub struct WhiteBalance {
     pub mode: WhiteBalanceMode,
     pub temp: f32,
     pub tint: f32,
     #[serde(flatten)]
+    #[ts(skip)]
     pub unknown: Unknown,
 }
 
@@ -64,7 +67,7 @@ pub struct WhiteBalance {
 /// the oriented image's, and the straighten angle in degrees, positive
 /// clockwise. Whether it fits the image needs the image's size, so the
 /// engine checks that (`geometry::fit`), not [`Edit::clamped`].
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 pub struct Crop {
     pub cx: f32,
     pub cy: f32,
@@ -72,6 +75,7 @@ pub struct Crop {
     pub h: f32,
     pub angle: f32,
     #[serde(flatten)]
+    #[ts(skip)]
     pub unknown: Unknown,
 }
 
@@ -115,7 +119,7 @@ pub const ANGLE: (f32, f32) = (-45.0, 45.0);
 /// Where a gesture is (DEV-01, *Inputs*): between *start* and *end* renders
 /// are interactive, and the *end* records one history step (APP-10). A
 /// delta without a gesture is an *end*.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 pub enum Phase {
     Start,
     Update,
@@ -130,7 +134,7 @@ impl Phase {
 }
 
 /// A field of the edit a reset can name.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 pub enum Param {
     Profile,
     Treatment,
@@ -173,7 +177,7 @@ impl Param {
 /// One change an edit delta carries (DEV-01, *Inputs*: `ApplyEditDelta`).
 /// The engine clamps every value, fits the crop to the image and refuses a
 /// crop that cannot fit (DEV-01, *Crop*).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 pub enum Change {
     Profile(Profile),
     Treatment(Treatment),
@@ -267,7 +271,7 @@ impl std::fmt::Display for EditError {
 impl std::error::Error for EditError {}
 
 /// One photo's develop settings.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 pub struct Edit {
     pub schema_version: u32,
     pub profile: Profile,
@@ -286,6 +290,7 @@ pub struct Edit {
     pub quarter_turns: u8,
     pub flip_horizontal: bool,
     #[serde(flatten)]
+    #[ts(skip)]
     pub unknown: Unknown,
 }
 

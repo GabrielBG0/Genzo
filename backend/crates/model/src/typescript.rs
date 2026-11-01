@@ -6,10 +6,15 @@
 use ts_rs::{Config, TS};
 
 use crate::api::{
-    AdapterInfo, AdapterKind, Command, EngineInfo, Event, Handshake, HandshakeResult, Query,
-    QueryResult, SpikeSource,
+    AdapterInfo, AdapterKind, CaptureTime, Clipping, ClippingPreview, ColorSpace, Command,
+    CommandResult, Counted, Direction, EngineInfo, Event, Handshake, HandshakeResult, Histogram,
+    PhotoEdit, PhotoKind, Query, QueryResult, Rational, Shooting, SpikeSource, Strip, StripPhoto,
+    View,
 };
 use crate::contract::{CONTRACT_VERSION, ContractVersion};
+use crate::edit::{
+    Change, Crop, Edit, Param, Phase, Profile, Treatment, WhiteBalance, WhiteBalanceMode,
+};
 use crate::frame::{PixelFormat, Rect, TILE_HEADER_LEN, TILE_MAGIC, TILE_SIZE, TileHeader};
 
 fn decl<T: TS>(cfg: &Config) -> String {
@@ -32,7 +37,31 @@ pub fn generate() -> String {
         decl::<Rect>(&cfg),
         decl::<TileHeader>(&cfg),
         decl::<SpikeSource>(&cfg),
+        decl::<Profile>(&cfg),
+        decl::<Treatment>(&cfg),
+        decl::<WhiteBalanceMode>(&cfg),
+        decl::<WhiteBalance>(&cfg),
+        decl::<Crop>(&cfg),
+        decl::<Edit>(&cfg),
+        decl::<Phase>(&cfg),
+        decl::<Param>(&cfg),
+        decl::<Change>(&cfg),
+        decl::<ColorSpace>(&cfg),
+        decl::<View>(&cfg),
+        decl::<ClippingPreview>(&cfg),
+        decl::<Direction>(&cfg),
+        decl::<PhotoKind>(&cfg),
+        decl::<CaptureTime>(&cfg),
+        decl::<Rational>(&cfg),
+        decl::<Shooting>(&cfg),
+        decl::<StripPhoto>(&cfg),
+        decl::<Strip>(&cfg),
+        decl::<PhotoEdit>(&cfg),
+        decl::<Clipping>(&cfg),
+        decl::<Histogram>(&cfg),
+        decl::<Counted>(&cfg),
         decl::<Command>(&cfg),
+        decl::<CommandResult>(&cfg),
         decl::<Query>(&cfg),
         decl::<QueryResult>(&cfg),
         decl::<Event>(&cfg),
@@ -230,6 +259,11 @@ mod tests {
         let ts = generate();
         for name in [
             "Command",
+            "CommandResult",
+            "Edit",
+            "Change",
+            "Strip",
+            "Histogram",
             "Query",
             "Event",
             "TileHeader",

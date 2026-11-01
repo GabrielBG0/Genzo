@@ -47,6 +47,8 @@ pub struct PhotoEdits {
     position: usize,
     /// The edit during a gesture, and its label.
     gesture: Option<Step>,
+    /// Counts the deltas, undos and redos taken.
+    revision: u64,
 }
 
 impl PhotoEdits {
@@ -66,6 +68,7 @@ impl PhotoEdits {
             steps: Vec::new(),
             position: 0,
             gesture: None,
+            revision: 0,
         }
     }
 
@@ -111,6 +114,12 @@ impl PhotoEdits {
         self.steps.get(self.position).map(|s| s.label.as_str())
     }
 
+    /// How many deltas, undos and redos it took: a reply with a higher
+    /// revision is newer.
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
     pub fn steps(&self) -> &[Step] {
         &self.steps[..self.position]
     }
@@ -139,6 +148,7 @@ impl PhotoEdits {
             _ => "Edit".into(),
         });
         let label = self.gesture.as_ref().map_or(label, |g| g.label.clone());
+        self.revision += 1;
         if phase != Phase::End {
             self.gesture = Some(Step { label, edit });
             return Ok(false);
@@ -159,6 +169,7 @@ impl PhotoEdits {
             return false;
         }
         self.position -= 1;
+        self.revision += 1;
         true
     }
 
@@ -169,6 +180,7 @@ impl PhotoEdits {
             return false;
         }
         self.position += 1;
+        self.revision += 1;
         true
     }
 

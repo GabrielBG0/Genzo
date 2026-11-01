@@ -11,8 +11,9 @@
 //! - Every switch says what to show, a preview or none: without one, the
 //!   viewport shows the neutral fill and the file name, not the photo
 //!   before.
-//! - Until contract 0.5.0 makes this the `PreviewShown` event, a sink the
-//!   caller registers receives it ([`crate::Engine::with_preview_sink`]).
+//! - A sink the caller registers receives it
+//!   ([`crate::Engine::with_preview_sink`]), which the event sink makes
+//!   `PreviewShown`.
 //! - It is prepared on a thread pool of its own. On rayon's global pool its
 //!   work would wait behind a decode's (the switch's own, or a neighbor's
 //!   in prefetch), which fills that pool for a second or more at 48 MP.

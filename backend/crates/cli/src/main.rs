@@ -1,15 +1,18 @@
 //! `genzo-cli`: drives the engine without a UI.
 //!
-//! The cli must be able to do everything the UI does except draw. In M0 that
-//! is the contract tooling, engine info, decoding, and the benchmarks for the
-//! test pattern and the GPU spike pipeline.
+//! The cli must be able to do everything the UI does except draw: `run`
+//! takes the contract's commands and queries as JSON lines, and prints
+//! their results and the events they send. Besides it: the contract tooling,
+//! engine info, decoding, and the benchmarks.
 
+use std::io::{BufRead, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::mpsc::{Receiver, channel};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use genzo_engine::api::{Command, Event, PixelFormat, SpikeSource};
+use genzo_engine::api::{Command, Event, PixelFormat, Query, SpikeSource};
 use genzo_engine::develop::{Applied, Target, ViewSpec};
 use genzo_engine::preview::Shown;
 use genzo_engine::{Engine, contract, files};
@@ -23,6 +26,11 @@ commands:
   contract write [DIR]         regenerate contract/ (refuses without a version bump)
   contract check [DIR]         fail if contract/ is stale
   inspect FILE                 decode a file, print what it holds and how long it took
+  run FILE                     run the commands and queries in FILE (- for stdin),
+                               one JSON object a line, with a command or a query
+                               key; print each result, error and event as a JSON
+                               line keyed result, error or event. At the end it
+                               waits for the events still to come
   bench test-pattern [W H N]   render N test-pattern frames of W×H, print p50/p95
   bench decode FILE [T N]      decode FILE N times with T threads, print p50/p95
   bench gpu [W H N]            render a W×H synthetic raw into a 2560 px viewport,
@@ -94,6 +102,7 @@ fn main() -> ExitCode {
                 )
             })
             .map_err(|e| e.to_string()),
+        ["run", file] => run(file),
         ["bench", "test-pattern", rest @ ..] => bench_test_pattern(rest, &mut metrics),
         ["bench", "decode", file, rest @ ..] => bench_decode(file, rest, &mut metrics),
         ["bench", "gpu", rest @ ..] => bench_gpu(rest, &mut metrics),
@@ -157,6 +166,60 @@ impl Metrics {
     }
 }
 
+/// One line of `run`'s input.
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+enum Line {
+    Command(Command),
+    Query(Query),
+}
+
+/// Prints one JSON line of `run`'s output, whole, whichever thread sends it.
+fn print_line(key: &str, value: impl serde::Serialize) {
+    let line = serde_json::json!({ key: value });
+    let mut out = std::io::stdout().lock();
+    let _ = writeln!(out, "{line}");
+    let _ = out.flush();
+}
+
+/// `run FILE`: the contract's messages, as the shell passes them.
+fn run(file: &str) -> Result<(), String> {
+    let input: Box<dyn BufRead> = if file == "-" {
+        Box::new(std::io::stdin().lock())
+    } else {
+        let f = std::fs::File::open(file).map_err(|e| format!("{file}: {e}"))?;
+        Box::new(std::io::BufReader::new(f))
+    };
+    let engine = Engine::new().with_event_sink(Arc::new(|e: Event| print_line("event", e)));
+    for (n, line) in input.lines().enumerate() {
+        let line = line.map_err(|e| format!("{file}: {e}"))?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        match serde_json::from_str::<Line>(&line) {
+            Ok(Line::Command(c)) => match engine.execute(c) {
+                Ok(r) => print_line("result", r),
+                Err(e) => print_line("error", e.to_string()),
+            },
+            Ok(Line::Query(q)) => print_line("result", engine.query(q)),
+            Err(e) => return Err(format!("{file}:{}: {e}", n + 1)),
+        }
+    }
+    engine.wait_histograms_idle();
+    engine.wait_prefetch_idle();
+    engine.wait_histograms_idle();
+    Ok(())
+}
+
+/// `engine`, its events sent to the receiver.
+fn recorded(engine: Engine) -> (Engine, Receiver<Event>) {
+    let (tx, rx) = channel();
+    let engine = engine.with_event_sink(Arc::new(move |e| {
+        let _ = tx.send(e);
+    }));
+    (engine, rx)
+}
+
 fn percentiles(mut times: Vec<f64>) -> (f64, f64) {
     times.sort_by(f64::total_cmp);
     let pct = |p: f64| times[((times.len() - 1) as f64 * p).round() as usize];
@@ -183,11 +246,11 @@ fn bench_test_pattern(args: &[&str], metrics: &mut Metrics) -> Result<(), String
         })
     };
     let (width, height, n) = (num(0, 2560)?, num(1, 1440)?, num(2, 30)?.max(1));
-    let engine = Engine::headless();
+    let (engine, events) = recorded(Engine::headless());
     let mut times = Vec::with_capacity(n as usize);
     for i in 0..n {
         let started = Instant::now();
-        let events = engine
+        engine
             .execute(Command::RenderTestPattern {
                 width,
                 height,
@@ -195,10 +258,10 @@ fn bench_test_pattern(args: &[&str], metrics: &mut Metrics) -> Result<(), String
                 format: PixelFormat::Rgba8Srgb,
             })
             .map_err(|e| e.to_string())?;
-        let Some(Event::RenderFinished { generation, .. }) = events.first() else {
+        let Ok(Event::RenderFinished { generation, .. }) = events.try_recv() else {
             return Err("render produced no frame".into());
         };
-        let bytes = engine.frame(*generation).ok_or("frame missing")?;
+        let bytes = engine.frame(generation).ok_or("frame missing")?;
         std::hint::black_box(bytes);
         times.push(started.elapsed().as_secs_f64() * 1000.0);
     }
@@ -217,7 +280,7 @@ fn bench_gpu(args: &[&str], metrics: &mut Metrics) -> Result<(), String> {
         parse_num(args, 1, 6048)?,
         parse_num(args, 2, 50)?.max(2),
     );
-    let engine = Engine::new();
+    let (engine, events) = recorded(Engine::new());
     let info = engine.info().adapter;
     println!("adapter: {} ({}, {:?})", info.name, info.backend, info.kind);
     if let Some(reason) = &info.fallback_reason {
@@ -229,6 +292,8 @@ fn bench_gpu(args: &[&str], metrics: &mut Metrics) -> Result<(), String> {
             source: SpikeSource::Synthetic { width, height },
         })
         .map_err(|e| e.to_string())?;
+    // Its SpikeImageLoaded.
+    events.try_iter().for_each(drop);
     println!(
         "load {width}x{height}: {:.0} ms",
         started.elapsed().as_secs_f64() * 1000.0
@@ -239,7 +304,7 @@ fn bench_gpu(args: &[&str], metrics: &mut Metrics) -> Result<(), String> {
                   interactive: bool,
                   proxy: bool|
      -> Result<(f64, Option<f64>), String> {
-        let events = engine
+        engine
             .execute(Command::RenderSpike {
                 width: 2560,
                 height: 2560,
@@ -250,10 +315,10 @@ fn bench_gpu(args: &[&str], metrics: &mut Metrics) -> Result<(), String> {
                 proxy,
             })
             .map_err(|e| e.to_string())?;
-        match events.first() {
-            Some(Event::RenderFinished {
+        match events.try_recv() {
+            Ok(Event::RenderFinished {
                 render_ms, gpu_ms, ..
-            }) => Ok((*render_ms, *gpu_ms)),
+            }) => Ok((render_ms, gpu_ms)),
             _ => Err("render produced no frame".into()),
         }
     };

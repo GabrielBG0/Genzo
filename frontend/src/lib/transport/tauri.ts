@@ -5,6 +5,7 @@ import { convertFileSrc, invoke, isTauri as tauriPresent } from '@tauri-apps/api
 import { listen } from '@tauri-apps/api/event';
 import type {
   Command,
+  CommandResult,
   Event,
   Handshake,
   HandshakeResult,
@@ -33,7 +34,7 @@ export class TauriEngine implements Engine {
     return invoke('query', { query });
   }
 
-  execute(command: Command): Promise<void> {
+  execute(command: Command): Promise<CommandResult> {
     return invoke('execute', { command });
   }
 

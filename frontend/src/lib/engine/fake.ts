@@ -3,12 +3,14 @@ import {
   TILE_SIZE,
   type AdapterInfo,
   type Command,
+  type CommandResult,
   type Event,
   type Handshake,
   type HandshakeResult,
   type PixelFormat,
   type Query,
   type QueryResult,
+  type Strip,
   type TileHeader,
 } from '$contract/genzo';
 import { encodeTile } from './tiles';
@@ -20,6 +22,9 @@ const ADAPTER: AdapterInfo = {
   backend: 'none',
   fallbackReason: 'Running against the fake engine',
 };
+
+const DONE: CommandResult = { type: 'done' };
+const EMPTY_STRIP: Strip = { photos: [], current: null, direction: 'next' };
 
 /** Same compatibility rule as ContractVersion::is_compatible_with in Rust. */
 export function isCompatible(a: string, b: string): boolean {
@@ -70,35 +75,57 @@ export class FakeEngine implements Engine {
             autobench: this.autobench,
           },
         };
+      // The fake has no folders yet: the Develop screens give it photos.
+      case 'listFolderPhotos':
+        return { type: 'folderPhotos', strip: EMPTY_STRIP };
+      case 'getEdit':
+        return { type: 'edit', edit: null };
+      case 'getHistogram':
+        return { type: 'histogram', counted: null };
     }
   }
 
-  async execute(command: Command): Promise<void> {
+  async execute(command: Command): Promise<CommandResult> {
     switch (command.type) {
       case 'renderTestPattern': {
         const { width, height, phase, format } = command;
         this.renderPattern(width, height, phase, format);
-        return;
+        return DONE;
       }
       case 'loadSpikeImage': {
         // The fake has no GPU: it remembers the size and renders the test pattern.
         const { width, height } = command.source;
         this.spikeSize = [width & ~1, height & ~1];
         this.emit({ type: 'spikeImageLoaded', width: this.spikeSize[0], height: this.spikeSize[1] });
-        return;
+        return DONE;
       }
       case 'renderSpike': {
         if (!this.spikeSize) throw new Error('no image loaded');
         const [w, h] = fit(this.spikeSize, [command.width, command.height]);
         // Exposure moves the pattern, so a stale frame is easy to spot.
         this.renderPattern(w, h, (command.exposureEv + 3) / 6, command.format);
-        return;
+        return DONE;
       }
       case 'saveAutobenchReport': {
         if (!this.autobench) throw new Error('not in autobench mode');
         this.autobenchReport = command.report;
-        return;
+        return DONE;
       }
+      // An empty folder, as the engine opens one: no photo to select.
+      case 'openFolder':
+        return { type: 'folder', strip: EMPTY_STRIP, edit: null, reason: null };
+      case 'setView':
+      case 'setClippingOverlay':
+      case 'setClippingPreview':
+        return DONE;
+      case 'selectPhoto':
+        throw new Error(`photo ${command.photo} is not in the strip`);
+      case 'applyEditDelta':
+      case 'resetParam':
+      case 'pickWhiteBalance':
+      case 'undo':
+      case 'redo':
+        throw new Error(`photo ${command.photo} was not opened this session`);
     }
   }
 
@@ -129,6 +156,7 @@ export class FakeEngine implements Engine {
     this.frames.delete(generation - 4);
     this.emit({
       type: 'renderFinished',
+      photo: null,
       generation,
       tileCount: parts.length,
       renderMs: performance.now() - started,

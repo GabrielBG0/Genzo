@@ -9,9 +9,9 @@
 //!   and size are those of the last whole-photo count asks for none.
 //! - **While Opening** the shown preview is counted on the CPU, on the
 //!   preview pool, after the preview sink has it.
-//! - Each count goes to the caller's sink ([`crate::Engine::with_histogram_sink`])
-//!   until contract 0.5.0 makes it the `HistogramReady` event, and the
-//!   latest is kept for `GetHistogram`. Counts come in generation order:
+//! - Each count goes to the caller's sink ([`crate::Engine::with_histogram_sink`]),
+//!   which the event sink makes `HistogramReady`, and the latest is kept
+//!   for `GetHistogram`. Counts come in generation order:
 //!   one older than the latest is dropped, so a late answer never
 //!   replaces a newer frame's.
 

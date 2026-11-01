@@ -135,6 +135,8 @@ pub(crate) struct Worker {
     pub histograms: Arc<crate::histogram::Histograms>,
     pub frames: Arc<Mutex<crate::FrameStore>>,
     pub decoder: Arc<dyn Decode>,
+    /// The sharper render goes here as `RenderFinished` too.
+    pub events: Option<crate::EventSink>,
 }
 
 impl Shared {
@@ -322,6 +324,7 @@ impl Worker {
             generations: &self.generations,
             histograms: &self.histograms,
             frames: &self.frames,
+            events: self.events.as_ref(),
         };
         let Ok(Some(a)) = crate::develop::render_when(&to, false, Phase::End, again) else {
             return;
