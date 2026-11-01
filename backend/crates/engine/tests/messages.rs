@@ -513,11 +513,16 @@ fn a_command_for_a_photo_not_open_changes_nothing_and_replies_are_ordered() {
         s.run(Command::SelectPhoto { photo: p1 }),
         CommandResult::Selected { edit: Some(_), .. }
     ));
+    // p1's frame may come again from level 0, later: not p0's.
+    s.engine.wait_prefetch_idle();
     s.events();
     assert_eq!(s.edit_of(Command::Undo { photo: p0 }), undone);
     let stale = s.delta(p0, Change::Exposure(2.0), Phase::End);
     assert_eq!(stale, (undone.clone(), false));
-    assert!(frames(&s.events()).is_empty());
+    assert!(s.events().iter().all(|e| !matches!(
+        e,
+        Event::RenderFinished { photo, .. } if *photo == Some(p0)
+    )));
     let QueryResult::Edit { edit: Some(asked) } = s.engine.query(Query::GetEdit { photo: p0 })
     else {
         panic!()
