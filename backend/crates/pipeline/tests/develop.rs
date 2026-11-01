@@ -28,6 +28,8 @@
 //!   the pass, a 1:1 drag and its release render the frames they would
 //!   have without it, and no cache was made again. Turning an overlay on or
 //!   off re-runs stage 9 alone.
+//! - **GPU time**: with timestamp queries each render has one, read once;
+//!   a new white's rebuild takes longer than re-running stage 9.
 
 use std::sync::{Mutex, MutexGuard};
 
@@ -772,4 +774,31 @@ fn where_fit_reads_level0_the_pass_reads_level1() {
     d.render(&gpu, &e, one_to_one, Target::Srgb, Phase::End)
         .unwrap();
     assert_eq!(frame(&gpu, &d), settled);
+}
+
+#[test]
+fn each_render_has_its_gpu_time() {
+    let Some((_lock, gpu)) = gpu() else { return };
+    let (mut d, defaults) = opened(&gpu);
+    let warm = warmer(defaults.clone(), 4100.0);
+    let time = |d: &mut Develop, edit: &Edit| {
+        d.render(&gpu, edit, FIT, Target::Srgb, Phase::End).unwrap();
+        let ms = d.gpu_ms(&gpu).unwrap();
+        assert_eq!(d.gpu_ms(&gpu).unwrap(), None, "read once");
+        ms
+    };
+    time(&mut d, &defaults);
+    let white = time(&mut d, &warm);
+    d.set_overlay(J);
+    let output = time(&mut d, &warm);
+    if !gpu.info.timestamps {
+        assert_eq!((white, output), (None, None));
+        return;
+    }
+    let (white, output) = (white.unwrap(), output.unwrap());
+    assert!(output > 0.0, "{output} ms");
+    assert!(
+        white > output,
+        "the rebuild {white} ms, stage 9 {output} ms"
+    );
 }

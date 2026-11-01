@@ -156,6 +156,8 @@ pub struct DevelopFrame {
     /// attached yet ([`Develop::provisional`]): the caller renders it again
     /// after [`RenderThread::attach`].
     pub provisional: bool,
+    /// Its GPU time in ms ([`Develop::gpu_ms`]), with timestamp queries.
+    pub gpu_ms: Option<f64>,
 }
 
 /// What the white balance picker found ([`RenderThread::pick`]).
@@ -668,6 +670,7 @@ fn develop_render(
             histogram: d.histogram(gpu)?,
             reran,
             provisional: d.provisional(),
+            gpu_ms: d.gpu_ms(gpu)?,
         }))
     });
     match result {

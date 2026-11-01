@@ -13,6 +13,7 @@ pub mod readback;
 pub mod spike;
 pub mod synthetic;
 pub mod thread;
+pub mod timer;
 pub mod view;
 
 use std::fmt;

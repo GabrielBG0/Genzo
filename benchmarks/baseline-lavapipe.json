@@ -1,57 +1,7 @@
 {
   "_meta": {
     "method": "p95 is the slowest p95 across runs, p50 the median",
-    "runs": 8,
+    "runs": 0,
     "threshold_pct": 25.0
-  },
-  "gpu/exposure drag preview/engine": {
-    "p50_ms": 48.662227,
-    "p95_ms": 53.709609,
-    "runs": 2
-  },
-  "gpu/exposure drag preview/gpu": {
-    "p50_ms": 43.429036499999995,
-    "p95_ms": 46.938016,
-    "runs": 2
-  },
-  "gpu/exposure drag/engine": {
-    "p50_ms": 46.8873115,
-    "p95_ms": 79.32495200000001,
-    "runs": 8
-  },
-  "gpu/exposure drag/gpu": {
-    "p50_ms": 38.0408465,
-    "p95_ms": 61.710289,
-    "runs": 8
-  },
-  "gpu/white balance drag preview/engine": {
-    "p50_ms": 114.34182849999999,
-    "p95_ms": 144.821103,
-    "runs": 2
-  },
-  "gpu/white balance drag preview/gpu": {
-    "p50_ms": 107.71078449999999,
-    "p95_ms": 137.497511,
-    "runs": 2
-  },
-  "gpu/white balance drag/engine": {
-    "p50_ms": 112.7865245,
-    "p95_ms": 146.024253,
-    "runs": 8
-  },
-  "gpu/white balance drag/gpu": {
-    "p50_ms": 104.7920105,
-    "p95_ms": 137.598912,
-    "runs": 8
-  },
-  "gpu/white balance settled/engine": {
-    "p50_ms": 2344.414984,
-    "p95_ms": 3818.634861,
-    "runs": 8
-  },
-  "gpu/white balance settled/gpu": {
-    "p50_ms": 2335.4291494999998,
-    "p95_ms": 3810.207023,
-    "runs": 8
   }
 }

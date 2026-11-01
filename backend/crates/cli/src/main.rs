@@ -12,7 +12,7 @@ use std::sync::mpsc::{Receiver, channel};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use genzo_engine::api::{Command, Event, PixelFormat, Query, SpikeSource};
+use genzo_engine::api::{Command, Event, PixelFormat, Query};
 use genzo_engine::develop::{Applied, Target, ViewSpec};
 use genzo_engine::preview::Shown;
 use genzo_engine::{Engine, contract, files};
@@ -33,8 +33,9 @@ commands:
                                waits for the events still to come
   bench test-pattern [W H N]   render N test-pattern frames of W×H, print p50/p95
   bench decode FILE [T N]      decode FILE N times with T threads, print p50/p95
-  bench gpu [W H N]            render a W×H synthetic raw into a 2560 px viewport,
-                               N steps per slider, print GPU and engine p50/p95
+  bench gpu [W H N]            open a W×H synthetic raw in Develop at Fit in a
+                               2560 px viewport, N slider steps per case (drags
+                               and settled deltas), print GPU and engine p50/p95
   bench open FOLDER [W H N]    open FOLDER at Fit in a W×H view, N times: first
                                pixels, the fit render of photos not prefetched and
                                the switch to a prefetched neighbor, p50/p95
@@ -271,10 +272,24 @@ fn bench_test_pattern(args: &[&str], metrics: &mut Metrics) -> Result<(), String
     Ok(())
 }
 
-/// The 0.D measurement: what one slider step costs on the GPU at 2560 px.
-/// An exposure drag re-runs only the output stage; a white balance drag
-/// re-runs everything from the raw data (linearize, demosaic, mips).
+/// What one slider step costs at 2560 px, sent as the UI sends it: a
+/// synthetic RAW open in Develop at Fit in a 2560 px viewport, each case
+/// N steps of `ApplyEditDelta`.
+///
+/// - **Drags:** a gesture's start, N updates and its end; each update is
+///   timed. At Fit an update renders the half-size preview and sends it as
+///   JPEG tiles. An exposure drag re-runs from stage 7's input; a white
+///   balance drag applies the white as a ratio after the cached demosaic.
+/// - **Settled:** N single deltas, each its own step: an exposure re-runs
+///   the stages after sampling, a white balance rebuilds the pyramid from
+///   the RAW data (the tiles the view reads first).
+///
+/// "engine" is the request until its tiles are kept (render, readback,
+/// encoding), "gpu" the render's GPU time from timestamp queries.
 fn bench_gpu(args: &[&str], metrics: &mut Metrics) -> Result<(), String> {
+    use genzo_engine::api::edit::{Change, Phase, WhiteBalanceMode};
+    use genzo_engine::api::{ColorSpace, View};
+
     let (width, height, n) = (
         parse_num(args, 0, 8064)?,
         parse_num(args, 1, 6048)?,
@@ -286,74 +301,96 @@ fn bench_gpu(args: &[&str], metrics: &mut Metrics) -> Result<(), String> {
     if let Some(reason) = &info.fallback_reason {
         println!("fallback: {reason}");
     }
+    let timestamps = engine.gpu_timestamps();
+    println!("timestamps: {}", if timestamps { "yes" } else { "no" });
     let started = Instant::now();
+    let photo = engine
+        .open_synthetic(width, height)
+        .map_err(|e| e.to_string())?;
     engine
-        .execute(Command::LoadSpikeImage {
-            source: SpikeSource::Synthetic { width, height },
+        .execute(Command::SetView {
+            width: 2560,
+            height: 2560,
+            view: View::Fit,
+            space: ColorSpace::Srgb,
         })
         .map_err(|e| e.to_string())?;
-    // Its SpikeImageLoaded.
-    events.try_iter().for_each(drop);
     println!(
-        "load {width}x{height}: {:.0} ms",
+        "open {width}x{height} and render it at Fit: {:.0} ms",
         started.elapsed().as_secs_f64() * 1000.0
     );
 
-    let render = |exposure_ev: f32,
-                  wb: [f32; 3],
-                  interactive: bool,
-                  proxy: bool|
-     -> Result<(f64, Option<f64>), String> {
+    // One delta, and the times of the frame it rendered.
+    let send = |changes: Vec<Change>, phase: Phase| -> Result<(f64, Option<f64>), String> {
+        events.try_iter().for_each(drop);
         engine
-            .execute(Command::RenderSpike {
-                width: 2560,
-                height: 2560,
-                exposure_ev,
-                wb,
-                format: PixelFormat::Rgba8Srgb,
-                interactive,
-                proxy,
+            .execute(Command::ApplyEditDelta {
+                photo,
+                changes,
+                phase,
             })
             .map_err(|e| e.to_string())?;
-        match events.try_recv() {
-            Ok(Event::RenderFinished {
-                render_ms, gpu_ms, ..
-            }) => Ok((render_ms, gpu_ms)),
-            _ => Err("render produced no frame".into()),
-        }
+        events
+            .try_iter()
+            .find_map(|e| match e {
+                Event::RenderFinished {
+                    render_ms, gpu_ms, ..
+                } => Some((render_ms, gpu_ms)),
+                _ => None,
+            })
+            .ok_or_else(|| "a delta rendered no frame".to_owned())
     };
-    // The first render builds everything and warms the shader caches.
-    render(0.0, [1.0; 3], false, false)?;
-    // A drag sends interactive renders; the settled render after release
-    // re-runs the demosaic.
-    // "preview" is the half-size JPEG frame sent while dragging; its engine time
-    // includes the encode, which the plain drag cases do not have.
-    let cases = [
-        ("exposure drag", false, true, false),
-        ("exposure drag preview", false, true, true),
-        ("white balance drag", true, true, false),
-        ("white balance drag preview", true, true, true),
-        ("white balance settled", true, false, false),
+    let exposure = |t: f32| vec![Change::Exposure(t * 2.0 - 1.0)];
+    let white = |t: f32| {
+        vec![Change::WhiteBalance {
+            mode: WhiteBalanceMode::Custom,
+            temp: 4000.0 + 3000.0 * t,
+            tint: 10.0 * t,
+        }]
+    };
+    // The first deltas warm the shader caches of every path.
+    for (change, phase) in [
+        (exposure(0.5), Phase::Start),
+        (exposure(0.6), Phase::Update),
+        (exposure(0.7), Phase::End),
+        (white(0.5), Phase::Start),
+        (white(0.6), Phase::Update),
+        (white(0.7), Phase::End),
+    ] {
+        send(change, phase)?;
+    }
+
+    type Delta = fn(f32) -> Vec<Change>;
+    let cases: [(&str, Delta, bool); 4] = [
+        ("exposure drag", exposure, true),
+        ("white balance drag", white, true),
+        ("exposure settled", exposure, false),
+        ("white balance settled", white, false),
     ];
-    for (name, vary_wb, interactive, proxy) in cases {
+    for (name, delta, drag) in cases {
         let (mut engine_ms, mut gpu_ms) = (Vec::new(), Vec::new());
+        if drag {
+            send(delta(0.0), Phase::Start)?;
+        }
         for i in 0..n {
-            let t = i as f32 / n as f32;
-            let (e, g) = if vary_wb {
-                render(0.0, [1.0 + 0.2 * t, 1.0, 1.0 - 0.2 * t], interactive, proxy)?
-            } else {
-                render(t * 2.0 - 1.0, [1.0; 3], interactive, proxy)?
-            };
+            let t = (i + 1) as f32 / n as f32;
+            let (e, g) = send(delta(t), if drag { Phase::Update } else { Phase::End })?;
             engine_ms.push(e);
             gpu_ms.extend(g);
         }
+        if drag {
+            send(delta(1.0), Phase::End)?;
+        }
+        if timestamps && gpu_ms.len() != engine_ms.len() {
+            return Err(format!("{name}: a render without its GPU time"));
+        }
         let (e50, e95) = percentiles(engine_ms);
-        metrics.add(format!("gpu/{name}/engine"), e50, e95);
+        metrics.add(format!("develop/{name}/engine"), e50, e95);
         let gpu = if gpu_ms.is_empty() {
             "GPU n/a (no timestamp queries)".to_owned()
         } else {
             let (g50, g95) = percentiles(gpu_ms);
-            metrics.add(format!("gpu/{name}/gpu"), g50, g95);
+            metrics.add(format!("develop/{name}/gpu"), g50, g95);
             format!("GPU p50 {g50:.2} ms, p95 {g95:.2} ms")
         };
         println!(

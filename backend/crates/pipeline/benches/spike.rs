@@ -1,8 +1,8 @@
 //! Criterion benchmarks for the spike pipeline, one per re-run entry point
 //! ([`Stage`]), on a 12 MP synthetic raw into a 2560 px viewport. Each
 //! measures a whole render as the render thread sees it: the stages that
-//! re-run, the GPU wait and the readback. GPU-only time comes from
-//! `genzo-cli bench gpu`, which reads timestamp queries.
+//! re-run, the GPU wait and the readback. `genzo-cli bench gpu` read this
+//! pipeline's timestamp queries until it moved to Develop.
 //!
 //! Skipped without a GPU adapter. `GENZO_ADAPTER=software` benchmarks the
 //! software adapter.
