@@ -299,9 +299,6 @@ impl Develop {
         self.photo.as_ref().is_some_and(|p| p.src.is_some())
     }
 
-    /// Whether the last frame was drawn from level 1 where level 0 was
-    /// wanted, because the input was not attached: it renders again once
-    /// it is.
     /// The white balance picker's Temp and Tint for `point` on the shown
     /// image of `edit` (DEV-02, *The picker*), read from the photo's input
     /// on the CPU: `NeedsSource` while only its level 1 is there.
@@ -319,6 +316,9 @@ impl Develop {
         Ok(crate::picker::pick(src, Frame::of(&geometry, file), point))
     }
 
+    /// Whether the last frame was drawn from level 1 where level 0 was
+    /// wanted, because the input was not attached: it renders again once
+    /// it is.
     pub fn provisional(&self) -> bool {
         self.shown.as_ref().is_some_and(|s| s.provisional)
     }

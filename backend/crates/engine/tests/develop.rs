@@ -209,6 +209,17 @@ fn a_command_for_a_photo_no_longer_open_changes_nothing() {
     let got = engine.apply_to(b, &[white(9000.0)], Phase::End).unwrap();
     assert!(got.recorded && got.frame.is_some());
     assert_eq!(engine.undo_of(b).unwrap().state.edit, b_edit.edit);
+
+    // Nothing open, as while a switch decodes or after an empty folder.
+    let empty = std::env::temp_dir().join(format!("genzo-develop-empty-{}", std::process::id()));
+    std::fs::create_dir_all(&empty).unwrap();
+    engine.open_folder(&empty).unwrap();
+    let _ = std::fs::remove_dir(&empty);
+    assert_eq!(engine.edit_state(), None);
+    for got in [engine.undo_of(a).unwrap(), engine.redo_of(a).unwrap()] {
+        assert!(!got.recorded && got.frame.is_none());
+        assert_eq!(got.state, a_edit);
+    }
 }
 
 #[test]

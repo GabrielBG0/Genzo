@@ -344,12 +344,12 @@ impl Engine {
     ) -> Result<Applied, EngineError> {
         let changed = {
             let mut s = self.session.lock().expect("session");
-            let id = s.open.ok_or(EngineError::NoPhoto)?;
             if let Some(photo) = photo
-                && photo != id
+                && s.open != Some(photo)
             {
                 return unchanged(&s, photo);
             }
+            let id = s.open.ok_or(EngineError::NoPhoto)?;
             f(s.edits.get_mut(&id).expect("open"))
         };
         if !changed {
