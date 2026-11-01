@@ -391,6 +391,7 @@ These come from `docs/m0-results.md` and decide how the steps below are built:
 - Events: `PreviewShown`, `RenderFinished`, `HistogramReady`, `ExportProgress`, `AdapterInfo` (for the software-fallback notice).
 - Frames: the tile protocol from M0.
 - The spike commands and events go (after the in-app autobench moves to Develop's commands; see *In two parts*). Bump to 0.5.0.
+- **0.5.1** (additive): `EngineInfo.whiteBalancePresets`, the RAW presets' names and the Temp and Tint each sets, from `color::white_balance::Preset`. The dropdown names a custom white balance after the preset it matches (DEV-02), and the app cannot compute those values itself.
 
 ### Frontend (screens D1, D9; components Top bar, Left panel · Develop, Histogram + tool strip, Slider row, Panel header, Filmstrip, Status bar, Menu)
 1. **APP-01 Module switcher**: pill tabs. Develop is active (D). Library is disabled until M2. The Export tab opens the basic export view. Map and Print tabs appear only when those modules ship (Later).
@@ -421,6 +422,14 @@ These come from `docs/m0-results.md` and decide how the steps below are built:
 13. **APP-10 Undo and redo** (Ctrl Z, Ctrl Shift Z) for edits.
 14. **OUT-01 (basic)**: an export dialog with JPEG, size and quality. It is a subset of W7.
 15. The latency-spike right panel and `lib/spike/` are removed; the autobench and color probe move to a bench-only entry point.
+- **Done against the fake engine** (2026-11-01):
+  - The fake engine's Develop session: a demo folder (three RAW files, a JPEG and an unsupported file), each photo's edit and history kept as `engine::history` keeps them (`engine/edit.ts` and `engine/history.ts` mirror the Rust rules: ranges, clamping, labels, steps), frames of the open photo with their counts after them, the picker's answer and refusal, and a reply latency for tests.
+  - `develop/session.svelte.ts`: the strip and the open photo's edit on the app side. Edit commands go one at a time (the shell runs each on its own thread, so an *end* could otherwise overtake its last *update*), the newest *update* waits for the frame and replaces older ones, a reply is taken only at the photo's newest revision, and a gesture's values stay shown until every command sent has answered. A switch ends a gesture in progress with its latest value and waits for every edit command sent, so it cannot overtake an *end*; the engine ends a gesture on a switch too (`Session::end_gesture`), and the fake does as it does, keeping edits when a folder opens again.
+  - Item 4, D1: the Basic panel (profile, Color / B&W with V, the white balance presets and the picker with W and Esc, Temp in mireds and Tint, the tone and presence groups). Bright and dim sliders and the header's dot follow DEV-02's *Edited state*; DEV-13's own spec comes before another panel needs it. The slider row gained gestures (pointer and held arrow keys), typed values and a reset callback.
+  - Item 13: Ctrl Z and Ctrl Shift Z through the registry, off during a gesture; the quick actions follow them, their tooltips naming the step ("Undo Exposure  Ctrl Z"). The menu waits for APP-02's spec.
+  - Item 9, in part: the filmstrip switches photos and shows the edited dot; thumbnails and the rest of LIB-09 come with it.
+  - The spike's screen moved to `spike/SpikeShell.svelte`, shown in autobench mode and at `#/spike`, until the autobench moves to Develop's commands.
+  - Not yet: the histogram (DEV-03), a folder chosen in the real app (wiring), 1:1 and the picker at 1:1.
 
 ### Quality
 Stricter than M0 (see Decided, "Golden images in M0"). A stage or decoder is not done without all of its checks:

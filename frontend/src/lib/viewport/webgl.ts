@@ -159,6 +159,14 @@ export class WebGLViewport implements Viewport {
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
 
+  imagePoint(x: number, y: number): [number, number] | null {
+    if (this.image.width === 0) return null;
+    const p = placement(this.transform, this.image, this.size);
+    const u = (x / this.size.width - p.offsetX) / p.scaleX;
+    const v = (y / this.size.height - p.offsetY) / p.scaleY;
+    return u >= 0 && u <= 1 && v >= 0 && v <= 1 ? [u, v] : null;
+  }
+
   /**
    * Draws, then reads the drawing buffer back: the mean RGB of the
    * (2r+1)² square around each point (normalized canvas coordinates, top

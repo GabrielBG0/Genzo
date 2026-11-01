@@ -2,6 +2,7 @@
   import type { EngineInfo } from '$contract/genzo';
   import AppShell from './lib/AppShell.svelte';
   import Gallery from './lib/gallery/Gallery.svelte';
+  import SpikeShell from './lib/spike/SpikeShell.svelte';
   import { connectEngine, IncompatibleEngineError, type Engine } from './lib/engine';
 
   let route = $state(location.hash);
@@ -32,6 +33,9 @@
 
 {#if route === '#/gallery'}
   <Gallery />
+{:else if status.kind === 'ready' && (route === '#/spike' || status.info.autobench)}
+  <!-- The M0 latency spike: the bench kit's autobench drives it until it moves to Develop's commands. -->
+  <SpikeShell engine={status.engine} info={status.info} />
 {:else if status.kind === 'ready'}
   <AppShell engine={status.engine} info={status.info} />
 {:else if status.kind === 'failed'}

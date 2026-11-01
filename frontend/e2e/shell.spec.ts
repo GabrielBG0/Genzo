@@ -6,12 +6,12 @@ test('app shell renders against the fake engine', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Develop' })).toHaveAttribute('aria-current', 'page');
   await expect(page.getByRole('toolbar', { name: 'Quick actions' })).toBeVisible();
   await expect(page.getByText('Fake engine', { exact: true })).toBeVisible();
-  // The first test-pattern frame replaces the placeholder.
+  // The demo folder's first photo replaces the placeholder.
   await expect(page.getByText('No photo open')).toBeHidden();
 });
 
 test('exposure slider drives the latency probe through the spike pipeline', async ({ page }) => {
-  await page.goto('/?engine=fake');
+  await page.goto('/?engine=fake#/spike');
   const slider = page.getByRole('slider', { name: 'Exposure' });
   await slider.focus();
   for (let i = 0; i < 5; i++) await page.keyboard.press('ArrowRight');
@@ -21,7 +21,7 @@ test('exposure slider drives the latency probe through the spike pipeline', asyn
 });
 
 test('test pattern source drives the phase slider', async ({ page }) => {
-  await page.goto('/?engine=fake');
+  await page.goto('/?engine=fake#/spike');
   await page.getByRole('combobox').first().selectOption('Test pattern');
   const slider = page.getByRole('slider', { name: 'Phase' });
   await slider.focus();

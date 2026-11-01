@@ -1,4 +1,25 @@
+<script lang="ts" module>
+  /** Maps a value to its place on the track, 0 to 1, and back. Linear by default. */
+  export interface SliderScale {
+    toT(v: number): number;
+    fromT(t: number): number;
+  }
+
+  /**
+   * Reads a typed value (DEV-02): a unit suffix is ignored and a comma is a
+   * decimal point, so "5400K" and "+0,35" read. Null when it does not parse.
+   */
+  export function parseTyped(text: string): number | null {
+    const m = /^\s*([+\-−]?)(\d+(?:[.,]\d*)?|[.,]\d+)\s*[a-zA-Z%°]*\s*$/.exec(text);
+    if (!m) return null;
+    const v = Number((m[2] ?? '').replace(',', '.'));
+    return m[1] === '-' || m[1] === '−' ? -v : v;
+  }
+</script>
+
 <script lang="ts">
+  import { tick } from 'svelte';
+
   interface Props {
     label: string;
     value: number;
@@ -6,20 +27,31 @@
     max?: number;
     defaultValue?: number;
     step?: number;
+    /** The step with Shift held: ten steps unless given. */
+    shiftStep?: number;
     /** Where the fill starts: the center for bipolar sliders, else the left. */
     from?: 'center' | 'left';
     /** Track style: plain, or a color gradient for Temp and Tint. */
     track?: 'plain' | 'temp' | 'tint';
+    /** How values sit along the track (Temp is linear in mireds). */
+    scale?: SliderScale | undefined;
     /** Forces the dim (unchanged) look, as in the handoff's `dim` prop. */
     dim?: boolean;
     /** Forces the hot (hovered or dragged) look, as in the handoff's `hot` prop. */
     hot?: boolean;
     disabled?: boolean;
     format?: (v: number) => string;
-    /** Every change while dragging. The value shown is optimistic. */
+    /** A gesture starts: pointer down, or the first press of an arrow key. */
+    onstart?: (v: number) => void;
+    /** Every change while dragging or holding a key. The value shown is optimistic. */
     oninput?: (v: number) => void;
-    /** The end of a gesture: pointer up, a key press or a reset. */
+    /**
+     * The end of a gesture (pointer up, key up), or a change that is a
+     * gesture on its own: a typed value, or a reset without `onreset`.
+     */
     onchange?: (v: number) => void;
+    /** Double-click on the label or the handle. Without it, the slider goes to `defaultValue`. */
+    onreset?: () => void;
     oncontextmenu?: (e: MouseEvent) => void;
   }
 
@@ -30,28 +62,43 @@
     max = 100,
     defaultValue = 0,
     step = 1,
+    shiftStep = step * 10,
     from = min < 0 && max > 0 ? 'center' : 'left',
     track = 'plain',
+    scale,
     dim,
     hot = false,
     disabled = false,
     format = (v: number) => (Number.isInteger(step) ? String(Math.round(v)) : v.toFixed(2)),
+    onstart,
     oninput,
     onchange,
+    onreset,
     oncontextmenu,
   }: Props = $props();
 
   let trackEl: HTMLDivElement | undefined = $state();
+  let handleEl: HTMLDivElement | undefined = $state();
+  /** Where the pointer took the handle, from its center: a drag keeps it there. */
+  let grab = 0;
+  /** The last press was on the handle. The track captures the pointer, so a double-click lands there. */
+  let onHandle = false;
+  let fieldEl: HTMLInputElement | undefined = $state();
   let dragging = $state(false);
+  /** An arrow key is held: one gesture until it is released. */
+  let keyHeld = false;
+  let typing = $state(false);
+  let typed = $state('');
 
-  const pos = $derived((Math.min(max, Math.max(min, value)) - min) / (max - min));
-  const origin = $derived(from === 'center' ? (0 - min) / (max - min) : 0);
+  const toT = (v: number) => (scale ? scale.toT(v) : (v - min) / (max - min));
+  const pos = $derived(Math.min(1, Math.max(0, toT(Math.min(max, Math.max(min, value))))));
+  const origin = $derived(from === 'center' ? toT(0) : 0);
   const changed = $derived(dim === undefined ? value !== defaultValue : !dim);
   const shown = $derived(formatSigned(value));
 
   function formatSigned(v: number): string {
     const s = format(v);
-    return from === 'center' && v > 0 ? `+${s}` : s;
+    return from === 'center' && Number(s) > 0 ? `+${s}` : s;
   }
 
   function clampStep(v: number): number {
@@ -62,25 +109,34 @@
   function valueAt(clientX: number): number {
     if (!trackEl) return value;
     const r = trackEl.getBoundingClientRect();
-    const t = r.width > 0 ? (clientX - r.left) / r.width : 0;
-    return clampStep(min + Math.min(1, Math.max(0, t)) * (max - min));
+    const t = Math.min(1, Math.max(0, r.width > 0 ? (clientX - r.left) / r.width : 0));
+    return clampStep(scale ? scale.fromT(t) : min + t * (max - min));
   }
 
-  function set(v: number) {
-    if (v === value) return;
+  function set(v: number): boolean {
+    if (v === value) return false;
     value = v;
-    oninput?.(v);
+    return true;
   }
 
   function onpointerdown(e: PointerEvent) {
     if (disabled || e.button !== 0) return;
     dragging = true;
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-    set(valueAt(e.clientX));
+    // A press on the track jumps there; one on the handle takes it as it is.
+    onHandle = handleEl !== undefined && e.target === handleEl;
+    if (onHandle && handleEl) {
+      const r = handleEl.getBoundingClientRect();
+      grab = e.clientX - (r.left + r.width / 2);
+    } else {
+      grab = 0;
+      set(valueAt(e.clientX));
+    }
+    onstart?.(value);
   }
 
   function onpointermove(e: PointerEvent) {
-    if (dragging) set(valueAt(e.clientX));
+    if (dragging && set(valueAt(e.clientX - grab))) oninput?.(value);
   }
 
   function onpointerup() {
@@ -89,25 +145,61 @@
     onchange?.(value);
   }
 
-  function reset() {
+  function reset(e: MouseEvent) {
+    e.stopPropagation();
     if (disabled) return;
+    if (onreset) {
+      onreset();
+      return;
+    }
     set(defaultValue);
     onchange?.(value);
   }
 
   function onkeydown(e: KeyboardEvent) {
-    if (disabled) return;
-    const big = e.shiftKey ? 10 : 1;
+    if (disabled || typing) return;
+    const big = e.shiftKey ? shiftStep : step;
     const delta =
       e.key === 'ArrowRight' || e.key === 'ArrowUp'
-        ? step * big
+        ? big
         : e.key === 'ArrowLeft' || e.key === 'ArrowDown'
-          ? -step * big
+          ? -big
           : 0;
     if (delta === 0) return;
     e.preventDefault();
     e.stopPropagation();
-    set(clampStep(value + delta));
+    const moved = set(clampStep(value + delta));
+    if (!keyHeld) {
+      keyHeld = true;
+      onstart?.(value);
+    } else if (moved) {
+      oninput?.(value);
+    }
+  }
+
+  function onkeyup(e: KeyboardEvent) {
+    if (!keyHeld || !['ArrowRight', 'ArrowUp', 'ArrowLeft', 'ArrowDown'].includes(e.key)) return;
+    keyHeld = false;
+    onchange?.(value);
+  }
+
+  async function startTyping(e: MouseEvent) {
+    e.stopPropagation();
+    if (disabled) return;
+    typed = shown;
+    typing = true;
+    await tick();
+    fieldEl?.select();
+  }
+
+  function finishTyping(apply: boolean) {
+    if (!typing) return;
+    typing = false;
+    if (!apply) return;
+    const v = parseTyped(typed);
+    // A value that does not parse is refused; the old one stays.
+    if (v === null) return;
+    set(Math.min(max, Math.max(min, v)));
     onchange?.(value);
   }
 </script>
@@ -122,8 +214,14 @@
   aria-valuenow={value}
   aria-valuetext={shown}
   aria-disabled={disabled}
-  ondblclick={reset}
   {onkeydown}
+  {onkeyup}
+  onblur={() => {
+    if (keyHeld) {
+      keyHeld = false;
+      onchange?.(value);
+    }
+  }}
   oncontextmenu={(e) => {
     if (oncontextmenu) {
       e.preventDefault();
@@ -131,7 +229,8 @@
     }
   }}
 >
-  <span class="label">{label}</span>
+  <!-- svelte-ignore a11y_no_static_element_interactions -->
+  <span class="label" ondblclick={reset}>{label}</span>
   <!-- The slider role and keyboard handling sit on the row; the track only takes the pointer. -->
   <!-- svelte-ignore a11y_no_static_element_interactions -->
   <div
@@ -141,6 +240,7 @@
     {onpointermove}
     {onpointerup}
     onpointercancel={onpointerup}
+    ondblclick={(e) => onHandle && reset(e)}
   >
     {#if track === 'plain'}
       <div
@@ -149,9 +249,25 @@
         style:width="{Math.abs(pos - origin) * 100}%"
       ></div>
     {/if}
-    <div class="handle" style:left="{pos * 100}%"></div>
+    <div class="handle" bind:this={handleEl} style:left="{pos * 100}%"></div>
   </div>
-  <span class="value mono">{shown}</span>
+  {#if typing}
+    <input
+      class="value field mono"
+      aria-label="{label} value"
+      bind:this={fieldEl}
+      bind:value={typed}
+      onkeydown={(e) => {
+        e.stopPropagation();
+        if (e.key === 'Enter') finishTyping(true);
+        else if (e.key === 'Escape') finishTyping(false);
+      }}
+      onblur={() => finishTyping(false)}
+    />
+  {:else}
+    <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+    <span class="value mono" onclick={startTyping}>{shown}</span>
+  {/if}
 </div>
 
 <style>
@@ -182,6 +298,21 @@
     font-size: var(--text-mono);
     text-align: right;
     color: var(--text-dim);
+    cursor: text;
+  }
+
+  .field {
+    width: 100%;
+    min-width: 0;
+    padding: 0 2px;
+    font: inherit;
+    font-family: var(--font-mono);
+    font-size: var(--text-mono);
+    color: var(--text-strong);
+    background: var(--well);
+    border: 1px solid var(--field);
+    border-radius: 4px;
+    outline: none;
   }
 
   .changed .label,
@@ -236,6 +367,5 @@
     background: var(--slider-handle-bg);
     border: 1px solid var(--slider-handle-border-color);
     box-shadow: var(--slider-handle-shadow);
-    pointer-events: none;
   }
 </style>

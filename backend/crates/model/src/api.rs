@@ -59,8 +59,19 @@ pub struct HandshakeResult {
     pub engine_version: String,
 }
 
+/// A white balance preset of the RAW dropdown (DEV-02): its name and the
+/// Temp and Tint choosing it sets. The dropdown names a Custom white balance
+/// after the preset whose values match it, rounded as the sliders show them.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "camelCase")]
+pub struct WhiteBalancePreset {
+    pub name: String,
+    pub temp: f32,
+    pub tint: f32,
+}
+
 /// Static facts about the running engine.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct EngineInfo {
     pub engine_version: String,
@@ -70,6 +81,9 @@ pub struct EngineInfo {
     /// where no DevTools attach exists). The frontend runs a scripted drag and
     /// sends the result with [`Command::SaveAutobenchReport`].
     pub autobench: bool,
+    /// The RAW white balance presets, in the dropdown's order after As
+    /// Shot (contract 0.5.1). Non-RAW photos have none.
+    pub white_balance_presets: Vec<WhiteBalancePreset>,
 }
 
 /// Where the raw image of the 0.D GPU spike comes from.

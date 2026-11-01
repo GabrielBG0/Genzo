@@ -9,7 +9,7 @@ use crate::api::{
     AdapterInfo, AdapterKind, CaptureTime, Clipping, ClippingPreview, ColorSpace, Command,
     CommandResult, Counted, Direction, EngineInfo, Event, Handshake, HandshakeResult, Histogram,
     PhotoEdit, PhotoKind, Query, QueryResult, Rational, Shooting, SpikeSource, Strip, StripPhoto,
-    View,
+    View, WhiteBalancePreset,
 };
 use crate::contract::{CONTRACT_VERSION, ContractVersion};
 use crate::edit::{
@@ -32,6 +32,7 @@ pub fn generate() -> String {
         decl::<AdapterInfo>(&cfg),
         decl::<Handshake>(&cfg),
         decl::<HandshakeResult>(&cfg),
+        decl::<WhiteBalancePreset>(&cfg),
         decl::<EngineInfo>(&cfg),
         decl::<PixelFormat>(&cfg),
         decl::<Rect>(&cfg),

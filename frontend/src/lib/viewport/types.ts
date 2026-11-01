@@ -37,5 +37,10 @@ export interface Viewport {
   resize(width: number, height: number, dpr: number): void;
   /** Draws now. Called on the next animation frame by the owner. */
   draw(): void;
+  /**
+   * The point of the shown image under (x, y), CSS pixels from the drawing
+   * area's top left, normalized to 0..1; null off the image or before any.
+   */
+  imagePoint(x: number, y: number): [number, number] | null;
   destroy(): void;
 }
