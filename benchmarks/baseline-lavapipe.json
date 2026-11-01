@@ -1,7 +1,47 @@
 {
   "_meta": {
     "method": "p95 is the slowest p95 across runs, p50 the median",
-    "runs": 0,
+    "runs": 5,
     "threshold_pct": 25.0
+  },
+  "develop/exposure drag/engine": {
+    "p50_ms": 234.83839,
+    "p95_ms": 241.83874,
+    "runs": 5
+  },
+  "develop/exposure drag/gpu": {
+    "p50_ms": 227.154075,
+    "p95_ms": 233.842371,
+    "runs": 5
+  },
+  "develop/exposure settled/engine": {
+    "p50_ms": 522.535379,
+    "p95_ms": 534.775279,
+    "runs": 5
+  },
+  "develop/exposure settled/gpu": {
+    "p50_ms": 512.528225,
+    "p95_ms": 523.36922,
+    "runs": 5
+  },
+  "develop/white balance drag/engine": {
+    "p50_ms": 1530.710131,
+    "p95_ms": 1542.473763,
+    "runs": 5
+  },
+  "develop/white balance drag/gpu": {
+    "p50_ms": 1523.104262,
+    "p95_ms": 1535.368087,
+    "runs": 5
+  },
+  "develop/white balance settled/engine": {
+    "p50_ms": 8806.982988,
+    "p95_ms": 8969.229661,
+    "runs": 5
+  },
+  "develop/white balance settled/gpu": {
+    "p50_ms": 8793.826429,
+    "p95_ms": 8959.884633,
+    "runs": 5
   }
 }
