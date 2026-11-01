@@ -181,3 +181,100 @@ fn a_photo_under_the_smallest_crop_renders() {
         assert!(!pixels(&a).is_empty(), "{w} x {h}");
     }
 }
+
+#[test]
+fn a_command_for_a_photo_no_longer_open_changes_nothing() {
+    let _lock = ONE_DEVICE.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(engine) = engine() else { return };
+    let a = engine.open_source(source(), 6).unwrap();
+    engine.set_view(VIEW, Target::Srgb).unwrap();
+    engine.apply_to(a, &[white(4000.0)], Phase::End).unwrap();
+    let a_edit = engine.edit_state().unwrap();
+    let b = engine.open_source(source(), 6).unwrap();
+    engine.set_view(VIEW, Target::Srgb).unwrap();
+    let b_edit = engine.edit_state().unwrap();
+    // A delta, an undo and a redo sent for A before the switch.
+    for got in [
+        engine.apply_to(a, &[white(9000.0)], Phase::End).unwrap(),
+        engine.undo_of(a).unwrap(),
+        engine.redo_of(a).unwrap(),
+        engine.pick_white_balance(a, (0.5, 0.5)).unwrap(),
+    ] {
+        assert!(!got.recorded);
+        assert!(got.frame.is_none());
+        assert_eq!(got.state, a_edit, "A's edit, as it is");
+    }
+    assert_eq!(engine.edit_state().unwrap(), b_edit, "B untouched");
+    // For the open photo, as before.
+    let got = engine.apply_to(b, &[white(9000.0)], Phase::End).unwrap();
+    assert!(got.recorded && got.frame.is_some());
+    assert_eq!(engine.undo_of(b).unwrap().state.edit, b_edit.edit);
+
+    // Nothing open, as while a switch decodes or after an empty folder.
+    let empty = std::env::temp_dir().join(format!("genzo-develop-empty-{}", std::process::id()));
+    std::fs::create_dir_all(&empty).unwrap();
+    engine.open_folder(&empty).unwrap();
+    let _ = std::fs::remove_dir(&empty);
+    assert_eq!(engine.edit_state(), None);
+    for got in [engine.undo_of(a).unwrap(), engine.redo_of(a).unwrap()] {
+        assert!(!got.recorded && got.frame.is_none());
+        assert_eq!(got.state, a_edit);
+    }
+}
+
+#[test]
+fn the_picker_records_its_step_or_says_why_not() {
+    use genzo_engine::EngineError;
+    use genzo_engine::api::edit::WhiteBalanceMode;
+    use genzo_pipeline::picker::pick;
+    use genzo_pipeline::reference::sampling::Frame;
+
+    let _lock = ONE_DEVICE.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(engine) = engine() else { return };
+    let src = source();
+    let photo = engine.open_source(source(), 1).unwrap();
+    engine.set_view(VIEW, Target::Srgb).unwrap();
+    // The synthetic scene has areas both ways; the CPU picker decides.
+    let points: Vec<_> = (1..10)
+        .flat_map(|y| (1..10).map(move |x| (f64::from(x) / 10.0, f64::from(y) / 10.0)))
+        .collect();
+    let (mut picked, mut refused) = (0, 0);
+    for p in points {
+        let before = engine.edit_state().unwrap();
+        match (
+            pick(&src, Frame::from(1), p),
+            engine.pick_white_balance(photo, p),
+        ) {
+            (Ok((temp, tint)), Ok(a)) => {
+                picked += 1;
+                let wb = &a.state.edit.white_balance;
+                assert_eq!(wb.mode, WhiteBalanceMode::Custom);
+                assert_eq!((wb.temp, wb.tint), (temp as f32, tint as f32), "{p:?}");
+                assert!(a.frame.is_some());
+                if a.recorded {
+                    assert_eq!(a.state.undo.as_deref(), Some("White balance: picked"));
+                }
+            }
+            (Err(e), Err(EngineError::Refused(m))) => {
+                refused += 1;
+                assert_eq!(m, e.message(), "{p:?}");
+                assert_eq!(engine.edit_state().unwrap(), before, "nothing changed");
+            }
+            (want, got) => panic!("{p:?}: {want:?} but {got:?}"),
+        }
+    }
+    assert!(picked > 0, "{picked} picked, {refused} refused");
+    // A black photo is too dark everywhere.
+    let mut dark = source();
+    dark.data.fill(0);
+    let photo = engine.open_source(dark, 1).unwrap();
+    engine.set_view(VIEW, Target::Srgb).unwrap();
+    let before = engine.edit_state().unwrap();
+    match engine.pick_white_balance(photo, (0.5, 0.5)) {
+        Err(EngineError::Refused(m)) => {
+            assert_eq!(m, "Can't set white balance here: the area is too dark")
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(engine.edit_state().unwrap(), before);
+}

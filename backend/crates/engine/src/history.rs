@@ -117,16 +117,27 @@ impl PhotoEdits {
 
     /// Applies `changes` in `phase`. Returns whether a step was recorded.
     pub fn apply(&mut self, changes: &[Change], phase: Phase) -> Result<bool, Refused> {
+        self.apply_labelled(changes, phase, None)
+    }
+
+    /// [`Self::apply`], its step labelled `label` instead of after its
+    /// control: "White balance: picked" (DEV-02).
+    pub fn apply_labelled(
+        &mut self,
+        changes: &[Change],
+        phase: Phase,
+        label: Option<String>,
+    ) -> Result<bool, Refused> {
         let base = self.current().clone();
         let mut edit = base.clone();
         for c in changes {
             edit = self.change(edit, c)?;
         }
-        let label = match changes {
+        let label = label.unwrap_or_else(|| match changes {
             [one] => one.label(),
             [first, ..] if changes.iter().all(|c| c.param() == first.param()) => first.label(),
             _ => "Edit".into(),
-        };
+        });
         let label = self.gesture.as_ref().map_or(label, |g| g.label.clone());
         if phase != Phase::End {
             self.gesture = Some(Step { label, edit });

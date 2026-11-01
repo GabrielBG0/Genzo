@@ -48,6 +48,10 @@ pub struct Shown {
     /// `None` when the file has none, or it cannot be read: the neutral
     /// fill and the file name.
     pub preview: Option<Arc<ShownPreview>>,
+    /// The preview's generation and its number of tile messages, under
+    /// which the engine keeps it, lossless ([`crate::Engine::frame`]), and
+    /// counts its histogram. It sorts before the photo's first frame.
+    pub frame: Option<(u64, u32)>,
 }
 
 /// Receives each switch's [`Shown`], on the switching thread, before the

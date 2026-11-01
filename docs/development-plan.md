@@ -373,6 +373,8 @@ These come from `docs/m0-results.md` and decide how the steps below are built:
    - Done: `bench open FOLDER [W H N]` (with step 9), and its smoke test on small PNGs. Not yet in `scripts/gpu-check.sh`.
 
 ### Contract
+- **In two parts** (owner, 2026-11-01): contract 0.5.0 carries everything here but export; `ExportJpeg` and `ExportProgress` come in 0.6.0 with step 10. The spike commands stay until `bench gpu` measures the Develop path, in its own change with a new RTX 3060 baseline.
+  - Done before it, in the engine: Develop's frames kept as tile messages (`engine::frames`), the commands that name a photo checked against the open one as they act (a delta sent before a switch changes nothing), and the white balance picker (`pick_white_balance`, on the render thread, whose step is "White balance: picked").
 - Commands: `OpenFolder`, `SelectPhoto`, `SetView`, `ApplyEditDelta`, `ResetParam`, `PickWhiteBalance`, `SetClippingOverlay`, `SetClippingPreview`, `Undo`, `Redo`, `ExportJpeg`.
   - `PickWhiteBalance` carries a point on the shown image. The engine samples there, applies the white balance and records the step (DEV-02).
   - `SetView` carries the viewport size, the zoom (Fit or 1:1) and the visible rectangle, so the engine renders only what is seen.

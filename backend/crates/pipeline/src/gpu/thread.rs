@@ -36,6 +36,7 @@ use super::spike::{BayerImage, Frame, SpikeParams, SpikePipeline};
 use super::{AdapterChoice, Gpu, GpuError, GpuInfo};
 use crate::camera_color::CameraTransform;
 use crate::histogram::{Histogram, Overlay};
+use crate::picker::PickError;
 use crate::raw::RawSource;
 use crate::reference::sampling::ViewSpec;
 
@@ -70,6 +71,13 @@ enum Request {
     Develop {
         request: Box<DevelopRequest>,
         reply: Reply<Option<DevelopFrame>>,
+    },
+    /// The white balance picker on photo `id`'s input.
+    Pick {
+        id: u64,
+        edit: Box<Edit>,
+        point: (f64, f64),
+        reply: Reply<Picked>,
     },
     /// Queues photo `id`'s level 1.
     Prefetch(Box<Queued>),
@@ -148,6 +156,19 @@ pub struct DevelopFrame {
     /// attached yet ([`Develop::provisional`]): the caller renders it again
     /// after [`RenderThread::attach`].
     pub provisional: bool,
+}
+
+/// What the white balance picker found ([`RenderThread::pick`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Picked {
+    /// The Temp and Tint that make the area neutral.
+    White { temp: f64, tint: f64 },
+    /// Why the area cannot be made neutral.
+    Refused(PickError),
+    /// Only the photo's level 1 is there; its input comes later.
+    NotDecoded,
+    /// Another photo is open.
+    NotOpen,
 }
 
 /// The receiving end of a submitted Develop render.
@@ -297,6 +318,19 @@ impl RenderThread {
             reply,
         })?;
         Ok(rx)
+    }
+
+    /// The white balance picker's Temp and Tint for `point` on photo `id`'s
+    /// shown image of `edit` (DEV-02), read from its input.
+    pub fn pick(&self, id: u64, edit: &Edit, point: (f64, f64)) -> Result<Picked, GpuError> {
+        let (reply, rx) = mpsc::channel();
+        self.send(Request::Pick {
+            id,
+            edit: Box::new(edit.clone()),
+            point,
+            reply,
+        })?;
+        rx.recv().map_err(|_| GpuError::ThreadGone)?
     }
 
     /// Queues the whole photo's histogram for the view of Develop render
@@ -541,6 +575,23 @@ fn run(gpu: Gpu, rx: Receiver<Request>) {
                     if Some(i) != newest_develop || open != Some(request.photo) =>
                 {
                     let _ = reply.send(Ok(None));
+                }
+                Request::Pick {
+                    id,
+                    edit,
+                    point,
+                    reply,
+                } => {
+                    let picked = match develop.as_ref().filter(|_| open == Some(id)) {
+                        None => Ok(Picked::NotOpen),
+                        Some(d) => match d.pick(&edit, point) {
+                            Ok(Ok((temp, tint))) => Ok(Picked::White { temp, tint }),
+                            Ok(Err(e)) => Ok(Picked::Refused(e)),
+                            Err(DevelopError::NeedsSource) => Ok(Picked::NotDecoded),
+                            Err(e) => Err(develop_error(e)),
+                        },
+                    };
+                    let _ = reply.send(picked);
                 }
                 Request::Prefetch(q) => prefetch.push_back(q),
                 Request::Histogram(w) => {

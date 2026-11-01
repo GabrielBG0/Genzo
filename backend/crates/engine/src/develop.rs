@@ -21,12 +21,12 @@ use genzo_jobs::Generations;
 
 use genzo_model::edit::{Change, Edit, Phase};
 use genzo_pipeline::gpu::develop::{Photo, as_shot};
-use genzo_pipeline::gpu::thread::{DevelopFrame, DevelopRequest, RenderThread};
+use genzo_pipeline::gpu::thread::{DevelopFrame, DevelopRequest, Picked, RenderThread};
 use genzo_pipeline::raw::{RawError, RawSource};
 
 use crate::histogram::{Counted, Histograms, Key, Overlay, Preview};
 use crate::history::{PhotoEdits, Refused};
-use crate::{Engine, EngineError};
+use crate::{Engine, EngineError, FrameStore};
 
 pub use genzo_color::output::Target;
 pub use genzo_pipeline::gpu::develop::{Readback, Reran};
@@ -115,6 +115,9 @@ pub struct Applied {
     pub state: EditState,
     /// The render, or None when a newer request replaced it.
     pub frame: Option<DevelopFrame>,
+    /// The number of tile messages its frame is kept as, under its
+    /// generation ([`Engine::frame`]); `None` without a frame.
+    pub tiles: Option<u32>,
 }
 
 impl From<Refused> for EngineError {
@@ -184,6 +187,90 @@ impl Engine {
         self.render(recorded, phase)
     }
 
+    /// [`Self::apply`] for photo `photo`, checked as the change is made: a
+    /// delta for a photo no longer open (one sent before a switch) changes
+    /// nothing, and returns that photo's edit as it is, with no frame.
+    pub fn apply_to(
+        &self,
+        photo: u64,
+        changes: &[Change],
+        phase: Phase,
+    ) -> Result<Applied, EngineError> {
+        let recorded = {
+            let mut s = self.session.lock().expect("session");
+            if s.open != Some(photo) {
+                return unchanged(&s, photo);
+            }
+            s.edits
+                .get_mut(&photo)
+                .expect("open")
+                .apply(changes, phase)?
+        };
+        self.render(recorded, phase)
+    }
+
+    /// [`Self::undo`] for photo `photo`, as [`Self::apply_to`] checks it.
+    pub fn undo_of(&self, photo: u64) -> Result<Applied, EngineError> {
+        self.history_of(Some(photo), PhotoEdits::undo)
+    }
+
+    /// [`Self::redo`] for photo `photo`, as [`Self::apply_to`] checks it.
+    pub fn redo_of(&self, photo: u64) -> Result<Applied, EngineError> {
+        self.history_of(Some(photo), PhotoEdits::redo)
+    }
+
+    /// The white balance picker (DEV-02, *The picker*): makes the area
+    /// around `point` on photo `photo`'s shown image (normalized, after
+    /// geometry) neutral, records one step, "White balance: picked", and
+    /// renders. Refused, with the status bar's reason, when the area is
+    /// clipped or too dark or the camera records no color, and while the
+    /// photo's input is still decoding. For a photo not open, or during a
+    /// gesture, nothing changes.
+    pub fn pick_white_balance(
+        &self,
+        photo: u64,
+        point: (f64, f64),
+    ) -> Result<Applied, EngineError> {
+        let edit = {
+            let s = self.session.lock().expect("session");
+            if s.open != Some(photo) || s.in_gesture() {
+                return unchanged(&s, photo);
+            }
+            s.edits[&photo].current().clone()
+        };
+        let (temp, tint) = match self.gpu()?.pick(photo, &edit, point)? {
+            Picked::White { temp, tint } => (temp as f32, tint as f32),
+            Picked::Refused(e) => return Err(EngineError::Refused(e.message().into())),
+            Picked::NotDecoded => {
+                return Err(EngineError::Refused(
+                    "Can't set white balance yet: the photo is still opening".into(),
+                ));
+            }
+            Picked::NotOpen => {
+                let s = self.session.lock().expect("session");
+                return unchanged(&s, photo);
+            }
+        };
+        let change = Change::WhiteBalance {
+            mode: genzo_model::edit::WhiteBalanceMode::Custom,
+            temp,
+            tint,
+        };
+        let recorded = {
+            let mut s = self.session.lock().expect("session");
+            // A switch or a gesture since the pick read the photo: dropped.
+            if s.open != Some(photo) || s.in_gesture() {
+                return unchanged(&s, photo);
+            }
+            s.edits.get_mut(&photo).expect("open").apply_labelled(
+                &[change],
+                Phase::End,
+                Some("White balance: picked".into()),
+            )?
+        };
+        self.render(recorded, Phase::End)
+    }
+
     /// Undoes the open photo's last step and renders it settled. Nothing
     /// changes without a step to undo, or during a gesture.
     pub fn undo(&self) -> Result<Applied, EngineError> {
@@ -247,8 +334,21 @@ impl Engine {
     }
 
     fn history(&self, f: fn(&mut PhotoEdits) -> bool) -> Result<Applied, EngineError> {
+        self.history_of(None, f)
+    }
+
+    fn history_of(
+        &self,
+        photo: Option<u64>,
+        f: fn(&mut PhotoEdits) -> bool,
+    ) -> Result<Applied, EngineError> {
         let changed = {
             let mut s = self.session.lock().expect("session");
+            if let Some(photo) = photo
+                && s.open != Some(photo)
+            {
+                return unchanged(&s, photo);
+            }
             let id = s.open.ok_or(EngineError::NoPhoto)?;
             f(s.edits.get_mut(&id).expect("open"))
         };
@@ -258,6 +358,7 @@ impl Engine {
                 recorded: false,
                 state,
                 frame: None,
+                tiles: None,
             });
         }
         self.render(false, Phase::End)
@@ -265,17 +366,25 @@ impl Engine {
 
     /// Renders the open photo's current edit with a new generation.
     pub(crate) fn render(&self, recorded: bool, phase: Phase) -> Result<Applied, EngineError> {
-        render_when(
-            self.gpu()?,
-            &self.session,
-            &self.generations,
-            &self.histograms,
-            recorded,
-            phase,
-            |_| true,
-        )
-        .map(|a| a.expect("always rendered"))
+        let to = To {
+            gpu: self.gpu()?,
+            session: &self.session,
+            generations: &self.generations,
+            histograms: &self.histograms,
+            frames: &self.frames,
+        };
+        render_when(&to, recorded, phase, |_| true).map(|a| a.expect("always rendered"))
     }
+}
+
+/// What a render goes through, and where its frame and counts go.
+#[derive(Clone, Copy)]
+pub(crate) struct To<'a> {
+    pub(crate) gpu: &'a RenderThread,
+    pub(crate) session: &'a Arc<Mutex<Session>>,
+    pub(crate) generations: &'a Generations,
+    pub(crate) histograms: &'a Arc<Histograms>,
+    pub(crate) frames: &'a Mutex<FrameStore>,
 }
 
 /// Renders the open photo's current edit with a new generation, and notes
@@ -286,14 +395,18 @@ impl Engine {
 /// `None`, unless `when` holds of the session as the generation is taken:
 /// the check and the request are one step.
 pub(crate) fn render_when(
-    gpu: &RenderThread,
-    session: &Arc<Mutex<Session>>,
-    generations: &Generations,
-    histograms: &Arc<Histograms>,
+    to: &To<'_>,
     recorded: bool,
     phase: Phase,
     when: impl FnOnce(&Session) -> bool,
 ) -> Result<Option<Applied>, EngineError> {
+    let To {
+        gpu,
+        session,
+        generations,
+        histograms,
+        frames,
+    } = *to;
     let (state, request) = {
         let mut s = session.lock().expect("session");
         let id = s.open.ok_or(EngineError::NoPhoto)?;
@@ -325,8 +438,20 @@ pub(crate) fn render_when(
         target: request.target,
         view: request.view,
     };
+    let target = request.target;
     let frame = gpu.develop(request)?;
+    let mut tiles = None;
     if let Some(f) = &frame {
+        // Kept before its histogram goes, which can follow it at once.
+        if let Some((bytes, count)) =
+            crate::frames::encode(generation, &f.readback, target, phase.interactive())
+        {
+            frames
+                .lock()
+                .expect("frame store poisoned")
+                .put(generation, bytes);
+            tiles = Some(count);
+        }
         let last = {
             let mut s = session.lock().expect("session");
             // A frame older than the last one issued says nothing about it.
@@ -350,6 +475,7 @@ pub(crate) fn render_when(
         recorded,
         state,
         frame,
+        tiles,
     }))
 }
 
@@ -368,6 +494,18 @@ pub(crate) fn decode(data: &[u8]) -> Result<(RawSource, u8), EngineError> {
             RawError::Unsupported(m) => EngineError::Unsupported(m),
             e @ RawError::Encoding(_) => EngineError::Unsupported(e.to_string()),
         })
+}
+
+/// What a command for photo `photo` answers when it changes nothing: its
+/// edit as it is, with no frame.
+fn unchanged(s: &Session, photo: u64) -> Result<Applied, EngineError> {
+    let p = s.edits.get(&photo).ok_or(EngineError::NoPhoto)?;
+    Ok(Applied {
+        recorded: false,
+        state: state(photo, p),
+        frame: None,
+        tiles: None,
+    })
 }
 
 fn state(id: u64, p: &PhotoEdits) -> EditState {
