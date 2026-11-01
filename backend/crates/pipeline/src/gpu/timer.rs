@@ -94,15 +94,17 @@ impl SpanTimer {
         rx.recv()
             .map_err(|e| GpuError::Readback(e.to_string()))?
             .map_err(|e| GpuError::Readback(e.to_string()))?;
-        let ms = {
-            let mapped = self
-                .readback
-                .get_mapped_range(..)
-                .map_err(|e| GpuError::Readback(e.to_string()))?;
-            let ts: &[u64] = bytemuck::cast_slice(&mapped);
-            ts[1].saturating_sub(ts[0]) as f64 * self.period_ns / 1e6
-        };
+        // Mapped from here: unmapped on every path, or the next span's copy
+        // into it fails.
+        let ms = self
+            .readback
+            .get_mapped_range(..)
+            .map(|mapped| {
+                let ts: &[u64] = bytemuck::cast_slice(&mapped);
+                ts[1].saturating_sub(ts[0]) as f64 * self.period_ns / 1e6
+            })
+            .map_err(|e| GpuError::Readback(e.to_string()));
         self.readback.unmap();
-        Ok(Some(ms))
+        ms.map(Some)
     }
 }

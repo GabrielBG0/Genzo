@@ -27,7 +27,8 @@ encoding) and `develop/<case>/gpu` the render's GPU time, from timestamp queries
 around the whole render (`pipeline::gpu::timer`).
 
 Until 2026-11-01 it measured the M0 spike pipeline (`gpu/<case>/...` metrics). Those
-numbers are not comparable, so both baselines were rebuilt for the Develop cases.
+numbers are not comparable: `baseline-rtx3060.json` was made for the Develop cases
+from five gpu-check candidates, and `baseline-lavapipe.json` from five CI runs (below).
 
 ## Why the lavapipe baseline uses 25 percent and the slowest run
 
