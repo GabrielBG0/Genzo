@@ -1,6 +1,6 @@
 <script lang="ts">
   import { untrack } from 'svelte';
-  import type { EngineInfo } from '$contract/genzo';
+  import type { CommandResult, EngineInfo } from '$contract/genzo';
   import Filmstrip from './components/Filmstrip.svelte';
   import Histogram from './components/Histogram.svelte';
   import LeftPanelDevelop from './components/LeftPanelDevelop.svelte';
@@ -67,7 +67,7 @@
 
   const wb = (t: number): [number, number, number] => [1 + t * 0.004, 1, 1 - t * 0.004];
 
-  function render(interactive: boolean): Promise<void> {
+  function render(interactive: boolean): Promise<CommandResult> {
     const [width, height] = SIZES[size];
     if (SOURCES[source] === null) {
       return engine.execute({ type: 'renderTestPattern', width, height, phase: phase / 100, format: 'rgba8Srgb' });
@@ -87,7 +87,7 @@
   }
 
   // While dragging: interactive renders, timed by the probe.
-  const probe = new LatencyProbe<null>(() => render(true));
+  const probe = new LatencyProbe<null>(() => render(true).then(() => {}));
   // At the end of a gesture: one full-quality render, not timed. It may replace
   // a drag render on the render thread, so that drag sample is dropped too.
   function settle() {

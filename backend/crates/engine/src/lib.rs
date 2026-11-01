@@ -3,6 +3,9 @@
 //! The shell and the cli talk to the backend through this crate alone. It
 //! exposes commands, queries, events and a frame stream, and re-exports the
 //! contract types so callers never depend on `genzo-model` directly.
+//!
+//! A command answers with its result; every event goes to the event sink
+//! ([`Engine::with_event_sink`]), from whichever thread produced it.
 
 use std::collections::{BTreeMap, VecDeque};
 use std::path::PathBuf;
@@ -11,8 +14,8 @@ use std::time::Instant;
 
 use genzo_jobs::Generations;
 use genzo_model::api::{
-    AdapterInfo, AdapterKind, Command, EngineInfo, Event, Handshake, HandshakeResult, Query,
-    QueryResult, SpikeSource,
+    AdapterInfo, AdapterKind, Command, CommandResult, EngineInfo, Event, Handshake,
+    HandshakeResult, Query, QueryResult, SpikeSource,
 };
 use genzo_model::contract::ContractVersion;
 use genzo_model::frame::PixelFormat;
@@ -28,6 +31,7 @@ pub mod folder;
 mod frames;
 pub mod histogram;
 pub mod history;
+mod messages;
 mod prefetch;
 pub mod preview;
 pub mod strip;
@@ -84,6 +88,12 @@ pub enum EngineError {
     Gpu(String),
     #[error("no photo is open")]
     NoPhoto,
+    /// A command for a photo never opened this session.
+    #[error("photo {0} was not opened this session")]
+    UnknownPhoto(u64),
+    /// A request no frontend sends: a view or a point that is not a number.
+    #[error("invalid request: {0}")]
+    Invalid(String),
     #[error("photo {0} is not in the strip")]
     NotInStrip(u64),
     /// A delta the engine refused; the edit keeps its last valid state.
@@ -143,6 +153,29 @@ pub struct Engine {
     preview_sink: Option<preview::Sink>,
     /// The histogram's counts, their sink and the latest (DEV-03).
     histograms: Arc<histogram::Histograms>,
+    /// Where events go.
+    events: Option<EventSink>,
+}
+
+/// Receives every event, on the thread that produced it: a command's own,
+/// the histogram's waiter, the prefetch worker or the preview pool. It
+/// must not call back into the engine.
+pub type Events = Arc<dyn Fn(Event) + Send + Sync>;
+
+/// The engine's event sink, for its `Debug`.
+#[derive(Clone)]
+pub(crate) struct EventSink(Events);
+
+impl EventSink {
+    pub(crate) fn send(&self, event: Event) {
+        (self.0)(event)
+    }
+}
+
+impl std::fmt::Debug for EventSink {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("EventSink")
+    }
 }
 
 #[derive(Debug, Default)]
@@ -230,6 +263,7 @@ impl Engine {
             worker: Mutex::new(None),
             preview_sink: None,
             histograms: Arc::default(),
+            events: None,
         }
     }
 
@@ -240,17 +274,43 @@ impl Engine {
     }
 
     /// This engine, handing each strip switch's first pixels to `sink`
-    /// before the photo decodes (until contract 0.5.0's `PreviewShown`).
+    /// before the photo decodes. [`Self::with_event_sink`] sets it to send
+    /// `PreviewShown`.
     pub fn with_preview_sink(mut self, sink: preview::PreviewSink) -> Self {
         self.preview_sink = Some(preview::Sink(sink));
         self
     }
 
-    /// This engine, handing each histogram count to `sink` (until contract
-    /// 0.5.0's `HistogramReady`).
+    /// This engine, handing each histogram count to `sink`.
+    /// [`Self::with_event_sink`] sets it to send `HistogramReady`.
     pub fn with_histogram_sink(mut self, sink: histogram::HistogramSink) -> Self {
         self.histograms = Arc::new(histogram::Histograms::with_sink(sink));
         self
+    }
+
+    /// This engine, sending every event to `sink`: the spike's, each
+    /// Develop frame's `RenderFinished` (the prefetch's sharper render
+    /// too), `PreviewShown` and `HistogramReady`. A frame's
+    /// `RenderFinished` goes before its `HistogramReady` (DEV-03). It
+    /// replaces the preview and histogram sinks.
+    pub fn with_event_sink(self, sink: Events) -> Self {
+        let (preview, counts) = (sink.clone(), sink.clone());
+        let mut engine = self
+            .with_preview_sink(Arc::new(move |s: preview::Shown| {
+                preview(messages::preview_shown(&s))
+            }))
+            .with_histogram_sink(Arc::new(move |c: histogram::Counted| {
+                counts(messages::histogram_ready(c))
+            }));
+        engine.events = Some(EventSink(sink));
+        engine
+    }
+
+    /// Sends `event` to the sink, if there is one.
+    fn emit(&self, event: Event) {
+        if let Some(sink) = &self.events {
+            sink.send(event);
+        }
     }
 
     pub fn info(&self) -> EngineInfo {
@@ -275,9 +335,7 @@ impl Engine {
     }
 
     pub fn query(&self, query: Query) -> QueryResult {
-        match query {
-            Query::GetEngineInfo => QueryResult::EngineInfo { info: self.info() },
-        }
+        self.develop_query(query)
     }
 
     fn gpu(&self) -> Result<&RenderThread, EngineError> {
@@ -286,9 +344,11 @@ impl Engine {
         })
     }
 
-    /// Runs a command and returns the events it produced.
-    pub fn execute(&self, command: Command) -> Result<Vec<Event>, EngineError> {
-        match command {
+    /// Runs a command and returns its result. Its events go to the sink
+    /// before it returns, but for those that come later: the whole photo's
+    /// histogram, the prefetch's sharper render.
+    pub fn execute(&self, command: Command) -> Result<CommandResult, EngineError> {
+        let events = match command {
             Command::RenderTestPattern {
                 width,
                 height,
@@ -304,14 +364,15 @@ impl Engine {
                         genzo_pipeline::test_pattern::render_tile(width, height, rect, phase)
                     })
                 else {
-                    return Ok(Vec::new());
+                    return Ok(CommandResult::Done);
                 };
-                Ok(vec![Event::RenderFinished {
+                vec![Event::RenderFinished {
+                    photo: None,
                     generation,
                     tile_count,
                     render_ms: started.elapsed().as_secs_f64() * 1000.0,
                     gpu_ms: None,
-                }])
+                }]
             }
             Command::LoadSpikeImage {
                 source: SpikeSource::Synthetic { width, height },
@@ -321,7 +382,7 @@ impl Engine {
                 let image = genzo_pipeline::gpu::synthetic::scene_mosaic(width & !1, height & !1);
                 let (width, height) = (image.width, image.height);
                 self.gpu()?.set_image(Arc::new(image))?;
-                Ok(vec![Event::SpikeImageLoaded { width, height }])
+                vec![Event::SpikeImageLoaded { width, height }]
             }
             Command::RenderSpike {
                 width,
@@ -352,18 +413,20 @@ impl Engine {
                 };
                 // None: a newer render replaced this one on the render thread.
                 let Some(frame) = self.gpu()?.render(params, (width, height))? else {
-                    return Ok(Vec::new());
+                    return Ok(CommandResult::Done);
                 };
                 if proxy {
                     let Some(band_count) = self.store_jpeg_bands(generation, &frame, format) else {
-                        return Ok(Vec::new());
+                        return Ok(CommandResult::Done);
                     };
-                    return Ok(vec![Event::RenderFinished {
+                    self.emit(Event::RenderFinished {
+                        photo: None,
                         generation,
                         tile_count: band_count,
                         render_ms: started.elapsed().as_secs_f64() * 1000.0,
                         gpu_ms: frame.gpu_ms,
-                    }]);
+                    });
+                    return Ok(CommandResult::Done);
                 }
                 let row = frame.width as usize * 4;
                 let Some(tile_count) =
@@ -379,14 +442,15 @@ impl Engine {
                         out
                     })
                 else {
-                    return Ok(Vec::new());
+                    return Ok(CommandResult::Done);
                 };
-                Ok(vec![Event::RenderFinished {
+                vec![Event::RenderFinished {
+                    photo: None,
                     generation,
                     tile_count,
                     render_ms: started.elapsed().as_secs_f64() * 1000.0,
                     gpu_ms: frame.gpu_ms,
-                }])
+                }]
             }
             Command::SaveAutobenchReport { report } => {
                 let path = self.autobench.as_ref().ok_or_else(|| {
@@ -394,9 +458,14 @@ impl Engine {
                 })?;
                 write_atomically(path, report.as_bytes())
                     .map_err(|e| EngineError::Io(format!("{}: {e}", path.display())))?;
-                Ok(Vec::new())
+                Vec::new()
             }
+            command => return self.develop_command(command),
+        };
+        for event in events {
+            self.emit(event);
         }
+        Ok(CommandResult::Done)
     }
 
     /// Splits a `width` × `height` frame into tiles, encodes them and keeps
@@ -509,7 +578,7 @@ fn check_format(format: PixelFormat) -> Result<(), EngineError> {
     Ok(())
 }
 
-fn check_size(width: u32, height: u32) -> Result<(), EngineError> {
+pub(crate) fn check_size(width: u32, height: u32) -> Result<(), EngineError> {
     if width == 0 || height == 0 || width > 16384 || height > 16384 {
         return Err(EngineError::InvalidSize { width, height });
     }
@@ -573,9 +642,39 @@ mod tests {
     use super::*;
     use crate::api::PixelFormat;
 
-    fn render(engine: &Engine, w: u32, h: u32) -> u64 {
+    /// An engine whose events a test reads back.
+    struct Recorded {
+        engine: Engine,
+        events: Arc<Mutex<Vec<Event>>>,
+    }
+
+    impl Recorded {
+        fn new(engine: Engine) -> Self {
+            let events = Arc::new(Mutex::new(Vec::new()));
+            let sink = events.clone();
+            Self {
+                engine: engine.with_event_sink(Arc::new(move |e| sink.lock().unwrap().push(e))),
+                events,
+            }
+        }
+
+        /// Runs `command`: the events it sent.
+        fn run(&self, command: Command) -> Result<Vec<Event>, EngineError> {
+            assert_eq!(self.engine.execute(command)?, CommandResult::Done);
+            Ok(std::mem::take(&mut *self.events.lock().unwrap()))
+        }
+    }
+
+    impl std::ops::Deref for Recorded {
+        type Target = Engine;
+        fn deref(&self) -> &Engine {
+            &self.engine
+        }
+    }
+
+    fn render(engine: &Recorded, w: u32, h: u32) -> u64 {
         let events = engine
-            .execute(Command::RenderTestPattern {
+            .run(Command::RenderTestPattern {
                 width: w,
                 height: h,
                 phase: 0.25,
@@ -607,7 +706,7 @@ mod tests {
 
     #[test]
     fn test_pattern_frame_covers_image() {
-        let e = Engine::headless();
+        let e = Recorded::new(Engine::headless());
         let generation = render(&e, 600, 300);
         let bytes = e.frame(generation).unwrap();
         let tiles = split_frame(&bytes).unwrap();
@@ -631,7 +730,7 @@ mod tests {
             std::env::temp_dir().join(format!("genzo-autobench-{}.json", std::process::id()));
         e.autobench = Some(path.clone());
         assert!(e.info().autobench);
-        assert!(save(&e).unwrap().is_empty());
+        assert_eq!(save(&e).unwrap(), CommandResult::Done);
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "{\"ok\":true}");
         std::fs::remove_file(&path).unwrap();
         // No temporary sibling is left behind, after success or failure.
@@ -657,7 +756,7 @@ mod tests {
 
     #[test]
     fn keeps_only_recent_frames() {
-        let e = Engine::headless();
+        let e = Recorded::new(Engine::headless());
         let first = render(&e, 8, 8);
         for _ in 0..KEPT_FRAMES {
             render(&e, 8, 8);
@@ -721,7 +820,7 @@ mod tests {
 
     #[test]
     fn spike_renders_through_the_gpu_as_tiles() {
-        let e = Engine::new();
+        let e = Recorded::new(Engine::new());
         if e.info().adapter.kind == AdapterKind::None {
             assert_ne!(
                 std::env::var("GENZO_REQUIRE_GPU").as_deref(),
@@ -731,7 +830,7 @@ mod tests {
             return;
         }
         let loaded = e
-            .execute(Command::LoadSpikeImage {
+            .run(Command::LoadSpikeImage {
                 source: SpikeSource::Synthetic {
                     width: 1201,
                     height: 800,
@@ -746,7 +845,7 @@ mod tests {
                 height: 800
             }]
         );
-        let events = e.execute(spike(600, 600, false)).unwrap();
+        let events = e.run(spike(600, 600, false)).unwrap();
         let [
             Event::RenderFinished {
                 generation,
@@ -771,7 +870,7 @@ mod tests {
 
     #[test]
     fn drag_preview_is_a_half_size_jpeg() {
-        let e = Engine::new();
+        let e = Recorded::new(Engine::new());
         if e.info().adapter.kind == AdapterKind::None {
             assert_ne!(
                 std::env::var("GENZO_REQUIRE_GPU").as_deref(),
@@ -780,7 +879,7 @@ mod tests {
             );
             return;
         }
-        e.execute(Command::LoadSpikeImage {
+        e.run(Command::LoadSpikeImage {
             source: SpikeSource::Synthetic {
                 width: 1200,
                 height: 800,
@@ -788,7 +887,7 @@ mod tests {
         })
         .unwrap();
         let frame_of = |command| {
-            let events = e.execute(command).unwrap();
+            let events = e.run(command).unwrap();
             let [Event::RenderFinished { generation, .. }] = events.as_slice() else {
                 panic!("unexpected events {events:?}");
             };

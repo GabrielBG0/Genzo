@@ -161,8 +161,9 @@ export function timedEngine(engine: Engine, times: TransportTimes): Engine {
     onEvent: (listener) => engine.onEvent(listener),
     async execute(command) {
       const t0 = performance.now();
-      await engine.execute(command);
+      const result = await engine.execute(command);
       if (command.type === 'renderSpike' && command.interactive) times.executeMs.push(performance.now() - t0);
+      return result;
     },
     async fetchFrame(generation) {
       const t0 = performance.now();

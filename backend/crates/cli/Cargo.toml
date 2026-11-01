@@ -13,4 +13,5 @@ workspace = true
 
 [dependencies]
 genzo-engine.workspace = true
+serde.workspace = true
 serde_json.workspace = true

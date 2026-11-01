@@ -1,5 +1,6 @@
 import type {
   Command,
+  CommandResult,
   Event,
   Handshake,
   HandshakeResult,
@@ -16,8 +17,12 @@ export interface Engine {
   readonly kind: 'fake' | 'tauri';
   handshake(hello: Handshake): Promise<HandshakeResult>;
   query(query: Query): Promise<QueryResult>;
-  /** Runs a command. Its results arrive as events. */
-  execute(command: Command): Promise<void>;
+  /**
+   * Runs a command and resolves with its result; what it renders arrives as
+   * events. Replies to commands sent in a row can resolve out of order: an
+   * edit's `revision` says which is newest.
+   */
+  execute(command: Command): Promise<CommandResult>;
   /** Subscribes to engine events. Returns the unsubscribe function. */
   onEvent(listener: (event: Event) => void): () => void;
   /** The binary tile messages of a finished render generation. */

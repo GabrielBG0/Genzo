@@ -534,6 +534,7 @@ name = "genzo-cli"
 version = "0.1.0"
 dependencies = [
  "genzo-engine",
+ "serde",
  "serde_json",
 ]
 

@@ -375,6 +375,11 @@ These come from `docs/m0-results.md` and decide how the steps below are built:
 ### Contract
 - **In two parts** (owner, 2026-11-01): contract 0.5.0 carries everything here but export; `ExportJpeg` and `ExportProgress` come in 0.6.0 with step 10. The spike commands stay until `bench gpu` measures the Develop path, in its own change with a new RTX 3060 baseline.
   - Done before it, in the engine: Develop's frames kept as tile messages (`engine::frames`), the commands that name a photo checked against the open one as they act (a delta sent before a switch changes nothing), and the white balance picker (`pick_white_balance`, on the render thread, whose step is "White balance: picked").
+  - Done: contract 0.5.0, without export (`model::api`, `engine::messages`, `engine/tests/messages.rs`). The shell builds the engine in Tauri's `setup` with an event sink that emits each event. `cli run FILE` runs the same commands and queries as JSON lines.
+  - **Each command answers with a typed result** (`CommandResult`, as `QueryResult` does for queries), not with an event. The commands that change an edit answer with the photo's edit (`Edit`), as APP-10 and DEV-02 ask. `SelectPhoto` answers `Selected` and `OpenFolder` answers `Folder`. What the user can act on comes back as data: a refused pick with its reason, a photo that does not render with the status bar's reason. A failure of the engine, such as no GPU, is the command's error.
+  - **Every event goes through one sink**, from whichever thread sends it. `RenderFinished` names its photo, and the prefetch's sharper render sends one too. A frame's `RenderFinished` goes before its `HistogramReady`. The spike's events go through the same sink.
+  - **Replies and events can arrive out of order**, because each command runs on its own thread in the shell. The frontend draws a frame only when its generation is the newest it has seen. It takes an edit reply only when its `revision` is the newest for that photo; the revision counts the photo's deltas, undos and redos.
+  - `ResetParam` with no `param` resets the whole edit. `SetView` with nothing open is kept for the next photo. The edit's TypeScript keeps the names it is stored under (`schema_version`, `{"Exposure": 0.5}`), and its unknown fields stay in the engine.
 - Commands: `OpenFolder`, `SelectPhoto`, `SetView`, `ApplyEditDelta`, `ResetParam`, `PickWhiteBalance`, `SetClippingOverlay`, `SetClippingPreview`, `Undo`, `Redo`, `ExportJpeg`.
   - `PickWhiteBalance` carries a point on the shown image. The engine samples there, applies the white balance and records the step (DEV-02).
   - `SetView` carries the viewport size, the zoom (Fit or 1:1) and the visible rectangle, so the engine renders only what is seen.
@@ -383,7 +388,7 @@ These come from `docs/m0-results.md` and decide how the steps below are built:
 - Queries: `ListFolderPhotos`, `GetEdit`, `GetHistogram`.
 - Events: `PreviewShown`, `RenderFinished`, `HistogramReady`, `ExportProgress`, `AdapterInfo` (for the software-fallback notice).
 - Frames: the tile protocol from M0.
-- The spike commands and events go. Bump to 0.5.0.
+- The spike commands and events go (after `bench gpu` moves to the Develop path; see *In two parts*). Bump to 0.5.0.
 
 ### Frontend (screens D1, D9; components Top bar, Left panel · Develop, Histogram + tool strip, Slider row, Panel header, Filmstrip, Status bar, Menu)
 1. **APP-01 Module switcher**: pill tabs. Develop is active (D). Library is disabled until M2. The Export tab opens the basic export view. Map and Print tabs appear only when those modules ship (Later).

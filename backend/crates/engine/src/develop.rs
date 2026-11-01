@@ -11,14 +11,17 @@
 //! lasts only as long as the gesture it was set in. Each change renders
 //! again, through stage 9 only.
 //!
-//! Until contract 0.5.0 these are Rust methods for the cli and the tests;
-//! the shell's commands come with it.
+//! Contract 0.5.0's Develop commands come here (`crate::messages`). With an
+//! event sink, each frame stored goes to it as `RenderFinished` before its
+//! histogram goes as `HistogramReady` (DEV-03).
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, mpsc};
+use std::time::Instant;
 
 use genzo_jobs::Generations;
 
+use genzo_model::api::Event;
 use genzo_model::edit::{Change, Edit, Phase};
 use genzo_pipeline::gpu::develop::{Photo, as_shot};
 use genzo_pipeline::gpu::thread::{DevelopFrame, DevelopRequest, Picked, RenderThread};
@@ -26,7 +29,7 @@ use genzo_pipeline::raw::{RawError, RawSource};
 
 use crate::histogram::{Counted, Histograms, Key, Overlay, Preview};
 use crate::history::{PhotoEdits, Refused};
-use crate::{Engine, EngineError, FrameStore};
+use crate::{Engine, EngineError, EventSink, FrameStore};
 
 pub use genzo_color::output::Target;
 pub use genzo_pipeline::gpu::develop::{Readback, Reran};
@@ -105,6 +108,8 @@ pub struct EditState {
     pub edited: bool,
     pub undo: Option<String>,
     pub redo: Option<String>,
+    /// [`PhotoEdits::revision`]: orders replies that arrive out of order.
+    pub revision: u64,
 }
 
 /// What a delta, an undo or a redo did.
@@ -165,6 +170,13 @@ impl Engine {
         let s = self.session.lock().expect("session");
         let id = s.open?;
         Some(state(id, &s.edits[&id]))
+    }
+
+    /// Photo `photo`'s edit, open or not, if it was opened this session
+    /// (`GetEdit`).
+    pub fn edit_of(&self, photo: u64) -> Option<EditState> {
+        let s = self.session.lock().expect("session");
+        s.edits.get(&photo).map(|p| state(photo, p))
     }
 
     /// Sets the view and the target, and renders the open photo settled.
@@ -372,6 +384,7 @@ impl Engine {
             generations: &self.generations,
             histograms: &self.histograms,
             frames: &self.frames,
+            events: self.events.as_ref(),
         };
         render_when(&to, recorded, phase, |_| true).map(|a| a.expect("always rendered"))
     }
@@ -385,6 +398,8 @@ pub(crate) struct To<'a> {
     pub(crate) generations: &'a Generations,
     pub(crate) histograms: &'a Arc<Histograms>,
     pub(crate) frames: &'a Mutex<FrameStore>,
+    /// Where each stored frame goes as `RenderFinished`.
+    pub(crate) events: Option<&'a EventSink>,
 }
 
 /// Renders the open photo's current edit with a new generation, and notes
@@ -406,6 +421,7 @@ pub(crate) fn render_when(
         generations,
         histograms,
         frames,
+        events,
     } = *to;
     let (state, request) = {
         let mut s = session.lock().expect("session");
@@ -439,6 +455,7 @@ pub(crate) fn render_when(
         view: request.view,
     };
     let target = request.target;
+    let started = Instant::now();
     let frame = gpu.develop(request)?;
     let mut tiles = None;
     if let Some(f) = &frame {
@@ -451,6 +468,15 @@ pub(crate) fn render_when(
                 .expect("frame store poisoned")
                 .put(generation, bytes);
             tiles = Some(count);
+            if let Some(sink) = events {
+                sink.send(Event::RenderFinished {
+                    photo: Some(key.photo),
+                    generation,
+                    tile_count: count,
+                    render_ms: started.elapsed().as_secs_f64() * 1000.0,
+                    gpu_ms: None,
+                });
+            }
         }
         let last = {
             let mut s = session.lock().expect("session");
@@ -499,7 +525,10 @@ pub(crate) fn decode(data: &[u8]) -> Result<(RawSource, u8), EngineError> {
 /// What a command for photo `photo` answers when it changes nothing: its
 /// edit as it is, with no frame.
 fn unchanged(s: &Session, photo: u64) -> Result<Applied, EngineError> {
-    let p = s.edits.get(&photo).ok_or(EngineError::NoPhoto)?;
+    let p = s
+        .edits
+        .get(&photo)
+        .ok_or(EngineError::UnknownPhoto(photo))?;
     Ok(Applied {
         recorded: false,
         state: state(photo, p),
@@ -515,5 +544,6 @@ fn state(id: u64, p: &PhotoEdits) -> EditState {
         edited: p.is_edited(),
         undo: p.undo_label().map(String::from),
         redo: p.redo_label().map(String::from),
+        revision: p.revision(),
     }
 }
