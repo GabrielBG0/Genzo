@@ -1,5 +1,5 @@
 import type { RgbaImage } from '../components/Thumb.svelte';
-import type { HistogramData } from '../components/Histogram.svelte';
+import type { Histogram } from '$contract/genzo';
 
 type Rgb = [number, number, number];
 
@@ -39,10 +39,20 @@ export function sampleThumb(i: number, width = 120, height = 80): RgbaImage {
   return { width, height, data };
 }
 
-export function sampleHistogram(bins = 64): HistogramData {
-  const bump = (center: number, spread: number, i: number) =>
-    Math.exp(-(((i / (bins - 1) - center) / spread) ** 2));
+/** Counts of a 1000 × 600 photo whose highlights clip in red. */
+export function sampleHistogram(): Histogram {
+  const bump = (center: number, spread: number, i: number) => Math.exp(-(((i / 255 - center) / spread) ** 2));
   const channel = (a: number, b: number) =>
-    Array.from({ length: bins }, (_, i) => 0.85 * bump(a, 0.18, i) + 0.5 * bump(b, 0.1, i));
-  return { r: channel(0.55, 0.85), g: channel(0.45, 0.7), b: channel(0.3, 0.6) };
+    Array.from({ length: 256 }, (_, i) => Math.round(4000 * (0.85 * bump(a, 0.18, i) + 0.5 * bump(b, 0.1, i))));
+  const red = channel(0.55, 0.85);
+  red[255] = 9000;
+  const none = { pixels: 0, red: false, green: false, blue: false };
+  return {
+    red,
+    green: channel(0.45, 0.7),
+    blue: channel(0.3, 0.6),
+    highlights: { pixels: 9000, red: true, green: false, blue: false },
+    shadows: none,
+    pixels: 600000,
+  };
 }

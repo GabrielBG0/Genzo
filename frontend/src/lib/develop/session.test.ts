@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { Command } from '$contract/genzo';
 import { FakeEngine } from '../engine/fake';
-import { DevelopSession } from './session.svelte';
+import { DevelopSession, type ClipColors } from './session.svelte';
+
+const COLORS: ClipColors = { shadow: [1, 2, 3, 255], highlight: [4, 5, 6, 255] };
 
 /** A gate a test opens: replies held until then. */
 function gate() {
@@ -16,7 +18,7 @@ const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 async function open(latency?: FakeEngine['latency']) {
   const engine = new FakeEngine();
   if (latency) engine.latency = latency;
-  const session = new DevelopSession(engine);
+  const session = new DevelopSession(engine, 'srgb', () => COLORS);
   await session.openFolder('demo');
   await session.setView(640, 480);
   engine.sent.length = 0;
@@ -181,5 +183,103 @@ describe('DevelopSession', () => {
     await session.select(5);
     expect(session.editable).toBe(false);
     expect(session.reason).toBe('Nikon High Efficiency RAW is not supported yet');
+  });
+
+  it('shows the newest counts of the open photo, and the shown photo’s after a switch', async () => {
+    const { engine, session } = await open();
+    expect(session.histogram?.pixels).toBe(640 * 427);
+    session.change([{ Exposure: 2 }]);
+    await settled(session);
+    expect(session.histogram?.highlights.pixels).toBeGreaterThan(0);
+    // Photo 4 is a JPEG fitted at 640 × 480 from 4000 × 3000.
+    await session.select(4);
+    expect(session.histogram?.pixels).toBe(640 * 480);
+    expect(session.histogram?.highlights.pixels).toBe(0);
+    // A photo that does not render has none.
+    await session.select(5);
+    expect(session.histogram).toBeNull();
+    // Counts of another photo, or older ones, are not taken.
+    await session.select(1);
+    const shown = session.histogram;
+    engine['emit']({ type: 'histogramReady', photo: 2, generation: 1e6, histogram: { ...shown, pixels: 1 } as never });
+    engine['emit']({ type: 'histogramReady', photo: 1, generation: 0, histogram: { ...shown, pixels: 2 } as never });
+    expect(session.histogram).toBe(shown);
+  });
+
+  it('asks for the counts sent before a folder’s reply named its photo', async () => {
+    const engine = new FakeEngine();
+    const session = new DevelopSession(engine, 'srgb', () => COLORS);
+    await session.openFolder('demo');
+    await session.setView(640, 480);
+    // The frame of the view came after: its counts by event.
+    expect(session.histogram?.pixels).toBe(640 * 427);
+    // Opened again, the frame is sent before the reply names photo 1 as
+    // open, while the session still shows it: the query is what keeps
+    // the counts once the reply clears them.
+    await session.openFolder('demo');
+    expect(session.histogram?.pixels).toBe(640 * 427);
+  });
+
+  it('turns both overlays with J and one with its marker, and keeps them across switches', async () => {
+    const { engine, session } = await open();
+    const overlays = () => engine.sent.filter((c) => c.type === 'setClippingOverlay');
+    session.toggleClipping();
+    expect(session.overlay).toEqual({ shadows: true, highlights: true });
+    session.toggleClipping('shadows');
+    expect(session.overlay).toEqual({ shadows: false, highlights: true });
+    // One on: J turns both on.
+    session.toggleClipping();
+    expect(session.overlay).toEqual({ shadows: true, highlights: true });
+    await settled(session);
+    expect(overlays().at(-1)).toEqual({
+      type: 'setClippingOverlay',
+      shadows: true,
+      highlights: true,
+      shadowColor: [1, 2, 3, 255],
+      highlightColor: [4, 5, 6, 255],
+    });
+    await session.select(2);
+    expect(session.overlay).toEqual({ shadows: true, highlights: true });
+    // A photo that does not render: J does nothing.
+    await session.select(5);
+    session.toggleClipping();
+    expect(session.overlay).toEqual({ shadows: true, highlights: true });
+    // Leaving Develop turns both off.
+    session.clearClipping();
+    await settled(session);
+    expect(session.overlay).toEqual({ shadows: false, highlights: false });
+    expect(overlays()).toHaveLength(4);
+  });
+
+  it('sends the Alt preview after its gesture’s start, only during a gesture, and drops it at the end', async () => {
+    const start = gate();
+    const { engine, session } = await open((m) => (m.type === 'applyEditDelta' && m.phase === 'Start' ? start.shut : 0));
+    const order = () => engine.sent.map((c) => (c.type === 'applyEditDelta' ? c.phase : c.type === 'setClippingPreview' ? c.preview : c.type));
+    session.preview('highlights');
+    session.change([{ Whites: 10 }], 'Start');
+    session.preview('highlights');
+    session.preview('highlights');
+    start.open();
+    await settled(session);
+    session.preview('none');
+    session.preview('highlights');
+    session.change([{ Whites: 20 }], 'End');
+    // The engine ended it with the gesture; Alt held for the next one sends it again.
+    session.change([{ Whites: 30 }], 'Start');
+    session.preview('highlights');
+    session.change([{ Whites: 30 }], 'End');
+    await settled(session);
+    expect(order()).toEqual(['Start', 'highlights', 'none', 'highlights', 'End', 'Start', 'highlights', 'End']);
+  });
+
+  it('says why the overlay colors could not be read', async () => {
+    const engine = new FakeEngine();
+    const session = new DevelopSession(engine, 'srgb', () => {
+      throw new Error('the token --clip-shadow is not a color: ""');
+    });
+    await session.openFolder('demo');
+    session.toggleClipping();
+    expect(session.overlay).toEqual({ shadows: false, highlights: false });
+    expect(session.notice).toBe('the token --clip-shadow is not a color: ""');
   });
 });

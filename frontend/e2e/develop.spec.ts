@@ -113,3 +113,115 @@ test('a double-click on the handle resets as one step, without a jump first', as
   await page.keyboard.press('Control+z');
   await expect(exposure).toHaveAttribute('aria-valuetext', '+1.00');
 });
+
+const marker = (page: Page, name: 'Shadow clipping' | 'Highlight clipping') =>
+  page.getByRole('button', { name, exact: true });
+
+test('the histogram shows the photo, its EXIF row, and lights a marker when it clips (DEV-03)', async ({ page }) => {
+  await develop(page);
+  await expect(page.getByRole('img', { name: 'Histogram' })).toBeVisible();
+  await expect(page.locator('.exif span')).toHaveText(['ISO 100', '24 mm', 'f/8', '1/125 s']);
+  await expect(marker(page, 'Highlight clipping')).toHaveAttribute('data-channels', '');
+  await drag(page, 'Exposure', 0.5, 0.7);
+  await expect(marker(page, 'Highlight clipping')).not.toHaveAttribute('data-channels', '');
+  await expect(marker(page, 'Highlight clipping')).toHaveAttribute('title', /^Highlight clipping {2}J\n[\d.]+ % of pixels$/);
+  // A photo that does not render: no plot, J does nothing.
+  await page.getByRole('region', { name: 'Filmstrip' }).getByRole('button').nth(4).click();
+  await expect(page.getByRole('img', { name: 'Histogram' })).toBeHidden();
+  await expect(marker(page, 'Shadow clipping')).toBeDisabled();
+});
+
+test('J turns both overlays on, a marker one; they stay on across photos', async ({ page }) => {
+  await develop(page);
+  await page.keyboard.press('j');
+  await expect(marker(page, 'Shadow clipping')).toHaveAttribute('aria-pressed', 'true');
+  await expect(marker(page, 'Highlight clipping')).toHaveAttribute('aria-pressed', 'true');
+  await marker(page, 'Shadow clipping').click();
+  await expect(marker(page, 'Shadow clipping')).toHaveAttribute('aria-pressed', 'false');
+  await page.getByRole('region', { name: 'Filmstrip' }).getByRole('button').nth(1).click();
+  await expect(page.getByRole('slider', { name: 'Temp' })).toHaveAttribute('aria-valuetext', '3200');
+  await expect(marker(page, 'Highlight clipping')).toHaveAttribute('aria-pressed', 'true');
+  await page.keyboard.press('j');
+  await expect(marker(page, 'Shadow clipping')).toHaveAttribute('aria-pressed', 'true');
+  await page.keyboard.press('j');
+  await expect(marker(page, 'Highlight clipping')).toHaveAttribute('aria-pressed', 'false');
+});
+
+/**
+ * Reads a screenshot in the page: the share of pure black pixels, and the
+ * RGB at a point given as fractions of its size.
+ */
+async function readShot(page: Page, png: Buffer, at = { x: 0.5, y: 0.5 }) {
+  return page.evaluate(
+    async ({ data, at }) => {
+      const img = new Image();
+      img.src = `data:image/png;base64,${data}`;
+      await img.decode();
+      const canvas = document.createElement('canvas');
+      canvas.width = img.width;
+      canvas.height = img.height;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) throw new Error('no 2d context');
+      ctx.drawImage(img, 0, 0);
+      const px = ctx.getImageData(0, 0, img.width, img.height).data;
+      let black = 0;
+      for (let i = 0; i < px.length; i += 4) if (px[i] === 0 && px[i + 1] === 0 && px[i + 2] === 0) black++;
+      const i = 4 * (Math.floor(at.y * (img.height - 1)) * img.width + Math.floor(at.x * (img.width - 1)));
+      return { black: black / (px.length / 4), rgb: [px[i], px[i + 1], px[i + 2]] as number[] };
+    },
+    { data: png.toString('base64'), at },
+  );
+}
+
+const photo = (page: Page) => page.getByRole('img', { name: 'Photo' });
+
+/** The share of the photo's pixels that are pure black. */
+async function blackShare(page: Page): Promise<number> {
+  return (await readShot(page, await photo(page).screenshot())).black;
+}
+
+const near = (got: number[], want: number[]) => got.every((c, i) => Math.abs(c - (want[i] ?? 0)) <= 2);
+
+test('a marker whose three channels clip is white, and J paints the clipped photo in the token red', async ({
+  page,
+}) => {
+  await develop(page);
+  // +2 EV: every pixel of the fake's scene clips, the sky in all three channels.
+  await drag(page, 'Exposure', 0.5, 0.7);
+  await expect(marker(page, 'Highlight clipping')).toHaveAttribute('data-channels', 'red green blue');
+  // The triangle's center, a little inside its corner.
+  const box = await marker(page, 'Highlight clipping').boundingBox();
+  if (!box) throw new Error('no marker');
+  const shot = await page.screenshot({ clip: { x: box.x + box.width / 2, y: box.y + 3, width: 2, height: 2 } });
+  const corner = (await readShot(page, shot, { x: 0, y: 0 })).rgb;
+  expect(corner).toEqual([255, 255, 255]);
+  await page.keyboard.press('j');
+  // Highlights win over shadows: label.red, read from the token.
+  await expect
+    .poll(async () => near((await readShot(page, await photo(page).screenshot())).rgb, [255, 107, 107]))
+    .toBe(true);
+});
+
+test('Alt while dragging Exposure shows only what clips, until Alt goes up', async ({ page }) => {
+  await develop(page);
+  const track = page.getByRole('slider', { name: 'Exposure' }).locator('.track');
+  const box = await track.boundingBox();
+  if (!box) throw new Error('no track');
+  const y = box.y + box.height / 2;
+  await page.mouse.move(box.x + box.width * 0.5, y);
+  await page.mouse.down();
+  // +1 EV: the sky clips, the rest does not.
+  for (let i = 1; i <= 5; i++) await page.mouse.move(box.x + box.width * (0.5 + 0.02 * i), y);
+  expect(await blackShare(page)).toBe(0);
+  await page.keyboard.down('Alt');
+  // Not clipped shows black.
+  await expect.poll(() => blackShare(page)).toBeGreaterThan(0.2);
+  await page.keyboard.up('Alt');
+  await expect.poll(() => blackShare(page)).toBe(0);
+  await page.keyboard.down('Alt');
+  await expect.poll(() => blackShare(page)).toBeGreaterThan(0.2);
+  // The end of the drag ends the preview, Alt still held.
+  await page.mouse.up();
+  await expect.poll(() => blackShare(page)).toBe(0);
+  await page.keyboard.up('Alt');
+});

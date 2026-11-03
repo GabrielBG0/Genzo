@@ -2,6 +2,7 @@ import {
   CONTRACT_VERSION,
   TILE_SIZE,
   type AdapterInfo,
+  type ClippingPreview,
   type Change,
   type Command,
   type CommandResult,
@@ -156,6 +157,10 @@ export class FakeEngine implements Engine {
   private edits = new Map<number, PhotoEdits>();
   private view = { width: 0, height: 0 };
   private histograms = new Map<number, { generation: number; histogram: Histogram }>();
+  /** The J overlays' colors, each when on: the session's, kept across switches. */
+  private overlay: { shadows: Rgba | null; highlights: Rgba | null } = { shadows: null, highlights: null };
+  /** The Alt preview of the gesture in progress. */
+  private preview: ClippingPreview = 'none';
 
   constructor(private readonly contractVersion = CONTRACT_VERSION) {}
 
@@ -255,10 +260,20 @@ export class FakeEngine implements Engine {
       }
       case 'setView':
         this.view = { width: command.width, height: command.height };
-        this.renderPhoto(false);
+        this.renderPhoto();
         return DONE;
       case 'setClippingOverlay':
+        this.overlay = {
+          shadows: command.shadows ? command.shadowColor : null,
+          highlights: command.highlights ? command.highlightColor : null,
+        };
+        this.renderPhoto();
+        return DONE;
       case 'setClippingPreview':
+        // Outside a gesture there is none, as in `Session::set_clipping_preview`.
+        if (!this.openInGesture() || command.preview === this.preview) return DONE;
+        this.preview = command.preview;
+        this.renderPhoto();
         return DONE;
       case 'selectPhoto': {
         const { edit, reason } = this.select(command.photo);
@@ -294,7 +309,7 @@ export class FakeEngine implements Engine {
       edits = new PhotoEdits(id, fake.kind);
       this.edits.set(id, edits);
     }
-    this.renderPhoto(false);
+    this.renderPhoto();
     return { edit: edits.state(), reason: null };
   }
 
@@ -303,6 +318,7 @@ export class FakeEngine implements Engine {
    * before that photo goes: mirrors `Session::end_gesture`.
    */
   private endGesture() {
+    this.preview = 'none';
     const open = this.strip.current;
     const p = open === null ? undefined : this.edits.get(open);
     if (!p?.inGesture()) return;
@@ -324,7 +340,9 @@ export class FakeEngine implements Engine {
     const state = p.state();
     const entry = this.strip.photos.find((s) => s.id === photo);
     if (entry) entry.edited = state.edited;
-    if (open) this.renderPhoto(phase !== 'End');
+    // The engine ends the Alt preview with the gesture.
+    if (phase === 'End') this.preview = 'none';
+    if (open) this.renderPhoto();
     return { type: 'edit', edit: state, recorded, refused: null };
   }
 
@@ -352,12 +370,19 @@ export class FakeEngine implements Engine {
     return this.edited(photo, (q) => q.apply([change], 'End', 'White balance: picked'), 'End');
   }
 
+  private openInGesture(): boolean {
+    const open = this.strip.current;
+    return open !== null && (this.edits.get(open)?.inGesture() ?? false);
+  }
+
   /**
    * Renders the open photo fitted to the view, as a scene its edit moves:
-   * exposure brightens it, Temp and Tint tint it, B&W grays it. A settled
-   * frame's histogram follows it, as the engine sends them.
+   * exposure brightens it, Temp and Tint tint it, B&W grays it. Each
+   * frame's histogram follows it, drag frames included, as the engine
+   * sends them at Fit; it counts the photo, before the J overlay or the
+   * Alt preview is drawn over it (DEV-03).
    */
-  private renderPhoto(interactive: boolean) {
+  private renderPhoto() {
     const id = this.strip.current;
     const fake = this.folder.find((p) => p.photo.id === id);
     const edits = id === null ? undefined : this.edits.get(id);
@@ -381,6 +406,7 @@ export class FakeEngine implements Engine {
         };
         const pixels = sceneTile(width, height, rect, look);
         count(histogram, pixels);
+        paintClipping(pixels, this.overlay, this.preview);
         parts.push(encodeTile(header, pixels));
       }
     }
@@ -393,7 +419,6 @@ export class FakeEngine implements Engine {
       renderMs: performance.now() - started,
       gpuMs: null,
     });
-    if (interactive) return;
     this.histograms.set(id, { generation, histogram });
     this.emit({ type: 'histogramReady', photo: id, generation, histogram: structuredClone(histogram) });
   }
@@ -522,6 +547,31 @@ function emptyHistogram(): Histogram {
 }
 
 /** Counts RGBA8 pixels: a pixel clips on a side when any channel does. */
+type Rgba = [number, number, number, number];
+
+/**
+ * Stage 9's clipping drawing (DEV-03): the Alt preview shows only what
+ * clips, in the clipped channels' colors over black (highlights) or white
+ * (shadows); otherwise each clipped pixel takes its J overlay's color,
+ * highlights winning over shadows.
+ */
+function paintClipping(
+  rgba: Uint8Array,
+  overlay: { shadows: Rgba | null; highlights: Rgba | null },
+  preview: ClippingPreview,
+) {
+  if (preview === 'none' && !overlay.shadows && !overlay.highlights) return;
+  for (let i = 0; i < rgba.length; i += 4) {
+    const px = [rgba[i] ?? 0, rgba[i + 1] ?? 0, rgba[i + 2] ?? 0];
+    let out: number[] | null = null;
+    if (preview === 'highlights') out = px.map((c) => (c === 255 ? 255 : 0));
+    else if (preview === 'shadows') out = px.map((c) => (c === 0 ? 0 : 255));
+    else if (overlay.highlights && px.includes(255)) out = overlay.highlights.slice(0, 3);
+    else if (overlay.shadows && px.includes(0)) out = overlay.shadows.slice(0, 3);
+    if (out) rgba.set(out, i);
+  }
+}
+
 function count(h: Histogram, rgba: Uint8Array) {
   for (let i = 0; i < rgba.length; i += 4) {
     const r = rgba[i] ?? 0;

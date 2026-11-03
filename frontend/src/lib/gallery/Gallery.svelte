@@ -128,9 +128,9 @@
         <h2>C4 · Histogram + tool strip <code>tool, clip, notools</code></h2>
         <div class="frame" style:width="304px">
           <Histogram
-            data={sampleHistogram()}
+            histogram={sampleHistogram()}
             exif={['ISO 100', '24 mm', 'f/8', '1/125 s']}
-            clip={{ shadow: false, highlight: true }}
+            overlay={{ shadows: false, highlights: true }}
           />
         </div>
       </section>

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { Change, Edit, Param, Profile, WhiteBalancePreset } from '$contract/genzo';
+  import type { Change, ClippingPreview, Edit, Param, Profile, WhiteBalancePreset } from '$contract/genzo';
   import type { DevelopSession } from '../develop/session.svelte';
   import { MIRED_SCALE, presetName } from '../develop/whiteBalance';
   import { EXPOSURE, PARAM_OF, RAW_TEMP, RAW_TINT, SLIDER, type ValueField } from '../engine/edit';
@@ -50,6 +50,20 @@
   const tint = $derived(edit?.white_balance.tint ?? 0);
 
   const presetShown = $derived(edit ? presetName(edit, raw ? presets : []) : '');
+
+  /** The tone sliders whose drag previews clipping with Alt held (DEV-03). */
+  const CLIPS: Partial<Record<ValueField, ClippingPreview>> = {
+    exposure: 'highlights',
+    highlights: 'highlights',
+    whites: 'highlights',
+    shadows: 'shadows',
+    blacks: 'shadows',
+  };
+
+  function clipPreview(f: ValueField): ((held: boolean) => void) | undefined {
+    const side = CLIPS[f];
+    return side && ((held) => session.preview(held ? side : 'none'));
+  }
 
   function valueChange(f: ValueField, v: number): Change {
     return { [PARAM_OF[f]]: v } as Change;
@@ -198,6 +212,7 @@
           oninput={(v) => session.change([valueChange(f, v)], 'Update')}
           onchange={(v) => session.change([valueChange(f, v)], 'End')}
           onreset={() => session.reset(PARAM_OF[f])}
+          onalt={clipPreview(f)}
         />
       {/each}
     {/snippet}

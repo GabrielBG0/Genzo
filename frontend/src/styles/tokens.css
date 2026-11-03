@@ -41,6 +41,8 @@
   --clip-off: #3a3a3a;
   --clip-shadow: var(--label-blue);
   --clip-highlight: var(--label-red);
+  /* A marker whose three channels clip is white (DEV-03). */
+  --clip-all: var(--selection-ring);
   --hist-red: var(--label-red);
   --hist-green: var(--label-green);
   --hist-blue: var(--accent);
