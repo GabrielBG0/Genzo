@@ -40,7 +40,7 @@ Sources: the spec's feature table ("Histogram, clipping warnings, before and aft
    - A click on a marker turns its overlay on or off (see *The J overlay*). A marker whose overlay is on has a ring (the handoff's selection indicator).
    - The tooltip says "Shadow clipping (J)" or "Highlight clipping (J)", and the share of pixels clipped, such as "0.4 % of pixels".
 4. **The EXIF row** under the plot, in JetBrains Mono, as the handoff shows it: ISO, focal length, aperture and exposure time.
-   - Formats: `ISO 100`, `24 mm` (one decimal below 10 mm: `6.9 mm`), `f/2.8` (one decimal, `f/8` with no `.0`), and `1/250 s` for times under 1 s (the denominator rounded), `1.3 s` and `30 s` otherwise (one decimal below 10 s).
+   - Formats: `ISO 100`, `24 mm` (one decimal below 10 mm: `6.9 mm`), `f/2.8` (one decimal, `f/8` with no `.0`), and `1/250 s` for times under 1 s (the denominator rounded), `1.3 s` and `30 s` otherwise (one decimal below 10 s). A time under 1 s whose denominator would round to 1 (from about 0.67 s) is written in seconds too, `0.8 s`, not `1/1 s` (2026-11-02).
    - The focal length is the lens's own, not the 35 mm equivalent.
    - A value the file does not carry is left out with its separator. When none is there, the row is empty but keeps its height, so the panel does not jump.
 5. **While the photo is Opening** (the embedded preview is shown), the histogram is of the preview, as shown. The engine computes it on the CPU from the prepared preview (`engine::preview`). The markers work, but J has no effect until the first frame: the overlay is drawn by stage 9.

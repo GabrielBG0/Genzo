@@ -16,6 +16,9 @@ describe('the EXIF row (DEV-03, criterion 8)', () => {
     expect(time(3, 10)).toEqual(['1/3 s']);
     expect(time(13, 10)).toEqual(['1.3 s']);
     expect(time(30)).toEqual(['30 s']);
+    // 1/1.25 would round to 1/1.
+    expect(time(4, 5)).toEqual(['0.8 s']);
+    expect(time(2, 3)).toEqual(['1/2 s']);
   });
 
   it('writes the f-number with one decimal, none when it is .0', () => {

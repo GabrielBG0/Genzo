@@ -16,9 +16,13 @@ export function exifRow(s: Shooting): string[] {
   return row;
 }
 
-/** `1/250` under a second, the denominator rounded; `1.3` and `30` otherwise. */
+/**
+ * `1/250` under a second, the denominator rounded; `1.3` and `30`
+ * otherwise. A time whose denominator rounds to 1 (0.7 s) is in seconds.
+ */
 function seconds(t: number): string {
-  if (t < 1) return `1/${Math.round(1 / t)}`;
+  const den = Math.round(1 / t);
+  if (t < 1 && den > 1) return `1/${den}`;
   return t < 10 ? t.toFixed(1) : String(Math.round(t));
 }
 
