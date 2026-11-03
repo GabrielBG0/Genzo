@@ -52,6 +52,11 @@
     onchange?: (v: number) => void;
     /** Double-click on the label or the handle. Without it, the slider goes to `defaultValue`. */
     onreset?: () => void;
+    /**
+     * Alt goes down (true) or up (false) during a pointer drag: the tone
+     * sliders' clipping preview (DEV-03). The drag's end ends it on its own.
+     */
+    onalt?: ((held: boolean) => void) | undefined;
     oncontextmenu?: (e: MouseEvent) => void;
   }
 
@@ -74,6 +79,7 @@
     oninput,
     onchange,
     onreset,
+    onalt,
     oncontextmenu,
   }: Props = $props();
 
@@ -87,6 +93,8 @@
   let dragging = $state(false);
   /** An arrow key is held: one gesture until it is released. */
   let keyHeld = false;
+  /** Alt is held during the drag, as last told to `onalt`. */
+  let altHeld = false;
   let typing = $state(false);
   let typed = $state('');
 
@@ -133,16 +141,34 @@
       set(valueAt(e.clientX));
     }
     onstart?.(value);
+    alt(e.altKey);
   }
 
   function onpointermove(e: PointerEvent) {
-    if (dragging && set(valueAt(e.clientX - grab))) oninput?.(value);
+    if (!dragging) return;
+    alt(e.altKey);
+    if (set(valueAt(e.clientX - grab))) oninput?.(value);
   }
 
   function onpointerup() {
     if (!dragging) return;
     dragging = false;
+    altHeld = false;
     onchange?.(value);
+  }
+
+  function alt(held: boolean) {
+    if (!onalt || held === altHeld) return;
+    altHeld = held;
+    onalt(held);
+  }
+
+  /** Alt pressed or released without moving the pointer. */
+  function onwindowkey(e: KeyboardEvent) {
+    if (!dragging || !onalt || e.key !== 'Alt') return;
+    // Alt alone would move the focus to the window menu.
+    e.preventDefault();
+    alt(e.type === 'keydown');
   }
 
   function reset(e: MouseEvent) {
@@ -203,6 +229,8 @@
     onchange?.(value);
   }
 </script>
+
+<svelte:window onkeydown={onwindowkey} onkeyup={onwindowkey} />
 
 <div
   class={['row', changed && 'changed', (hot || dragging) && 'hot', disabled && 'disabled']}

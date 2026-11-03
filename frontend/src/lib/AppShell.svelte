@@ -8,6 +8,7 @@
   import PhotoViewport from './components/PhotoViewport.svelte';
   import StatusBar from './components/StatusBar.svelte';
   import TopBar, { type Module } from './components/TopBar.svelte';
+  import { exifRow } from './develop/exif';
   import { DevelopSession } from './develop/session.svelte';
   import type { Engine } from './engine/types';
   import { provideRegistry } from './shortcuts/context';
@@ -48,6 +49,21 @@
     () => session.editable,
   );
   registry.bind(
+    'develop.clipping',
+    () => session.toggleClipping(),
+    () => session.editable,
+  );
+  registry.bind(
+    'develop.clippingShadows',
+    () => session.toggleClipping('shadows'),
+    () => session.editable,
+  );
+  registry.bind(
+    'develop.clippingHighlights',
+    () => session.toggleClipping('highlights'),
+    () => session.editable,
+  );
+  registry.bind(
     'develop.pickerCancel',
     () => (session.picking = false),
     () => session.picking,
@@ -59,7 +75,14 @@
       // to be chosen (wired with the real engine).
       if (engine.kind === 'fake') void session.openFolder('demo');
     });
+    return () => session.dispose();
   });
+
+  function onmodule(m: Module) {
+    // Leaving Develop turns the clipping overlays off (DEV-03, APP-01).
+    if (m !== 'develop') session.clearClipping();
+    module = m;
+  }
 
   /** The viewport's size goes to the engine once per animation frame at most. */
   let viewFrame: number | null = null;
@@ -83,7 +106,7 @@
 <svelte:window {onkeydown} />
 
 <div class="shell">
-  <TopBar {module} catalog={current ? current.fileName : 'No folder open'} onmodule={(m) => (module = m)} />
+  <TopBar {module} catalog={current ? current.fileName : 'No folder open'} {onmodule} />
   <main>
     <div class="left">
       <LeftPanelDevelop />
@@ -99,7 +122,13 @@
       />
     </div>
     <aside class="right pane" aria-label="Right panel">
-      <Histogram />
+      <Histogram
+        histogram={session.histogram}
+        exif={current ? exifRow(current.shooting) : []}
+        overlay={session.overlay}
+        canOverlay={session.editable}
+        onoverlay={(side) => session.toggleClipping(side)}
+      />
       <BasicPanel {session} presets={info.whiteBalancePresets} />
     </aside>
   </main>

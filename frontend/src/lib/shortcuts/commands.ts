@@ -25,6 +25,9 @@ export const DEFAULT_COMMANDS: CommandSpec[] = [
   { id: 'develop.remove', label: 'Remove', keys: ['Q'], scope: 'develop', group: 'Develop' },
   { id: 'develop.masking', label: 'Masking', keys: ['Shift+W'], scope: 'develop', group: 'Develop' },
   { id: 'develop.clipping', label: 'Show clipping', keys: ['J'], scope: 'develop', group: 'Develop' },
+  // The histogram's corner markers (DEV-03): no key of their own.
+  { id: 'develop.clippingShadows', label: 'Shadow clipping', scope: 'develop', group: 'Develop' },
+  { id: 'develop.clippingHighlights', label: 'Highlight clipping', scope: 'develop', group: 'Develop' },
   // Basic panel (DEV-02)
   { id: 'develop.treatment', label: 'Color / B&W', keys: ['V'], scope: 'develop', group: 'Develop' },
   { id: 'develop.picker', label: 'White balance picker', keys: ['W'], scope: 'develop', group: 'Develop' },

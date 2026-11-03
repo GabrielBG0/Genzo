@@ -1,9 +1,40 @@
-import type { Change, ColorSpace, Command, CommandResult, Edit, Phase, PhotoEdit, Strip } from '$contract/genzo';
+import type {
+  Change,
+  ClippingPreview,
+  ColorSpace,
+  Command,
+  CommandResult,
+  Edit,
+  Event,
+  Histogram,
+  Phase,
+  PhotoEdit,
+  Strip,
+} from '$contract/genzo';
 import { applyChange, type EditKind } from '../engine/edit';
 import type { Engine } from '../engine/types';
+import { tokenRgba, type Rgba8 } from './tokens';
 
 /** Commands that change the open photo's edit and answer with it. */
 type EditCommand = Extract<Command, { type: 'applyEditDelta' | 'resetParam' | 'pickWhiteBalance' | 'undo' | 'redo' }>;
+/**
+ * Every command that goes in order with the edits: the clipping preview
+ * belongs to the gesture it is sent in, so it must not overtake its start.
+ */
+type Queued = EditCommand | Extract<Command, { type: 'setClippingOverlay' | 'setClippingPreview' }>;
+
+/** The J overlays' colors, from the token set (DEV-03). */
+export interface ClipColors {
+  shadow: Rgba8;
+  highlight: Rgba8;
+}
+
+export type ClipSide = 'shadows' | 'highlights';
+
+const tokenClipColors = (): ClipColors => ({
+  shadow: tokenRgba('--clip-shadow'),
+  highlight: tokenRgba('--clip-highlight'),
+});
 
 /**
  * Develop's state on the app side: the strip, the open photo's edit, and
@@ -24,6 +55,9 @@ type EditCommand = Extract<Command, { type: 'applyEditDelta' | 'resetParam' | 'p
  * - **A switch waits.** It ends a gesture in progress with its latest
  *   value, and goes after every edit command sent, so it cannot overtake
  *   an *end* and leave the photo it leaves mid-gesture.
+ * - **The histogram** (DEV-03) is the newest count of the open photo,
+ *   by generation, from `HistogramReady`. The J overlays are the
+ *   session's, not a photo's: they stay on across switches.
  */
 export class DevelopSession {
   strip: Strip = $state({ photos: [], current: null, direction: 'next' });
@@ -37,6 +71,10 @@ export class DevelopSession {
   picking = $state(false);
   /** A gesture is in progress: Undo and Redo wait for its end (APP-10). */
   inGesture = $state(false);
+  /** The open photo's newest counts, or none yet. */
+  histogram: Histogram | null = $state(null);
+  /** Which J overlays are on. */
+  overlay = $state({ shadows: false, highlights: false });
   private optimistic: Edit | null = $state(null);
 
   /** The edit the panel shows: the optimistic one during a gesture. */
@@ -44,18 +82,30 @@ export class DevelopSession {
 
   /** The newest revision seen of each photo's edit. Not state: nothing renders from it. */
   private seen: Record<number, number> = {};
-  private queue: EditCommand[] = [];
+  private queue: Queued[] = [];
   private inFlight = false;
   private frame: number | null = null;
   private pendingUpdate: Change[] | null = null;
   /** The gesture's latest changes, for an *end* a switch sends. */
   private gestureChanges: Change[] | null = null;
   private idlers: (() => void)[] = [];
+  /** The generation of the counts shown; a lower one is older. */
+  private histogramGeneration = -1;
+  /** The Alt preview sent for the gesture in progress. */
+  private previewing: ClippingPreview = 'none';
+  private readonly unsubscribe: () => void;
 
   constructor(
     private readonly engine: Engine,
     private readonly space: ColorSpace = 'srgb',
-  ) {}
+    private readonly clipColors: () => ClipColors = tokenClipColors,
+  ) {
+    this.unsubscribe = engine.onEvent((e) => this.onEvent(e));
+  }
+
+  dispose(): void {
+    this.unsubscribe();
+  }
 
   get photo(): number | null {
     return this.strip.current;
@@ -78,7 +128,9 @@ export class DevelopSession {
     const r = await this.engine.execute({ type: 'openFolder', path });
     if (r.type !== 'folder') throw new Error(`openFolder answered ${r.type}`);
     this.strip = r.strip;
+    this.clearHistogram();
     this.opened(r.edit, r.reason);
+    await this.fetchHistogram();
   }
 
   async select(photo: number): Promise<void> {
@@ -92,6 +144,8 @@ export class DevelopSession {
     this.reason = null;
     this.notice = null;
     this.picking = false;
+    this.previewing = 'none';
+    this.clearHistogram();
     await this.idle();
     // A later switch went first.
     if (this.strip.current !== photo) return;
@@ -101,6 +155,7 @@ export class DevelopSession {
       // A later switch wins over this one.
       if (this.strip.current !== photo) return;
       this.opened(r.edit, r.reason);
+      await this.fetchHistogram();
     } catch (e) {
       // Said in the status bar, as a failed edit command is.
       if (this.strip.current === photo) this.notice = e instanceof Error ? e.message : String(e);
@@ -129,6 +184,8 @@ export class DevelopSession {
     this.optimistic = changes.reduce((e, c) => applyChange(e, c, kindOf(e)), this.shown as Edit);
     this.inGesture = phase !== 'End';
     this.gestureChanges = this.inGesture ? changes : null;
+    // The engine ends the preview with the gesture.
+    if (!this.inGesture) this.previewing = 'none';
     if (phase === 'Update') {
       this.pendingUpdate = changes;
       this.frame ??= requestAnimationFrame(() => {
@@ -167,6 +224,36 @@ export class DevelopSession {
     this.send({ type: 'pickWhiteBalance', photo: this.photo, x, y });
   }
 
+  /**
+   * J (no side) turns both overlays on, or both off when both are on; a
+   * marker turns its own. Nothing for a photo that does not render.
+   */
+  toggleClipping(side?: ClipSide): void {
+    if (!this.editable) return;
+    const { shadows, highlights } = this.overlay;
+    const on = !(shadows && highlights);
+    this.setOverlay(
+      side === undefined
+        ? { shadows: on, highlights: on }
+        : { shadows: side === 'shadows' ? !shadows : shadows, highlights: side === 'highlights' ? !highlights : highlights },
+    );
+  }
+
+  /** Leaving Develop turns both overlays off (APP-01). */
+  clearClipping(): void {
+    if (this.overlay.shadows || this.overlay.highlights) this.setOverlay({ shadows: false, highlights: false });
+  }
+
+  /**
+   * Alt during a tone slider's drag: shows only what clips, until Alt goes
+   * up or the gesture ends. Outside a gesture there is none.
+   */
+  preview(preview: ClippingPreview): void {
+    if (!this.inGesture || preview === this.previewing) return;
+    this.previewing = preview;
+    this.send({ type: 'setClippingPreview', preview });
+  }
+
   /** Takes a photo's edit if it is the newest seen; true when taken. */
   accept(edit: PhotoEdit): boolean {
     if (edit.revision < (this.seen[edit.photo] ?? -1)) return false;
@@ -185,6 +272,42 @@ export class DevelopSession {
     if (r.type === 'edit' && r.edit) this.accept(r.edit);
   }
 
+  private setOverlay(overlay: { shadows: boolean; highlights: boolean }) {
+    let colors: ClipColors;
+    try {
+      colors = this.clipColors();
+    } catch (e) {
+      this.notice = e instanceof Error ? e.message : String(e);
+      return;
+    }
+    this.overlay = overlay;
+    this.send({ type: 'setClippingOverlay', ...overlay, shadowColor: colors.shadow, highlightColor: colors.highlight });
+  }
+
+  private onEvent(e: Event) {
+    if (e.type === 'histogramReady') this.takeHistogram(e.photo, e.generation, e.histogram);
+  }
+
+  /** Takes counts of the open photo newer than those shown. */
+  private takeHistogram(photo: number, generation: number, histogram: Histogram) {
+    if (photo !== this.strip.current || generation <= this.histogramGeneration) return;
+    this.histogramGeneration = generation;
+    this.histogram = histogram;
+  }
+
+  private clearHistogram() {
+    this.histogram = null;
+    this.histogramGeneration = -1;
+  }
+
+  /** The engine's latest counts, for counts sent before the reply (a photo already shown). */
+  private async fetchHistogram() {
+    const photo = this.photo;
+    if (photo === null || this.histogram) return;
+    const r = await this.engine.query({ type: 'getHistogram', photo });
+    if (r.type === 'histogram' && r.counted) this.takeHistogram(r.counted.photo, r.counted.generation, r.counted.histogram);
+  }
+
   private opened(edit: PhotoEdit | null, reason: string | null) {
     this.reason = reason;
     if (edit) this.accept(edit);
@@ -197,7 +320,7 @@ export class DevelopSession {
     return new Promise((resolve) => this.idlers.push(resolve));
   }
 
-  private send(command: EditCommand) {
+  private send(command: Queued) {
     this.queue.push(command);
     void this.drain();
   }

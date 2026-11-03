@@ -3,6 +3,7 @@ import type { CommandResult, Event, PhotoEdit } from '$contract/genzo';
 import { clamped, defaults, isEdited, type EditKind } from './edit';
 import { FakeEngine } from './fake';
 import { PhotoEdits } from './history';
+import { decodeFrame } from './tiles';
 
 const RAW: EditKind = { raw: true, asShotTemp: 5400, asShotTint: 4 };
 
@@ -110,7 +111,7 @@ describe('FakeEngine, Develop', () => {
     expect(folder.edit).toMatchObject({ photo: 1, edited: false, undo: null, revision: 0 });
   });
 
-  it('sends each settled frame of the open photo, then its counts', async () => {
+  it('sends each frame of the open photo, then its counts, drag frames included (DEV-03, at Fit)', async () => {
     const { engine, events } = await opened();
     events.length = 0;
     await engine.execute({ type: 'applyEditDelta', photo: 1, changes: [{ Exposure: 1 }], phase: 'Start' });
@@ -118,10 +119,11 @@ describe('FakeEngine, Develop', () => {
     await Promise.resolve();
     expect(events.map((e) => [e.type, 'photo' in e ? e.photo : null])).toEqual([
       ['renderFinished', 1],
+      ['histogramReady', 1],
       ['renderFinished', 1],
       ['histogramReady', 1],
     ]);
-    const [, settled, counts] = events;
+    const [, , settled, counts] = events;
     if (settled?.type !== 'renderFinished' || counts?.type !== 'histogramReady') throw new Error('order');
     expect(counts.generation).toBe(settled.generation);
     expect(counts.histogram.pixels).toBe(640 * 427);
@@ -169,5 +171,66 @@ describe('FakeEngine, Develop', () => {
     const picked = await engine.execute({ type: 'pickWhiteBalance', photo: 1, x: 0.5, y: 0.5 });
     expect(picked).toMatchObject({ recorded: true, refused: null, edit: { undo: 'White balance: picked' } });
     expect(edited(picked).edit.white_balance).toEqual({ mode: 'Custom', temp: 5500, tint: 0 });
+  });
+
+  /** The open photo's last frame, as pixels, and its counts. */
+  async function lastFrame(engine: FakeEngine, events: Event[]) {
+    const frames = events.filter((e) => e.type === 'renderFinished');
+    const counts = events.filter((e) => e.type === 'histogramReady');
+    const frame = frames.at(-1);
+    const hist = counts.at(-1);
+    if (frame?.type !== 'renderFinished' || hist?.type !== 'histogramReady') throw new Error('no frame');
+    const tiles = decodeFrame(await engine.fetchFrame(frame.generation));
+    const px: number[][] = [];
+    for (const t of tiles) for (let i = 0; i < t.pixels.length; i += 4) px.push([...t.pixels.slice(i, i + 3)]);
+    return { px, histogram: hist.histogram };
+  }
+
+  const RED: [number, number, number, number] = [255, 107, 107, 255];
+  const BLUE: [number, number, number, number] = [91, 157, 255, 255];
+  const key = (p: number[]) => p.join(',');
+
+  it('draws J over each clipped pixel, red winning, and counts the photo as it was (DEV-03)', async () => {
+    const { engine, events } = await opened();
+    await engine.execute({ type: 'applyEditDelta', photo: 1, changes: [{ Exposure: 2 }, { Blacks: -100 }], phase: 'End' });
+    const plain = await lastFrame(engine, events);
+    await engine.execute({ type: 'setClippingOverlay', shadows: true, highlights: true, shadowColor: BLUE, highlightColor: RED });
+    const drawn = await lastFrame(engine, events);
+    expect(drawn.histogram).toEqual(plain.histogram);
+    let highlights = 0;
+    plain.px.forEach((p, i) => {
+      const out = drawn.px[i] ?? [];
+      if (p.includes(255)) {
+        highlights++;
+        expect(out).toEqual(RED.slice(0, 3));
+      } else if (p.includes(0)) expect(out).toEqual(BLUE.slice(0, 3));
+      else expect(out).toEqual(p);
+    });
+    expect(highlights).toBe(plain.histogram.highlights.pixels);
+    expect(highlights).toBeGreaterThan(0);
+  });
+
+  it('shows only what clips during an Alt preview, and the photo again once the gesture ends', async () => {
+    const { engine, events } = await opened();
+    // Outside a gesture there is no preview.
+    await engine.execute({ type: 'setClippingPreview', preview: 'highlights' });
+    await engine.execute({ type: 'applyEditDelta', photo: 1, changes: [{ Exposure: 1 }], phase: 'Start' });
+    const plain = await lastFrame(engine, events);
+    await engine.execute({ type: 'setClippingPreview', preview: 'highlights' });
+    const preview = await lastFrame(engine, events);
+    // Some clips, some shows the black background.
+    expect(new Set(preview.px.map(key))).toContain('0,0,0');
+    expect(preview.px.some((p) => p.includes(255))).toBe(true);
+    preview.px.forEach((p, i) => {
+      const src = plain.px[i] ?? [];
+      expect(p).toEqual(src.map((c) => (c === 255 ? 255 : 0)));
+    });
+    await engine.execute({ type: 'setClippingPreview', preview: 'shadows' });
+    const shadows = await lastFrame(engine, events);
+    shadows.px.forEach((p, i) => expect(p).toEqual((plain.px[i] ?? []).map((c) => (c === 0 ? 0 : 255))));
+    expect(shadows.histogram).toEqual(plain.histogram);
+    // The end renders the photo, the preview dropped.
+    await engine.execute({ type: 'applyEditDelta', photo: 1, changes: [{ Exposure: 1 }], phase: 'End' });
+    expect((await lastFrame(engine, events)).px).toEqual(plain.px);
   });
 });

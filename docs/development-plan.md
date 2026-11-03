@@ -429,7 +429,8 @@ These come from `docs/m0-results.md` and decide how the steps below are built:
   - Item 13: Ctrl Z and Ctrl Shift Z through the registry, off during a gesture; the quick actions follow them, their tooltips naming the step ("Undo Exposure  Ctrl Z"). The menu waits for APP-02's spec.
   - Item 9, in part: the filmstrip switches photos and shows the edited dot; thumbnails and the rest of LIB-09 come with it.
   - The spike's screen moved to `spike/SpikeShell.svelte`, shown in autobench mode and at `#/spike`, until the autobench moves to Develop's commands.
-  - Not yet: the histogram (DEV-03), a folder chosen in the real app (wiring), 1:1 and the picker at 1:1.
+  - Item 5, DEV-03 (2026-11-02): the histogram of the open photo's newest counts by generation, each frame's at Fit, drag frames included, as the engine sends them. The plot is scaled to the tallest bin from 1 to 254. The corner markers light in the clipped channels' colors, the channel tokens blended, and their tooltips give the share of pixels. The EXIF row follows criterion 8's formats. J turns both overlays on or off and a marker one; the overlays stay on across switches and go off when leaving Develop. Their colors are read from the `--clip-shadow` and `--clip-highlight` tokens and sent as RGBA8. Alt during a drag of Exposure, Highlights, Whites, Shadows or Blacks sends `SetClippingPreview`, queued with the edit commands so it cannot overtake its gesture's *start*. The fake draws the overlays and the preview over its frames after counting them, as stage 9 does, and drops the preview at a gesture's end.
+  - Not yet: a folder chosen in the real app (wiring), 1:1 and the picker at 1:1, the histogram at 1:1 (the engine's whole-photo count, which the session takes as it takes any count).
 
 ### Quality
 Stricter than M0 (see Decided, "Golden images in M0"). A stage or decoder is not done without all of its checks:
