@@ -173,7 +173,7 @@ describe('FakeEngine, Develop', () => {
     expect(edited(picked).edit.white_balance).toEqual({ mode: 'Custom', temp: 5500, tint: 0 });
   });
 
-  /** The open photo's last frame, as pixels, and its counts. */
+  /** The open photo's last frame as RGB triples, flat, and its counts. */
   async function lastFrame(engine: FakeEngine, events: Event[]) {
     const frames = events.filter((e) => e.type === 'renderFinished');
     const counts = events.filter((e) => e.type === 'histogramReady');
@@ -181,14 +181,26 @@ describe('FakeEngine, Develop', () => {
     const hist = counts.at(-1);
     if (frame?.type !== 'renderFinished' || hist?.type !== 'histogramReady') throw new Error('no frame');
     const tiles = decodeFrame(await engine.fetchFrame(frame.generation));
-    const px: number[][] = [];
-    for (const t of tiles) for (let i = 0; i < t.pixels.length; i += 4) px.push([...t.pixels.slice(i, i + 3)]);
+    const px: number[] = [];
+    for (const t of tiles) for (let i = 0; i < t.pixels.length; i += 4) px.push(t.pixels[i] ?? 0, t.pixels[i + 1] ?? 0, t.pixels[i + 2] ?? 0);
     return { px, histogram: hist.histogram };
+  }
+
+  /**
+   * The pixels of `got` that differ from `want(src)`, pixel by pixel; one
+   * assertion per frame, as a per-pixel `expect` is too slow for CI.
+   */
+  function mismatches(src: number[], got: number[], want: (p: number[]) => number[]): number {
+    let bad = 0;
+    for (let i = 0; i < src.length; i += 3) {
+      const w = want(src.slice(i, i + 3));
+      if (w[0] !== got[i] || w[1] !== got[i + 1] || w[2] !== got[i + 2]) bad++;
+    }
+    return bad;
   }
 
   const RED: [number, number, number, number] = [255, 107, 107, 255];
   const BLUE: [number, number, number, number] = [91, 157, 255, 255];
-  const key = (p: number[]) => p.join(',');
 
   it('draws J over each clipped pixel, red winning, and counts the photo as it was (DEV-03)', async () => {
     const { engine, events } = await opened();
@@ -198,14 +210,14 @@ describe('FakeEngine, Develop', () => {
     const drawn = await lastFrame(engine, events);
     expect(drawn.histogram).toEqual(plain.histogram);
     let highlights = 0;
-    plain.px.forEach((p, i) => {
-      const out = drawn.px[i] ?? [];
+    const bad = mismatches(plain.px, drawn.px, (p) => {
       if (p.includes(255)) {
         highlights++;
-        expect(out).toEqual(RED.slice(0, 3));
-      } else if (p.includes(0)) expect(out).toEqual(BLUE.slice(0, 3));
-      else expect(out).toEqual(p);
+        return RED.slice(0, 3);
+      }
+      return p.includes(0) ? BLUE.slice(0, 3) : p;
     });
+    expect(bad).toBe(0);
     expect(highlights).toBe(plain.histogram.highlights.pixels);
     expect(highlights).toBeGreaterThan(0);
   });
@@ -218,19 +230,23 @@ describe('FakeEngine, Develop', () => {
     const plain = await lastFrame(engine, events);
     await engine.execute({ type: 'setClippingPreview', preview: 'highlights' });
     const preview = await lastFrame(engine, events);
+    expect(mismatches(plain.px, preview.px, (p) => p.map((c) => (c === 255 ? 255 : 0)))).toBe(0);
     // Some clips, some shows the black background.
-    expect(new Set(preview.px.map(key))).toContain('0,0,0');
-    expect(preview.px.some((p) => p.includes(255))).toBe(true);
-    preview.px.forEach((p, i) => {
-      const src = plain.px[i] ?? [];
-      expect(p).toEqual(src.map((c) => (c === 255 ? 255 : 0)));
-    });
+    let black = 0;
+    let lit = 0;
+    for (let i = 0; i < preview.px.length; i += 3) {
+      const p = preview.px.slice(i, i + 3);
+      if (p.every((c) => c === 0)) black++;
+      else lit++;
+    }
+    expect(black).toBeGreaterThan(0);
+    expect(lit).toBeGreaterThan(0);
     await engine.execute({ type: 'setClippingPreview', preview: 'shadows' });
     const shadows = await lastFrame(engine, events);
-    shadows.px.forEach((p, i) => expect(p).toEqual((plain.px[i] ?? []).map((c) => (c === 0 ? 0 : 255))));
+    expect(mismatches(plain.px, shadows.px, (p) => p.map((c) => (c === 0 ? 0 : 255)))).toBe(0);
     expect(shadows.histogram).toEqual(plain.histogram);
     // The end renders the photo, the preview dropped.
     await engine.execute({ type: 'applyEditDelta', photo: 1, changes: [{ Exposure: 1 }], phase: 'End' });
-    expect((await lastFrame(engine, events)).px).toEqual(plain.px);
+    expect(mismatches(plain.px, (await lastFrame(engine, events)).px, (p) => p)).toBe(0);
   });
 });
