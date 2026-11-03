@@ -72,7 +72,7 @@ export class DevelopSession {
   /** A gesture is in progress: Undo and Redo wait for its end (APP-10). */
   inGesture = $state(false);
   /** The open photo's newest counts, or none yet. */
-  histogram: Histogram | null = $state(null);
+  histogram: Histogram | null = $state.raw(null);
   /** Which J overlays are on. */
   overlay = $state({ shadows: false, highlights: false });
   private optimistic: Edit | null = $state(null);

@@ -147,25 +147,60 @@ test('J turns both overlays on, a marker one; they stay on across photos', async
   await expect(marker(page, 'Highlight clipping')).toHaveAttribute('aria-pressed', 'false');
 });
 
-/** The share of the photo's pixels that are pure black, from a screenshot. */
-async function blackShare(page: Page): Promise<number> {
-  const png = await page.getByRole('img', { name: 'Photo' }).screenshot();
-  return page.evaluate(async (data) => {
-    const img = new Image();
-    img.src = `data:image/png;base64,${data}`;
-    await img.decode();
-    const canvas = document.createElement('canvas');
-    canvas.width = img.width;
-    canvas.height = img.height;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return 0;
-    ctx.drawImage(img, 0, 0);
-    const px = ctx.getImageData(0, 0, img.width, img.height).data;
-    let black = 0;
-    for (let i = 0; i < px.length; i += 4) if (px[i] === 0 && px[i + 1] === 0 && px[i + 2] === 0) black++;
-    return black / (px.length / 4);
-  }, png.toString('base64'));
+/**
+ * Reads a screenshot in the page: the share of pure black pixels, and the
+ * RGB at a point given as fractions of its size.
+ */
+async function readShot(page: Page, png: Buffer, at = { x: 0.5, y: 0.5 }) {
+  return page.evaluate(
+    async ({ data, at }) => {
+      const img = new Image();
+      img.src = `data:image/png;base64,${data}`;
+      await img.decode();
+      const canvas = document.createElement('canvas');
+      canvas.width = img.width;
+      canvas.height = img.height;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) throw new Error('no 2d context');
+      ctx.drawImage(img, 0, 0);
+      const px = ctx.getImageData(0, 0, img.width, img.height).data;
+      let black = 0;
+      for (let i = 0; i < px.length; i += 4) if (px[i] === 0 && px[i + 1] === 0 && px[i + 2] === 0) black++;
+      const i = 4 * (Math.floor(at.y * (img.height - 1)) * img.width + Math.floor(at.x * (img.width - 1)));
+      return { black: black / (px.length / 4), rgb: [px[i], px[i + 1], px[i + 2]] as number[] };
+    },
+    { data: png.toString('base64'), at },
+  );
 }
+
+const photo = (page: Page) => page.getByRole('img', { name: 'Photo' });
+
+/** The share of the photo's pixels that are pure black. */
+async function blackShare(page: Page): Promise<number> {
+  return (await readShot(page, await photo(page).screenshot())).black;
+}
+
+const near = (got: number[], want: number[]) => got.every((c, i) => Math.abs(c - (want[i] ?? 0)) <= 2);
+
+test('a marker whose three channels clip is white, and J paints the clipped photo in the token red', async ({
+  page,
+}) => {
+  await develop(page);
+  // +2 EV: every pixel of the fake's scene clips, the sky in all three channels.
+  await drag(page, 'Exposure', 0.5, 0.7);
+  await expect(marker(page, 'Highlight clipping')).toHaveAttribute('data-channels', 'red green blue');
+  // The triangle's center, a little inside its corner.
+  const box = await marker(page, 'Highlight clipping').boundingBox();
+  if (!box) throw new Error('no marker');
+  const shot = await page.screenshot({ clip: { x: box.x + box.width / 2, y: box.y + 3, width: 2, height: 2 } });
+  const corner = (await readShot(page, shot, { x: 0, y: 0 })).rgb;
+  expect(corner).toEqual([255, 255, 255]);
+  await page.keyboard.press('j');
+  // Highlights win over shadows: label.red, read from the token.
+  await expect
+    .poll(async () => near((await readShot(page, await photo(page).screenshot())).rgb, [255, 107, 107]))
+    .toBe(true);
+});
 
 test('Alt while dragging Exposure shows only what clips, until Alt goes up', async ({ page }) => {
   await develop(page);

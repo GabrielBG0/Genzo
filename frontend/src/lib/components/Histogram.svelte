@@ -55,9 +55,9 @@
     return `M0 ${H} L${pts.join(' L')} L${W} ${H}Z`;
   }
 
-  const markers: { side: Side; label: string; command: string; points: string }[] = [
-    { side: 'shadows', label: 'Shadow clipping', command: 'develop.clippingShadows', points: '0,0 9,0 0,9' },
-    { side: 'highlights', label: 'Highlight clipping', command: 'develop.clippingHighlights', points: '0,0 9,0 9,9' },
+  const markers: { side: Side; label: string; points: string }[] = [
+    { side: 'shadows', label: 'Shadow clipping', points: '0,0 9,0 0,9' },
+    { side: 'highlights', label: 'Highlight clipping', points: '0,0 9,0 9,9' },
   ];
 
   function clippingOf(side: Side): Clipping | null {
@@ -96,8 +96,10 @@
         <svg viewBox="0 0 9 9" aria-hidden="true">
           {#if channels.length === 0}
             <polygon class="off" points={m.points} />
+          {:else if channels.length === 3}
+            <polygon class="all" points={m.points} />
           {:else}
-            <!-- One channel shows its own color, two their mix, three white. -->
+            <!-- One channel shows its own color, two their mix. -->
             {#each channels as ch (ch)}<polygon class={ch} points={m.points} />{/each}
           {/if}
         </svg>
@@ -197,6 +199,10 @@
 
   polygon.off {
     fill: var(--clip-off);
+  }
+
+  polygon.all {
+    fill: var(--clip-all);
   }
 
   polygon.red {

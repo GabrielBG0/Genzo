@@ -51,6 +51,10 @@ describe('Histogram (DEV-03)', () => {
     render(Histogram, { histogram: h, notools: true });
     expect(marker('Highlight clipping')).toHaveAttribute('data-channels', 'red green');
     expect(marker('Shadow clipping')).toHaveAttribute('data-channels', 'red green blue');
+    // Three channels are white, not a blend of their tints.
+    expect(marker('Shadow clipping').querySelectorAll('polygon')).toHaveLength(1);
+    expect(marker('Shadow clipping').querySelector('polygon.all')).not.toBeNull();
+    expect(marker('Highlight clipping').querySelectorAll('polygon.red, polygon.green')).toHaveLength(2);
     expect(marker('Highlight clipping').title).toBe('Highlight clipping  J\n0.4 % of pixels');
     expect(marker('Shadow clipping').title).toBe('Shadow clipping  J\n1.0 % of pixels');
     expect(clippedShare({ ...NONE, pixels: 1 }, 1e6)).toBe('under 0.1 % of pixels');
