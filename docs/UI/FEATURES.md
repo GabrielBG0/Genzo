@@ -10,19 +10,22 @@ Spec template for each feature: **Behavior** (what it does, step by step), **Inp
 
 ### APP-01 · Module switcher
 - Priority: P0 · Screens: all
-- Scope: Library, Develop, Map, Print and Export as pill tabs in the top bar. G goes to Library grid, D to Develop.
+- Scope: Library, Develop, Map, Print and Export as pill tabs in the top bar, with one lens indicator that slides to the new tab. G goes to Library grid, D to Develop.
+- Decided: the indicator moves left and width over 180 ms, cubic-bezier(.22,1,.36,1), with no bounce or overshoot, and scales to (.95, .9) while pressed (2026-11-05). See the handoff's Design system.
 - Open questions: Should module state (zoom, open panels) be remembered per photo or per module?
 - Spec: _to be written_
 
 ### APP-02 · App menu behind the logo
 - Priority: P0 · Screens: M2
-- Scope: Compact menu instead of a classic menu bar. Import, Export and recent catalogs on top, then File, Edit, Library, Photo, Develop, View, Window, Help, then Preferences, Catalog settings, Keyboard shortcuts, Customize quick actions, Quit. Opens with Alt.
+- Scope: Compact menu instead of a classic menu bar. Import, Export and recent catalogs on top, then File, Edit, Library, Photo, Develop, View, Window, Help, then Preferences, Catalog settings, Keyboard shortcuts, Customize quick actions, Quit. Opens with Alt. It uses the shared menu style, with concentric corners, a top rim, and one highlight lens that slides between items.
+- Decided: the menu has radius 12 and padding 5, and its items have radius 7. It opens from its anchor in 140 ms and closes with a 90 ms fade. Shortcuts show modifiers in text-dim and the key in text-muted. Separators are inset to the labels (2026-11-05). See the handoff's Design system.
 - Open questions: On macOS, mirror the same structure in the system menu bar?
 - Spec: _to be written_
 
 ### APP-03 · Quick actions in the top bar
 - Priority: P1 · Screens: M5, all
-- Scope: One-click buttons next to the app menu, different per module. Default Library: Import, Export, Quick Collection, Undo, Redo. Default Develop: Undo, Redo, Copy settings, Paste settings, Before/After, Reset all, Export. Customizable and reorderable per module, suggestions based on usage, "Pin to top bar" from any right-click menu.
+- Scope: One-click buttons next to the app menu, different per module. Default Library: Import, Export, Quick Collection, Undo, Redo. Default Develop: Undo, Redo, Copy settings, Paste settings, Before/After, Reset all, Export. Customizable and reorderable per module, suggestions based on usage, "Pin to top bar" from any right-click menu. The buttons are flat, not lens.
+- Decided: buttons are 28 px tall with radius 6, transparent or rgba(255,255,255,.07), and .11 on hover. A toggle that is on has accent-soft text on rgba(255,255,255,.13). Groups are flat containers with radius 8 (2026-11-05). See the handoff's Design system.
 - Open questions: Is usage tracking for suggestions local only and can it be turned off?
 - Spec: _to be written_
 
@@ -40,7 +43,8 @@ Spec template for each feature: **Behavior** (what it does, step by step), **Inp
 
 ### APP-06 · Right-click menus
 - Priority: P0 · Screens: M3, M4
-- Scope: Context menus on grid photos (acts on whole selection, mixed states shown with –), on the Develop photo (zoom, background, before/after, snapshot, copy/paste, overlays) and on sliders (reset, copy/paste value, apply to selection, pin).
+- Scope: Context menus on grid photos (acts on whole selection, mixed states shown with –), on the Develop photo (zoom, background, before/after, snapshot, copy/paste, overlays) and on sliders (reset, copy/paste value, apply to selection, pin). The slider menu can open with a header naming the target and its value.
+- Decided: the optional header is 11 px caps with the value in mono accent-soft, for example "EXPOSURE  +0.35 EV" (2026-11-05). See the handoff's Design system.
 - Spec: _to be written_
 
 ### APP-07 · Status bar
@@ -241,7 +245,8 @@ Spec template for each feature: **Behavior** (what it does, step by step), **Inp
 
 ### DEV-02 · Basic panel
 - Priority: P0 · Screens: D1
-- Scope: Profile, Color / B&W treatment (V), white balance presets and picker (W), Temp, Tint, Exposure, Contrast, Highlights, Shadows, Whites, Blacks, Texture, Clarity, Dehaze, Vibrance, Saturation. Auto tone Ctrl U, auto white balance Ctrl Shift U. Changed sliders shown bright, unchanged dim.
+- Scope: Profile, Color / B&W treatment (V), white balance presets and picker (W), Temp, Tint, Exposure, Contrast, Highlights, Shadows, Whites, Blacks, Texture, Clarity, Dehaze, Vibrance, Saturation. Auto tone Ctrl U, auto white balance Ctrl Shift U. Changed sliders shown bright, unchanged dim. All are `edit` sliders. Bipolar sliders have a detent at 0, Shift during a drag is fine adjust, and a double-click reset animates the thumb home.
+- Decided: a drag catches at 0 within 1.5 % of the track width. Shift moves the thumb at 1/10 pointer speed from where Shift went down, and disables the catch. The reset takes 200 ms ease-out. Drags never animate (2026-11-05). `docs/specs/DEV-02.md` gains these before the SliderRow work. See the handoff's Design system.
 - Spec: [DEV-02](../specs/DEV-02.md) (the M1 part: the panel, the Genzo Standard base tone curve, white balance presets and picker)
 
 ### DEV-03 · Histogram and clipping warnings
@@ -321,7 +326,8 @@ Spec template for each feature: **Behavior** (what it does, step by step), **Inp
 
 ### MSK-03 · Brush (K)
 - Priority: P0 · Screens: D11
-- Scope: Brush A, Brush B and Erase, size, feather, flow, density, auto mask. [ ] resize, Shift [ ] feather.
+- Scope: Brush A, Brush B and Erase, size, feather, flow, density, auto mask. [ ] resize, Shift [ ] feather. The brush sliders are `aux`.
+- Decided: they change the tool, not the photo, so they use the opaque pill with a neutral fill and can sit inline in a toolbar (2026-11-05). See the handoff's Design system.
 - Open questions: Pen pressure support.
 - Spec: _to be written_
 
