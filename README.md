@@ -68,6 +68,7 @@ pnpm app:dev
 - [Development plan](docs/development-plan.md): milestones M0 to M5, their exit gates, and every feature mapped to a milestone.
 - [UI handoff](docs/UI/fixer-ui-handoff.html): the Carbon Glass design system, every mockup screen and the component list. Open it in a browser.
 - [Feature list](docs/UI/FEATURES.md): every UI feature with its priority, screens and open questions.
+- [Brand](docs/UI/brand.md): the logo, its versions and how to use them.
 - [License review](docs/licenses.md): adopted dependencies and the native libraries still under review.
 
 The technical spec is the source of truth. Where the UI documents disagree with it, the spec wins.

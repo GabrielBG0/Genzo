@@ -104,6 +104,7 @@ pre{margin:6px 0;padding:10px 12px;border-radius:10px;background:rgba(0,0,0,0.35
 <li>The photo is a placeholder SVG scene. Real images replace it.</li>
 <li>Numbers, names and EXIF values are sample data.</li>
 <li>Screens are static. Hover, open and active states are shown as frozen examples.</li>
+<li>The screens predate the control decisions of 2026-11-05 and are not re-rendered. They still show the old slider handle, pill buttons and menu styling. Build what <b>Design system</b> says.</li>
 <li>Use "Open full size" on any screen to inspect it with browser dev tools.</li>
 </ul></div>
 <div class="pane card"><h4>What to build from it</h4>
@@ -120,7 +121,7 @@ pre{margin:6px 0;padding:10px 12px;border-radius:10px;background:rgba(0,0,0,0.35
 <div class="grid2">
 <div class="pane card"><h4>Direction</h4><ul>
 <li>Layout follows Lightroom Classic. Only the look changes.</li>
-<li>Style "Carbon Glass": dense, keyboard-first, flat <code>#121212</code> background everywhere, glass only on interactive details.</li>
+<li>Style "Carbon Glass": dense, keyboard-first, flat <code>#121212</code> background everywhere, glass only where it is needed, on the value being edited.</li>
 <li>Module bar: Library, Develop, Export. Map and Print join it after v1, when those modules ship. Book, Slideshow and Web are deferred.</li>
 </ul></div>
 <div class="pane card"><h4>AI policy</h4><ul>
@@ -206,9 +207,12 @@ pre{margin:6px 0;padding:10px 12px;border-radius:10px;background:rgba(0,0,0,0.35
 <tr><td>Left panel / right panel</td><td class="mono">252 px / 304 px</td></tr>
 <tr><td>Filmstrip / status bar</td><td class="mono">90 px / 22 px</td></tr>
 <tr><td>Slider row / panel header / menu item / list row</td><td class="mono">22 / 28 / 28 / 24 px</td></tr>
-<tr><td>Pill buttons</td><td class="mono">24 to 34 px high</td></tr>
+<tr><td>Buttons</td><td class="mono">28 px high, radius 6</td></tr>
+<tr><td>Toolbar groups</td><td class="mono">radius 8, padding 2 px</td></tr>
+<tr><td>Slider, edit</td><td class="mono">track 4 px · thumb 22 × 14 · held 24 × 16 · fine adjust 18 wide</td></tr>
+<tr><td>Slider, aux</td><td class="mono">track 3 px · pill 16 × 11</td></tr>
 <tr><td>Slider label column / value column</td><td class="mono">76 px / 42 px, row padding 0 12 0 26</td></tr>
-<tr><td>Radii</td><td class="mono">panes 12 · menus 12 · dialogs 18 to 20 · photo 10 · thumbs 7 · controls 99 (pill)</td></tr>
+<tr><td>Radii</td><td class="mono">panes 12 · menus 12 (padding 5) · menu items 7 · dialogs 18 to 20 · photo 10 · thumbs 7 · buttons 6 · toolbar groups 8 · edit slider thumb 4 · aux slider thumb, module tabs and segmented controls 99 (pill)</td></tr>
 </table>
 
 <h3>Surfaces</h3>
@@ -217,44 +221,115 @@ pre{margin:6px 0;padding:10px 12px;border-radius:10px;background:rgba(0,0,0,0.35
 border: 1px solid rgba(255,255,255,0.08);
 box-shadow: inset 0 1px 0 rgba(255,255,255,0.07);
 border-radius: 12px;</pre></div>
-<div class="pane card"><h4>Lens (selection)</h4><p>Active module, tool, preset, segmented choice, hovered menu item, primary buttons. No blur.</p><pre>background: linear-gradient(180deg, rgba(255,255,255,0.16), rgba(255,255,255,0.07));
+<div class="pane card"><h4>Lens (selection)</h4><p>Reserved for one-of-many choices: segmented controls, module tabs, active tool, menu highlight. No blur.</p><pre>background: linear-gradient(180deg, rgba(255,255,255,0.16), rgba(255,255,255,0.07));
 border: 1px solid rgba(255,255,255,0.16);
 box-shadow: inset 0 1px 0 rgba(255,255,255,0.32), 0 2px 6px rgba(0,0,0,0.25);
 color: #ffffff;</pre></div>
 <div class="pane card"><h4>Overlay (over the photo)</h4><p>Photo toolbar, badges, small overlays and photo-anchored dialogs. Flat, no backdrop blur (technical spec). The screens still render these with blur; build the flat version below.</p><pre>background: rgba(22,23,30,0.92);
 border: 1px solid rgba(255,255,255,0.16);
 box-shadow: inset 0 1px 0.5px rgba(255,255,255,0.45), 0 12px 30px rgba(0,0,0,0.35);</pre></div>
-<div class="pane card"><h4>Slider</h4><p>Track 3 px, fill flat accent (no glow), handle a glossy near-opaque capsule 18 × 13.</p><pre>track: rgba(255,255,255,0.12)   /* or a color gradient for Temp, Tint, HSL */
-fill: #5b9dff from center (bipolar) or from left
-handle: linear-gradient(180deg, rgba(255,255,255,.95), rgba(220,222,228,.82));
-  border: 1px solid rgba(255,255,255,.6);
-  box-shadow: inset 0 1px 0 #fff, inset 0 -1px 1px rgba(0,0,0,.18), 0 1px 4px rgba(0,0,0,.5);
+<div class="pane card"><h4>Slider, edit</h4><p>The control changes the photo: Basic, Tone curve, HSL, Color grading, Detail, Effects, mask amounts. Panel row with label and value, blue fill. The thumb is always translucent.</p><pre>track: 4 px, rgba(255,255,255,.11), rgba(255,255,255,.16) on hover or drag
+  box-shadow: inset 0 1px 1px rgba(0,0,0,.55)
+fill: 4 px, #5b9dff, no glow, from center (bipolar) or from left
+Temp, Tint gradient tracks: opacity .72 at rest, 1 on hover or drag
+thumb: 22 × 14, radius 4
+  background: linear-gradient(180deg, rgba(255,255,255,.24), rgba(255,255,255,.09));
+  border: 1px solid rgba(255,255,255,.42);  /* hover .58 */
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.38), 0 1px 3px rgba(0,0,0,.55), 0 0 0 .5px rgba(0,0,0,.55);
+  backdrop-filter: blur(1.5px);  /* optional, allowed by the spec; drop it if it costs anything */
+  value line: 1.5 × 8, #fff, centered
+held: 24 × 16, background rgba(255,255,255,.32) to .13, border .75, value line 10 px
+  grows over 220 ms, cubic-bezier(.34,1.56,.64,1); value text turns accent-soft
+focus: ring on the thumb, 0 0 0 2px var(--bg), 0 0 0 3.5px var(--accent)
 label/value: text.strong when changed, text.muted / text.dim at default</pre></div>
+<div class="pane card"><h4>Slider behavior (edit)</h4><ul>
+<li><b>Fine adjust.</b> Shift during a drag moves at 1/10 pointer speed from where Shift went down. The thumb narrows to 18 px and the value line turns accent-soft.</li>
+<li><b>Detent.</b> Bipolar sliders have a 1 × 8 px tick at 0, rgba(255,255,255,.26). A drag catches at 0 within 1.5 % of the track width and the tick lights to .75. Shift disables the catch.</li>
+<li><b>Reset.</b> A double-click animates the thumb home over 200 ms ease-out.</li>
+<li><b>Drags.</b> A drag never animates, so it adds no latency.</li>
+</ul></div>
+<div class="pane card"><h4>Slider, aux</h4><p>The control changes a view or a tool: zoom, thumbnail size, brush size, feather, flow, overlay opacity, export quality. Opaque, no blue. Can sit inline in a toolbar with an icon instead of a label and value.</p><pre>track: 3 px, rgba(255,255,255,.12)
+fill: neutral, rgba(255,255,255,.30)
+handle: pill 16 × 11, radius 99
+  background: linear-gradient(180deg, rgba(255,255,255,.95), rgba(220,222,228,.82));
+  border: 1px solid rgba(255,255,255,.6);
+  box-shadow: inset 0 1px 0 #fff, inset 0 -1px 1px rgba(0,0,0,.18), 0 1px 4px rgba(0,0,0,.5), 0 0 0 .5px rgba(0,0,0,.45);</pre></div>
+<div class="pane card"><h4>Buttons and toolbars (flat)</h4><p>Buttons are flat. Toggles show on by color, not glass. Warnings (Clipping J) use the red label color.</p><pre>button: 28 px, radius 6
+  background: transparent or rgba(255,255,255,.07); hover .11
+toggle on: color accent-soft, background rgba(255,255,255,.13)
+toolbar group: radius 8, background rgba(255,255,255,.035), padding 2 px</pre></div>
+<div class="pane card"><h4>Selection indicators</h4><p>One indicator per segmented group or tab bar, on the Lens surface. It slides to the new choice, with no bounce or overshoot.</p><pre>move: left and width, 180 ms cubic-bezier(.22,1,.36,1)
+pressed: scale(.95, .9)</pre></div>
+<div class="pane card"><h4>Menus</h4><ul>
+<li><b>Concentric corners:</b> menu radius 12, padding 5, item radius 7.</li>
+<li><b>Edge:</b> border rgba(255,255,255,.09), brighter top rim inset 0 1px 0 rgba(255,255,255,.10).</li>
+<li><b>Open and close:</b> opens from its anchor, scale .96 to 1 and translateY -4px to 0 in 140 ms ease-out. Closes with a 90 ms fade.</li>
+<li><b>Highlight:</b> one lens behind the items slides to the hovered or keyboard item: top 55 ms ease-out, fade 50 ms, item text color 50 ms.</li>
+<li><b>Shortcuts:</b> modifiers in text.dim, the key in text.muted.</li>
+<li><b>Separators:</b> inset to align with the labels (margin-left 30 px).</li>
+<li><b>Optional header:</b> names the target (11 px caps), with its value in mono accent-soft, for example "EXPOSURE  +0.35 EV".</li>
+</ul></div>
 </div>
 
 <h3>Rules</h3>
 <ul>
-<li>Glass means you can grab or select it. Flat means information.</li>
+<li>Glass only where it is needed, on the value being edited. Everything around it is flat.</li>
+<li>Slider test: a control that changes the photo is <code>edit</code>. A control that changes a view or a tool is <code>aux</code>.</li>
+<li>The technical spec allows real backdrop blur on slider handles and selection indicators, and nowhere else.</li>
 <li>Edited state is always visible: blue dot on edited panels, bright label and value on changed sliders, dot on edited thumbnails.</li>
 <li>Every command shows its shortcut where it appears (menus, tooltips, quick actions, search results).</li>
 <li>Right-click menus act on the whole selection and show mixed states with "–".</li>
 <li>Dialogs size to the window (<code>min(target, 100% - 48px)</code>) and their content wraps or scrolls instead of overflowing.</li>
 </ul>
 
+<h3>Control tokens (2026-11-05)</h3>
+<p class="lead">To add to <code>tokens.css</code> with the M1 frontend work. Under <code>prefers-reduced-motion</code> every duration is 0; held states still show.</p>
+<table>
+<tr><th>Token</th><th>Value</th><th>Use</th></tr>
+<tr><td class="mono">--slider-track-hover</td><td class="mono">rgba(255,255,255,.16)</td><td>Edit track on hover or drag</td></tr>
+<tr><td class="mono">--slider-track-inset</td><td class="mono">inset 0 1px 1px rgba(0,0,0,.55)</td><td>Edit track, recessed</td></tr>
+<tr><td class="mono">--slider-detent</td><td class="mono">rgba(255,255,255,.26)</td><td>Tick at 0</td></tr>
+<tr><td class="mono">--slider-detent-hit</td><td class="mono">rgba(255,255,255,.75)</td><td>Tick while the drag is caught</td></tr>
+<tr><td class="mono">--slider-handle-ring</td><td class="mono">0 0 0 .5px rgba(0,0,0,.45)</td><td>Aux pill ring</td></tr>
+<tr><td class="mono">--thumb-glass-bg</td><td class="mono">linear-gradient(180deg, rgba(255,255,255,.24), rgba(255,255,255,.09))</td><td>Edit thumb</td></tr>
+<tr><td class="mono">--thumb-glass-bg-held</td><td class="mono">linear-gradient(180deg, rgba(255,255,255,.32), rgba(255,255,255,.13))</td><td>Edit thumb, held</td></tr>
+<tr><td class="mono">--thumb-glass-border</td><td class="mono">rgba(255,255,255,.42)</td><td>Edit thumb</td></tr>
+<tr><td class="mono">--thumb-glass-border-held</td><td class="mono">rgba(255,255,255,.75)</td><td>Edit thumb, held</td></tr>
+<tr><td class="mono">--thumb-glass-shadow</td><td class="mono">inset 0 1px 0 rgba(255,255,255,.38), 0 1px 3px rgba(0,0,0,.55), 0 0 0 .5px rgba(0,0,0,.55)</td><td>Edit thumb</td></tr>
+<tr><td class="mono">--thumb-line</td><td class="mono">#fff</td><td>Value line in the edit thumb</td></tr>
+<tr><td class="mono">--r-thumb-glass</td><td class="mono">4px</td><td>Edit thumb radius</td></tr>
+<tr><td class="mono">--aux-track</td><td class="mono">rgba(255,255,255,.12)</td><td>Aux track</td></tr>
+<tr><td class="mono">--aux-fill</td><td class="mono">rgba(255,255,255,.30)</td><td>Aux fill</td></tr>
+<tr><td class="mono">--btn-flat</td><td class="mono">rgba(255,255,255,.07)</td><td>Button background</td></tr>
+<tr><td class="mono">--btn-flat-hover</td><td class="mono">rgba(255,255,255,.11)</td><td>Button hover</td></tr>
+<tr><td class="mono">--btn-flat-on</td><td class="mono">rgba(255,255,255,.13)</td><td>Toggle on</td></tr>
+<tr><td class="mono">--r-btn</td><td class="mono">6px</td><td>Buttons</td></tr>
+<tr><td class="mono">--r-group</td><td class="mono">8px</td><td>Toolbar groups</td></tr>
+<tr><td class="mono">--menu-rim</td><td class="mono">inset 0 1px 0 rgba(255,255,255,.10)</td><td>Menu top rim</td></tr>
+<tr><td class="mono">--spring</td><td class="mono">cubic-bezier(.34,1.56,.64,1)</td><td>Thumb growing when held</td></tr>
+<tr><td class="mono">--ease-out</td><td class="mono">cubic-bezier(.22,1,.36,1)</td><td>Selection indicators, menus, reset</td></tr>
+<tr><td class="mono">--t-lens</td><td class="mono">220ms</td><td>Thumb growing when held</td></tr>
+<tr><td class="mono">--t-select</td><td class="mono">180ms</td><td>Selection indicator slide</td></tr>
+<tr><td class="mono">--t-menu-in</td><td class="mono">140ms</td><td>Menu opening</td></tr>
+<tr><td class="mono">--t-menu-out</td><td class="mono">90ms</td><td>Menu closing</td></tr>
+</table>
+<p><b>Changed:</b> <code>--r-menu-item</code> 8 to 7 px · <code>--menu-border-color</code> to rgba(255,255,255,.09) · <code>--menu-shadow</code> gains the rim: <code>var(--menu-rim), 0 18px 48px rgba(0,0,0,.6)</code>.</p>
+
 <h3>Components</h3>
 <table>
 <tr><th>Component</th><th>Props in the mock</th><th>Notes</th></tr>
-<tr><td>Top bar</td><td class="mono">module</td><td>App menu button, quick actions per module, search, module tabs.</td></tr>
+<tr><td>Top bar</td><td class="mono">module</td><td>App menu button, quick actions per module (flat buttons), search, module tabs (one sliding indicator).</td></tr>
 <tr><td>Left panel · Develop</td><td class="mono">latest, latestValue</td><td>Navigator, presets, snapshots, history timeline, collections, copy and paste.</td></tr>
 <tr><td>Left panel · Library</td><td class="mono">active</td><td>Filter field, catalog, folders, collections, smart collections, import and export.</td></tr>
 <tr><td>Histogram + tool strip</td><td class="mono">tool, clip, notools</td><td>RGB histogram with clipping markers and EXIF row. Tools: edit, crop, remove, red eye, masking.</td></tr>
 <tr><td>Panel header</td><td class="mono">heading, meta, edited, open</td><td>Chevron, uppercase title, edited dot, right meta.</td></tr>
-<tr><td>Slider row</td><td class="mono">label, value, pos, from, track, dim, hot</td><td>hot = being dragged or hovered.</td></tr>
+<tr><td>Slider row</td><td class="mono">label, value, pos, from, track, dim, hot, kind</td><td>hot = being dragged or hovered. kind = <code>'edit' | 'aux'</code>, default <code>'edit'</code>; one component for both. An aux slider can sit inline in a toolbar with an icon instead of a label and value.</td></tr>
+<tr><td>Segmented control</td><td class="mono">not a mock component</td><td>One sliding indicator per group, on the Lens surface.</td></tr>
 <tr><td>Grid cell</td><td class="mono">idx, stars, flag, label, selected, badge</td><td>Reject dims the thumbnail.</td></tr>
 <tr><td>Library toolbar</td><td class="mono">view, extra</td><td>Grid, Loupe, Compare, Survey, People with shortcuts, sort.</td></tr>
 <tr><td>Filmstrip</td><td class="mono">selected</td><td>White ring on the current photo, blue dot on edited ones.</td></tr>
 <tr><td>Status bar</td><td class="mono">mode, info</td><td>Mode pill plus context info.</td></tr>
-<tr><td>Menu</td><td class="mono">items, width, title</td><td>Item: label, shortcut, submenu, check, hot, danger, disabled, separators.</td></tr>
+<tr><td>Menu</td><td class="mono">items, width, title</td><td>Item: label, shortcut, submenu, check, hot, danger, disabled, separators. title = the optional header naming the target. One highlight lens behind the items, not one per item.</td></tr>
 </table>
 </div></section>
 
