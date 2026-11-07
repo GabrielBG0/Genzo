@@ -21,14 +21,14 @@ Explored and rejected, for the record: kanji seal and shop-sign marks (unreadabl
 
 ## Small sizes
 
-At 32 px and below, use the small mark: the same frame, symmetrical, with no edge marking.
+Sizes here are the mark's width, its longer side. At 32 px wide and below, use the small mark: the same frame, symmetrical, with no edge marking.
 
-| Mark | Minimum size |
+| Mark | Minimum width |
 |---|---|
 | Full mark, with edge marking | 48 px |
 | Small mark | 16 px |
 
-Edge text is not allowed below 48 px, so use the small mark from 33 to 47 px too.
+Edge text is not allowed below 48 px, so use the small mark from 33 to 47 px wide too.
 
 ## Clear space
 
@@ -41,15 +41,15 @@ Keep at least the height of the perforation band clear around the mark.
 - Don't put blue on the B&W version.
 - Don't use edge text below 48 px.
 
-The top bar's logo button uses `svg/genzo-glyph-currentcolor.svg`, which takes the color of the text around it by design.
+The top bar's logo button uses `logo/svg/genzo-glyph-currentcolor.svg`, which takes the color of the text around it by design.
 
 ## Files
 
-The files are in [`logo/`](logo/), and its README describes them.
+The files go in `logo/`, and its README describes them.
 
 | File | Use |
 |---|---|
-| [`logo/README.md`](logo/README.md) | what each file is |
-| [`logo/svg/genzo-glyph-currentcolor.svg`](logo/svg/genzo-glyph-currentcolor.svg) | the top bar's logo button |
+| `logo/README.md` | what each file is |
+| `logo/svg/genzo-glyph-currentcolor.svg` | the top bar's logo button |
 
-> The `logo/` folder is not in the repository yet. Complete this table from its README when it lands.
+> The `logo/` folder is not in the repository yet. When it lands, link these paths and complete this table from its README.
