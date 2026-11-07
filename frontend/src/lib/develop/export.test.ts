@@ -109,3 +109,15 @@ describe('Exports (OUT-01)', () => {
     expect(exports.status).toBe('Export failed: The disk is full');
   });
 });
+
+describe('Exports, originals', () => {
+  it('refuses a photo of the folder by its whole path, either separator', async () => {
+    const { exports, photo } = await opened();
+    const refused = async (path: string) => (await exports.start(photo, path, true)).ok === false;
+    expect(await refused('demo/DSC_0412.NEF')).toBe(true);
+    expect(await refused('demo\\harbor.jpg')).toBe(true);
+    // Another folder, or a name that only starts the same: allowed.
+    expect(await refused('/photos/demo/DSC_0412.NEF')).toBe(false);
+    expect(await refused('demoX/harbor.jpg')).toBe(false);
+  });
+});

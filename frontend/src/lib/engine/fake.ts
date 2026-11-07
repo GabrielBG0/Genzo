@@ -170,6 +170,8 @@ export class FakeEngine implements Engine {
   private thumbnails = new Map<number, ArrayBuffer | null>();
   private thumbnailQueue: number[] = [];
   private exportJobs = 0;
+  /** The path the folder was opened as. */
+  private folderPath = '';
   private makingThumbnails = false;
   private folder: FakePhoto[] = [];
   private strip: Strip = { photos: [], current: null, direction: 'next' };
@@ -266,6 +268,7 @@ export class FakeEngine implements Engine {
       case 'openFolder': {
         this.endGesture();
         this.folder = demoFolder();
+        this.folderPath = command.path;
         for (const p of this.folder) p.photo.edited = this.edits.get(p.photo.id)?.state().edited ?? false;
         this.strip = { photos: this.folder.map((p) => p.photo), current: null, direction: 'next' };
         const first = this.folder[0]?.photo.id;
@@ -317,7 +320,9 @@ export class FakeEngine implements Engine {
         const fake = this.folder.find((p) => p.photo.id === command.photo);
         if (command.photo !== this.strip.current || !fake?.kind) throw new Error('no photo is open');
         const name = command.path.split(/[\\/]/).pop() ?? '';
-        if (this.folder.some((p) => p.photo.fileName === name) && command.path.startsWith('demo')) {
+        // The engine refuses a file it listed, by its whole path.
+        const norm = (path: string) => path.replace(/\\/g, '/');
+        if (this.folder.some((p) => norm(`${this.folderPath}/${p.photo.fileName}`) === norm(command.path))) {
           throw new Error(ORIGINAL);
         }
         if (this.written.has(command.path) && !command.replace) throw new Error(`${name} already exists`);
