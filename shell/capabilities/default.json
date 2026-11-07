@@ -1,7 +1,13 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "IPC the frontend's transport module needs: invoke and events.",
-  "windows": ["main"],
-  "permissions": ["core:default"]
+  "description": "IPC the frontend's transport module needs: invoke, events, and the folder and save dialogs.",
+  "windows": [
+    "main"
+  ],
+  "permissions": [
+    "core:default",
+    "dialog:allow-open",
+    "dialog:allow-save"
+  ]
 }

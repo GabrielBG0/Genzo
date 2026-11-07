@@ -36,6 +36,9 @@ const ADAPTER: AdapterInfo = {
 
 const DONE: CommandResult = { type: 'done' };
 
+/** The engine's refusal of a destination that is a photo it opened (OUT-01). */
+export const ORIGINAL = 'Genzo does not write over the photos it opens. Choose another name or folder.';
+
 /** The engine's presets (`genzo_color::white_balance::Preset`), as its info gives them. */
 export const PRESETS: WhiteBalancePreset[] = [
   { name: 'Daylight', temp: 5501.4990234375, tint: 10.010603904724121 },
@@ -155,6 +158,12 @@ export class FakeEngine implements Engine {
   readonly sent: Command[] = [];
   /** Each `requestThumbnails` order, oldest first, for tests. */
   readonly thumbnailRequests: number[][] = [];
+  /** What the fake's folder dialog answers: the demo folder by default. */
+  folderChoice: () => Promise<string | null> = () => Promise.resolve('demo');
+  /** What the fake's save dialog answers: the suggested path by default. */
+  saveChoice: (suggested: string) => Promise<string | null> = (suggested) => Promise.resolve(suggested);
+  /** Files the fake's exports wrote, by path. */
+  readonly written = new Set<string>();
   /** Waits before each thumbnail is made: none by default. */
   thumbnailLatency: (photo: number) => Promise<void> = () => new Promise((r) => setTimeout(r, 0));
   /** Each photo's thumbnail message, or null when it has none. */
@@ -302,12 +311,22 @@ export class FakeEngine implements Engine {
       case 'redo':
         return this.edited(command.photo, (p) => p.redo(), 'End');
       case 'exportJpeg': {
-        // The fake writes no file: it reports an export of the open photo's
-        // shown size, in one step, as the engine's progress would end.
+        // The fake writes no file: it remembers the path, refuses as the
+        // engine does (an original, an existing file without replace), and
+        // reports the export's progress in one step.
         const fake = this.folder.find((p) => p.photo.id === command.photo);
         if (command.photo !== this.strip.current || !fake?.kind) throw new Error('no photo is open');
+        const name = command.path.split(/[\\/]/).pop() ?? '';
+        if (this.folder.some((p) => p.photo.fileName === name) && command.path.startsWith('demo')) {
+          throw new Error(ORIGINAL);
+        }
+        if (this.written.has(command.path) && !command.replace) throw new Error(`${name} already exists`);
+        if (command.longEdge !== null && command.longEdge < 32) throw new Error(`a long edge of ${command.longEdge} px`);
+        this.written.add(command.path);
         const job = ++this.exportJobs;
-        const rowsTotal = fake.height;
+        const long = Math.max(fake.width, fake.height);
+        const scale = command.longEdge !== null && command.longEdge < long ? command.longEdge / long : 1;
+        const rowsTotal = Math.max(1, Math.round(fake.height * scale));
         const progress = (rowsDone: number, state: ExportState) =>
           this.emit({ type: 'exportProgress', job, photo: command.photo, path: command.path, rowsDone, rowsTotal, state });
         progress(0, { type: 'queued' });
@@ -513,6 +532,14 @@ export class FakeEngine implements Engine {
     const frame = this.frames.get(generation);
     if (!frame) throw new Error(`frame ${generation} is gone`);
     return frame;
+  }
+
+  chooseFolder(): Promise<string | null> {
+    return this.folderChoice();
+  }
+
+  chooseSavePath(suggested: string): Promise<string | null> {
+    return this.saveChoice(suggested);
   }
 
   async fetchThumbnail(photo: number): Promise<ArrayBuffer> {

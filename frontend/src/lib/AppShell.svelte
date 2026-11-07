@@ -2,6 +2,7 @@
   import { untrack } from 'svelte';
   import type { EngineInfo } from '$contract/genzo';
   import BasicPanel from './components/BasicPanel.svelte';
+  import ExportDialog from './components/ExportDialog.svelte';
   import Filmstrip from './components/Filmstrip.svelte';
   import Histogram from './components/Histogram.svelte';
   import LeftPanelDevelop from './components/LeftPanelDevelop.svelte';
@@ -9,6 +10,7 @@
   import StatusBar from './components/StatusBar.svelte';
   import TopBar, { type Module } from './components/TopBar.svelte';
   import { exifRow } from './develop/exif';
+  import { Exports } from './develop/export.svelte';
   import { DevelopSession } from './develop/session.svelte';
   import { Thumbnails } from './develop/thumbnails.svelte';
   import type { Engine } from './engine/types';
@@ -24,6 +26,26 @@
   let module: Module = $state('develop');
   const session = untrack(() => new DevelopSession(engine));
   const thumbnails = untrack(() => new Thumbnails(engine));
+  const exports = untrack(() => new Exports(engine));
+  /** The export dialog (OUT-01) is open. */
+  let exportOpen = $state(false);
+
+  /** File › Open folder (LIB-09): the system's folder dialog. */
+  async function openFolder() {
+    const path = await engine.chooseFolder();
+    if (path !== null) await session.openFolder(path);
+  }
+
+  registry.bind(
+    'file.openFolder',
+    () => void openFolder(),
+    () => !exportOpen,
+  );
+  registry.bind(
+    'module.export',
+    () => (exportOpen = true),
+    () => session.editable,
+  );
 
   registry.bind(
     'edit.undo',
@@ -91,10 +113,16 @@
     return () => {
       session.dispose();
       thumbnails.dispose();
+      exports.dispose();
     };
   });
 
   function onmodule(m: Module) {
+    // In M1 the Export tab opens the export dialog (APP-01, OUT-01).
+    if (m === 'export') {
+      if (session.editable) exportOpen = true;
+      return;
+    }
     // Leaving Develop turns the clipping overlays off (DEV-03, APP-01).
     if (m !== 'develop') session.clearClipping();
     module = m;
@@ -137,6 +165,8 @@
   const adapterNotice = $derived(info.adapter.kind === 'hardware' ? null : info.adapter.fallbackReason);
 
   function onkeydown(e: KeyboardEvent) {
+    // The dialog takes its own keys; no command runs under it.
+    if (exportOpen) return;
     registry.handle(e, module === 'develop' ? 'develop' : 'library');
   }
 </script>
@@ -182,8 +212,18 @@
     mode="Develop"
     info={current ? [current.fileName] : []}
     facts={['sRGB', '8-bit', engine.kind === 'fake' ? 'Fake engine' : info.adapter.name]}
-    notice={session.notice ?? session.reason ?? adapterNotice}
+    notice={exports.status ?? session.notice ?? session.reason ?? adapterNotice}
   />
+  {#if exportOpen && current && session.editable}
+    <ExportDialog
+      {engine}
+      {exports}
+      photo={current.id}
+      fileName={current.fileName}
+      photoFolder={session.folder ?? ''}
+      onclose={() => (exportOpen = false)}
+    />
+  {/if}
 </div>
 
 <style>
