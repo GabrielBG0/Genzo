@@ -9,22 +9,32 @@
 
 <script lang="ts">
   interface Props {
-    image?: RgbaImage | null;
+    /** RGBA pixels, or a decoded JPEG (the engine's thumbnails). */
+    image?: RgbaImage | ImageBitmap | null;
+    /** Its codes are Display P3, not sRGB. */
+    p3?: boolean;
     alt?: string;
   }
-  let { image = null, alt = '' }: Props = $props();
+  let { image = null, p3 = false, alt = '' }: Props = $props();
   let canvas: HTMLCanvasElement | undefined = $state();
 
   $effect(() => {
     if (!canvas || !image) return;
     canvas.width = image.width;
     canvas.height = image.height;
-    canvas.getContext('2d')?.putImageData(new ImageData(image.data, image.width, image.height), 0, 0);
+    const ctx = canvas.getContext('2d', { colorSpace: p3 ? 'display-p3' : 'srgb' });
+    if (!ctx) return;
+    if ('data' in image) {
+      ctx.putImageData(new ImageData(image.data, image.width, image.height, { colorSpace: p3 ? 'display-p3' : 'srgb' }), 0, 0);
+    } else {
+      ctx.drawImage(image, 0, 0);
+    }
   });
 </script>
 
 <div class="thumb" role="img" aria-label={alt}>
-  {#if image}<canvas bind:this={canvas}></canvas>{/if}
+  <!-- A new canvas per color space: a context keeps the one it was made with. -->
+  {#if image}{#key p3}<canvas bind:this={canvas}></canvas>{/key}{/if}
 </div>
 
 <style>

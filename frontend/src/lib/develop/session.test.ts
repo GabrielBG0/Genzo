@@ -283,3 +283,22 @@ describe('DevelopSession', () => {
     expect(session.notice).toBe('the token --clip-shadow is not a color: ""');
   });
 });
+
+describe('DevelopSession, the strip (LIB-09)', () => {
+  it('steps to the next and previous photo, and not past either end', async () => {
+    const { engine, session } = await open();
+    expect(session.folder).toBe('demo');
+    await session.step('previous');
+    expect(session.strip.current).toBe(1);
+    expect(engine.sent.filter((c) => c.type === 'selectPhoto')).toEqual([]);
+    await session.step('next');
+    await session.step('next');
+    expect(session.strip.current).toBe(3);
+    await session.step('previous');
+    expect(session.strip.current).toBe(2);
+    for (let i = 0; i < 5; i++) await session.step('next');
+    expect(session.strip.current).toBe(5);
+    const selects = engine.sent.filter((c) => c.type === 'selectPhoto').map((c) => c.photo);
+    expect(selects).toEqual([2, 3, 2, 3, 4, 5]);
+  });
+});

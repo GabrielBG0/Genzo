@@ -33,7 +33,7 @@
   const film = Array.from({ length: 12 }, (_, i) => ({
     id: `f${i}`,
     name: `IMG_${4090 + i}.dng`,
-    thumb: sampleThumb(i),
+    thumb: { image: sampleThumb(i), p3: false },
     edited: [0, 2, 3, 6, 9].includes(i),
   }));
 </script>

@@ -10,6 +10,7 @@ export const DEFAULT_COMMANDS: CommandSpec[] = [
   { id: 'app.menu', label: 'App menu', keys: ['Alt'], group: 'App' },
   { id: 'app.search', label: 'Search photos, presets and commands', keys: ['Mod+K'], group: 'App' },
   { id: 'app.shortcuts', label: 'Keyboard shortcuts', keys: ['Mod+/'], group: 'App' },
+  { id: 'file.openFolder', label: 'Open folder', keys: ['Mod+O'], group: 'File' },
   { id: 'module.library', label: 'Library', keys: ['G'], group: 'Modules' },
   { id: 'module.develop', label: 'Develop', keys: ['D'], group: 'Modules' },
   { id: 'module.export', label: 'Export', keys: ['Mod+Shift+E'], group: 'Modules' },
@@ -31,6 +32,8 @@ export const DEFAULT_COMMANDS: CommandSpec[] = [
   // Basic panel (DEV-02)
   { id: 'develop.treatment', label: 'Color / B&W', keys: ['V'], scope: 'develop', group: 'Develop' },
   { id: 'develop.picker', label: 'White balance picker', keys: ['W'], scope: 'develop', group: 'Develop' },
+  { id: 'photo.previous', label: 'Previous photo', keys: ['ArrowLeft'], scope: 'develop', group: 'Photo' },
+  { id: 'photo.next', label: 'Next photo', keys: ['ArrowRight'], scope: 'develop', group: 'Photo' },
   { id: 'develop.pickerCancel', label: 'Cancel the picker', keys: ['Escape'], scope: 'develop', group: 'Develop' },
   // View (APP-08)
   { id: 'view.sidePanels', label: 'Hide side panels', keys: ['Tab'], group: 'View' },

@@ -152,6 +152,14 @@ export class FakeEngine implements Engine {
   latency: (message: Command | Query) => number | Promise<void> = () => 0;
   /** Every command executed, oldest first, for tests. */
   readonly sent: Command[] = [];
+  /** Each `requestThumbnails` order, oldest first, for tests. */
+  readonly thumbnailRequests: number[][] = [];
+  /** Waits before each thumbnail is made: none by default. */
+  thumbnailLatency: (photo: number) => Promise<void> = () => new Promise((r) => setTimeout(r, 0));
+  /** Each photo's thumbnail message, or null when it has none. */
+  private thumbnails = new Map<number, ArrayBuffer | null>();
+  private thumbnailQueue: number[] = [];
+  private makingThumbnails = false;
   private folder: FakePhoto[] = [];
   private strip: Strip = { photos: [], current: null, direction: 'next' };
   private edits = new Map<number, PhotoEdits>();
@@ -292,12 +300,20 @@ export class FakeEngine implements Engine {
       case 'redo':
         return this.edited(command.photo, (p) => p.redo(), 'End');
       case 'requestThumbnails': {
-        // No thumbnails in the fake yet: each strip photo shows its name.
+        this.thumbnailRequests.push([...command.photos]);
         const listed = new Set(this.folder.map((p) => p.photo.id));
+        const ready: number[] = [];
+        this.thumbnailQueue = [];
         for (const photo of new Set(command.photos)) {
-          if (listed.has(photo)) this.emit({ type: 'thumbnailReady', photo, found: false });
+          if (!listed.has(photo)) continue;
+          if (this.thumbnails.has(photo)) ready.push(photo);
+          else this.thumbnailQueue.push(photo);
         }
-        return { type: 'done' };
+        for (const photo of ready) {
+          this.emit({ type: 'thumbnailReady', photo, found: this.thumbnails.get(photo) !== null });
+        }
+        void this.makeThumbnails();
+        return DONE;
       }
     }
   }
@@ -481,8 +497,35 @@ export class FakeEngine implements Engine {
     return frame;
   }
 
-  fetchThumbnail(photo: number): Promise<ArrayBuffer> {
-    return Promise.reject(new Error(`photo ${photo} has no thumbnail in the fake`));
+  async fetchThumbnail(photo: number): Promise<ArrayBuffer> {
+    const bytes = this.thumbnails.get(photo);
+    if (!bytes) throw new Error(`photo ${photo} has no thumbnail`);
+    return bytes;
+  }
+
+  /**
+   * Makes the queued thumbnails one at a time, in order, each after
+   * `thumbnailLatency`; a newer request replaces the queue meanwhile, as in
+   * `engine::thumbs`. A photo that does not render has none, as a file
+   * without an embedded preview.
+   */
+  private async makeThumbnails() {
+    if (this.makingThumbnails) return;
+    this.makingThumbnails = true;
+    try {
+      for (let photo = this.thumbnailQueue.shift(); photo !== undefined; photo = this.thumbnailQueue.shift()) {
+        if (this.thumbnails.has(photo)) continue;
+        await this.thumbnailLatency(photo);
+        const index = this.folder.findIndex((p) => p.photo.id === photo);
+        const fake = this.folder[index];
+        if (!fake || this.thumbnails.has(photo)) continue;
+        const bytes = fake.kind ? thumbnail(fake, index) : null;
+        this.thumbnails.set(photo, bytes);
+        this.emit({ type: 'thumbnailReady', photo, found: bytes !== null });
+      }
+    } finally {
+      this.makingThumbnails = false;
+    }
   }
 
   private emit(event: Event) {
@@ -513,6 +556,30 @@ function lookOf(edit: Edit, kind: EditKind): Look {
     rgb: [1 + 0.3 * warm + 0.1 * green, 1 - 0.2 * green, 1 - 0.3 * warm + 0.1 * green],
     mono: edit.treatment === 'Monochrome',
   };
+}
+
+/** The long edge a thumbnail fits in, as `engine::thumbs::EDGE`. */
+export const THUMB_EDGE = 320;
+
+/**
+ * A photo's thumbnail as the engine sends it, one tile message: its scene
+ * unedited (thumbnails come from the file's embedded preview), a little
+ * brighter per strip position so cells differ, fitted in 320 px. RGBA
+ * here, where the engine sends JPEG; the app reads both.
+ */
+function thumbnail(fake: FakePhoto, index: number): ArrayBuffer {
+  const [width, height] = fit([fake.width, fake.height], [THUMB_EDGE, THUMB_EDGE]);
+  const rect = { x: 0, y: 0, width, height };
+  const look: Look = { gain: 0.8 + 0.1 * index, rgb: [1, 1, 1], mono: false };
+  const header: TileHeader = {
+    generation: 0,
+    rect,
+    mipLevel: 0,
+    format: 'rgba8Srgb',
+    imageWidth: width,
+    imageHeight: height,
+  };
+  return concat([encodeTile(header, sceneTile(width, height, rect, look))]);
 }
 
 /** A sky over ground with a gray card, under the photo's look. */

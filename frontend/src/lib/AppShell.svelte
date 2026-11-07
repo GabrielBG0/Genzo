@@ -10,6 +10,7 @@
   import TopBar, { type Module } from './components/TopBar.svelte';
   import { exifRow } from './develop/exif';
   import { DevelopSession } from './develop/session.svelte';
+  import { Thumbnails } from './develop/thumbnails.svelte';
   import type { Engine } from './engine/types';
   import { provideRegistry } from './shortcuts/context';
 
@@ -22,6 +23,7 @@
   const registry = provideRegistry();
   let module: Module = $state('develop');
   const session = untrack(() => new DevelopSession(engine));
+  const thumbnails = untrack(() => new Thumbnails(engine));
 
   registry.bind(
     'edit.undo',
@@ -63,6 +65,17 @@
     () => session.toggleClipping('highlights'),
     () => session.editable,
   );
+  const at = $derived(session.strip.photos.findIndex((p) => p.id === session.strip.current));
+  registry.bind(
+    'photo.previous',
+    () => void session.step('previous'),
+    () => at > 0,
+  );
+  registry.bind(
+    'photo.next',
+    () => void session.step('next'),
+    () => at >= 0 && at < session.strip.photos.length - 1,
+  );
   registry.bind(
     'develop.pickerCancel',
     () => (session.picking = false),
@@ -75,7 +88,10 @@
       // to be chosen (wired with the real engine).
       if (engine.kind === 'fake') void session.openFolder('demo');
     });
-    return () => session.dispose();
+    return () => {
+      session.dispose();
+      thumbnails.dispose();
+    };
   });
 
   function onmodule(m: Module) {
@@ -95,7 +111,29 @@
   }
 
   const current = $derived(session.strip.photos.find((p) => p.id === session.strip.current) ?? null);
-  const items = $derived(session.strip.photos.map((p) => ({ id: String(p.id), name: p.fileName, edited: p.edited })));
+  const items = $derived(
+    session.strip.photos.map((p) => {
+      const thumb = thumbnails.get(p.id);
+      return {
+        id: String(p.id),
+        name: p.fileName,
+        edited: p.edited,
+        thumb: typeof thumb === 'object' ? thumb : null,
+        noThumb: thumb === 'none',
+        missing: p.kind === 'missing',
+      };
+    }),
+  );
+
+  // The strip's thumbnails, the visible cells first (LIB-09).
+  let visible = $state({ first: 0, last: -1 });
+  const ids = $derived(session.strip.photos.map((p) => p.id));
+  $effect(() => thumbnails.show(ids, visible.first, visible.last));
+
+  const folderName = $derived(session.folder?.split(/[\\/]/).filter(Boolean).pop() ?? null);
+  const stripMessage = $derived(
+    session.folder === null ? 'Open a folder' : `No photos in this folder: ${folderName ?? session.folder}`,
+  );
   const adapterNotice = $derived(info.adapter.kind === 'hardware' ? null : info.adapter.fallbackReason);
 
   function onkeydown(e: KeyboardEvent) {
@@ -136,6 +174,9 @@
     {items}
     selected={session.strip.current === null ? null : String(session.strip.current)}
     onselect={(id) => void session.select(Number(id))}
+    onvisible={(first, last) => (visible = { first, last })}
+    message={stripMessage}
+    shortcut={session.folder === null ? registry.shortcut('file.openFolder') : ''}
   />
   <StatusBar
     mode="Develop"
