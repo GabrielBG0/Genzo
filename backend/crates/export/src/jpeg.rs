@@ -216,7 +216,10 @@ impl<N: FnMut() -> Option<Strip>, P: FnMut(u32)> ImageBuffer for Rows<N, P> {
         let current = self.current.borrow();
         let s = current.as_ref().expect("reached");
         let row = (y - s.y) as usize * self.width as usize * 4;
-        for px in s.rgba[row..row + self.width as usize * 4].as_chunks::<4>().0 {
+        for px in s.rgba[row..row + self.width as usize * 4]
+            .as_chunks::<4>()
+            .0
+        {
             let (luma, cb, cr) = rgb_to_ycbcr(px[0], px[1], px[2]);
             buffers[0].push(luma);
             buffers[1].push(cb);
@@ -290,6 +293,11 @@ mod tests {
                 assert_eq!(done.last(), Some(&size.1));
                 assert!(done.windows(2).all(|w| w[0] < w[1]), "{done:?}");
             }
+            // 4:2:0 below quality 90, 4:4:4 from it: the first component's
+            // sampling factors in the frame header (SOF0).
+            let sof = whole.windows(2).position(|w| w == [0xFF, 0xC0]).unwrap();
+            let luma_sampling = whole[sof + 2 + 2 + 1 + 2 + 2 + 1 + 1];
+            assert_eq!(luma_sampling, if quality >= 90 { 0x11 } else { 0x22 });
             // It decodes to the image, and carries the segments.
             let img = genzo_imgio::decode(&whole, Default::default()).unwrap();
             assert_eq!((img.width, img.height), size);

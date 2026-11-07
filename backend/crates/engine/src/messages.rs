@@ -115,6 +115,26 @@ impl Engine {
             }
             Command::Undo { photo } => self.edited(photo, self.undo_of(photo)),
             Command::Redo { photo } => self.edited(photo, self.redo_of(photo)),
+            Command::ExportJpeg {
+                photo,
+                path,
+                long_edge,
+                quality,
+                replace,
+            } => {
+                let job = self.export_jpeg(crate::export::ExportRequest {
+                    photo,
+                    path: path.into(),
+                    long_edge,
+                    quality,
+                    replace,
+                })?;
+                Ok(CommandResult::Export { job })
+            }
+            Command::CancelExport { job } => {
+                self.cancel_export(job)?;
+                Ok(CommandResult::Done)
+            }
             Command::RequestThumbnails { photos } => {
                 self.request_thumbnails(&photos);
                 Ok(CommandResult::Done)

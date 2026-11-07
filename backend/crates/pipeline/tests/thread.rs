@@ -487,3 +487,36 @@ fn the_whole_photo_histogram_follows_the_last_render() {
     t.open(2, photo((1200, 800))).unwrap();
     assert_eq!(whole(3), None);
 }
+
+/// OUT-01: an export's rows come in order to its whole height, and a
+/// neighbor's prefetch waits until the export is done, even while the
+/// export only waits for its encoder.
+#[test]
+fn a_prefetch_waits_for_an_export() {
+    let _lock = ONE_DEVICE.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(t) = thread() else { return };
+    let a = photo((2300, 1200));
+    let defaults = Edit::defaults(as_shot(&a.src).1);
+    t.open(1, a).unwrap();
+    t.develop(request(1, 1, &defaults, ViewSpec::Fit((240, 180))))
+        .unwrap()
+        .unwrap();
+    let job = t.export(1, 7, &defaults, Target::Srgb).unwrap().unwrap();
+    assert_eq!(job.size, (2300, 1200));
+    let b = photo((500, 400));
+    let white = Edit::defaults(as_shot(&b.src).1);
+    let pending = t.prefetch(2, b, &white).unwrap();
+    // Two rows of regions: one taken by the channel, one waiting. The
+    // prefetch must not build meanwhile.
+    std::thread::sleep(Duration::from_millis(500));
+    assert!(unanswered(&pending), "the prefetch built beside the export");
+    let mut rows = 0;
+    for strip in job.strips.iter() {
+        let strip = strip.unwrap();
+        assert_eq!(strip.y, rows);
+        assert_eq!(strip.rgba.len(), 2300 * strip.height as usize * 4);
+        rows += strip.height;
+    }
+    assert_eq!(rows, 1200);
+    assert!(pending.recv_timeout(WAIT).unwrap().unwrap().is_some());
+}

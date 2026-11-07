@@ -66,6 +66,11 @@ impl ExportInputs {
         self.frame.pixel_size(self.src.size())
     }
 
+    /// The GPU memory it holds: the base layer's copy.
+    pub fn bytes(&self) -> u64 {
+        self.layer.as_ref().map_or(0, BaseLayer::bytes)
+    }
+
     /// The input, shared with the photo it came from.
     pub fn source(&self) -> &Arc<RawSource> {
         &self.src

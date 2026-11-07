@@ -31,8 +31,12 @@ pub const HISTOGRAM: u64 = 10 * MB;
 /// 1024 px tile).
 pub const PREFETCH: u64 = 5 * MB;
 
+/// An export (OUT-01): its level-0 atlas of 8 × 8 slots, its view stages
+/// for one 1024 px region, and its copy of the base layer's coefficients.
+pub const EXPORT: u64 = 80 * MB;
+
 /// The whole budget's items.
-pub const ITEMS: [u64; 9] = [
+pub const ITEMS: [u64; 10] = [
     PYRAMID,
     TILE_SCRATCH,
     UPLOAD,
@@ -42,6 +46,7 @@ pub const ITEMS: [u64; 9] = [
     OUTPUT,
     HISTOGRAM,
     PREFETCH,
+    EXPORT,
 ];
 
 /// The budget (DEV-01: under 1 GB).
@@ -54,7 +59,7 @@ mod tests {
     #[test]
     fn the_items_add_up_to_the_spec_total() {
         let total: u64 = ITEMS.iter().sum();
-        assert_eq!(total, 699 * MB);
+        assert_eq!(total, 779 * MB);
         assert!(total < LIMIT);
     }
 }

@@ -48,7 +48,7 @@ An export is a job that holds everything it reads. It never uses the open photo'
   - A copy of the photo's base layer for Highlights and Shadows (DEV-01, stage 6), taken when Export is pressed. The base layer is built from the pyramid, which the job does not keep. Its coefficients take 9.4 MB at the 1536 px working size.
   - The edit and the geometry, as they were.
   - Its own GPU textures for one region at a time (see *GPU memory*).
-- **Full size:** the output is rendered in regions of 1024 × 1024 output pixels (512 × 512 for X-Trans), stages 1 to 9, as the 1:1 view renders its tiles (DEV-01, *At 1:1 and during export*). The dither is anchored at each pixel's place in the shown image. So **a full-size export is, before JPEG encoding, the same codes as the 1:1 view**, pixel for pixel (criterion 1).
+- **Full size:** the output is rendered in regions of 1024 × 1024 output pixels, stages 1 to 9, as the 1:1 view renders its tiles (their stage 1–4 tiles are the configured sizes, 512 px for X-Trans, inside each region) (DEV-01, *At 1:1 and during export*). The dither is anchored at each pixel's place in the shown image. So **a full-size export is, before JPEG encoding, the same codes as the 1:1 view**, pixel for pixel (criterion 1).
 - **Resized:** each region is rendered at full resolution through stages 1 to 8. It is reduced to the output size by box means in the working space (linear AP1, before the output transform). Each output pixel is then the mean of the full-resolution pixels it covers, split as `preview::reduce` splits them. Stage 9 runs on the reduced pixels, with its dither anchored at output pixels.
   - That is a definition, not a Fit frame. A Fit frame samples the pyramid (DEV-01, *Readback*), and the job holds no pyramid. Reducing in linear light is the right average for a downscale. A resized export is close to the Fit frame of the same size but not equal to it (criterion 2).
   - **An output pixel can need more than one region:** at a large reduction, the full-resolution pixels it covers span several regions, and at the smallest long edge (32 px, DEV-01's crop minimum) one output pixel covers more than 250 regions of a 48 MP image. So the box sums are not taken inside a region. Each region adds its pixels into an accumulator of the output rows it touches (RGBA f32 sums, the output's width by those rows), on the GPU. Stage 9 runs on an output row once every region it covers has added into it, and that row goes to the encoder. The accumulator holds the output rows of one row of regions, plus one shared at each edge: at most the output width × (1024 × scale + 2) rows.
@@ -61,7 +61,7 @@ An export is a job that holds everything it reads. It never uses the open photo'
   4. export regions;
   5. neighbor prefetch builds.
 
-  A drag waits at most one region; criterion 7 measures what that costs. Prefetch builds wait for the export, so switching during an export can find a neighbor not yet prefetched.
+  A drag waits at most one region; criterion 7 measures what that costs. Every region waits for the rest of a white balance rebuild, which the next part would find stale. Prefetch builds wait for the export, so switching during an export can find a neighbor not yet prefetched.
 - **One export at a time.** A second Export while one runs is queued behind it, and the dialog says so ("Starts after the export in progress").
 
 ### Encoding and writing
@@ -98,8 +98,8 @@ An export is a job that holds everything it reads. It never uses the open photo'
 
 The job adds its own textures to the 1 GB budget (DEV-01, *GPU memory*; `pipeline::budget`):
 
-- A region's stage 1–4 scratch is the shared `TILE_SCRATCH`. The render thread runs one job at a time, so export uses it between other work and never beside it.
-- **New, `EXPORT`:** the region's RGBA16F level-0 output with its apron (9.2 MB at 1072 × 1072), stages 5–8 in RGBA16F at the region's size (8.4 MB), the reduced region (at most 8.4 MB), stage 9's RGBA8 output and its readback (8.4 MB), and the base layer's coefficients (9.4 MB at 1536 × 1536). That is about 44 MB. The budget's items sum to 699 MB, so 301 MB are free.
+- A region's stage 1–4 scratch is the shared `TILE_SCRATCH`. The render thread runs one job at a time, so export uses it between other work and never beside it. Exporting an X-Trans photo while a Bayer one is open (or the reverse) makes that scratch again on each switch between them; it is freed before it is made, so it is never held twice.
+- **New, `EXPORT` (80 MB):** a level-0 atlas of 8 × 8 slots of 256 px, enough for a 1024 px region under a 45° straighten (33.6 MB), view stages for one region (29.4 MB), and the base layer's coefficients (up to 9.4 MB at 1536 × 1536). Measured at a whole region: 69 MB, with a base layer of 6.4 MB (`pipeline/tests/export.rs`). The budget's items now sum to 779 MB.
 
 ## Inputs and shortcuts
 

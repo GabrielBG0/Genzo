@@ -578,6 +578,7 @@ dependencies = [
  "genzo-imgio",
  "genzo-model",
  "genzo-pipeline",
+ "jpeg-encoder",
  "thiserror",
 ]
 

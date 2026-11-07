@@ -238,3 +238,40 @@ fn an_export_keeps_its_photo_after_develop_opens_another() {
     );
     eprintln!("export stages hold {} MB", export.bytes() >> 20);
 }
+
+/// `budget::EXPORT`: an export's GPU memory at a whole region, with the
+/// base layer's copy (its 1536 px working size for a large photo).
+#[test]
+fn an_export_holds_its_budget() {
+    let Some((_lock, gpu)) = gpu() else { return };
+    let mut d = Develop::new(&gpu, TILES);
+    d.open(
+        &gpu,
+        Photo {
+            src: with_camera_profile(scene_raw(3100, 2100)),
+            orientation: 1,
+        },
+    )
+    .unwrap();
+    let mut edit = Edit::defaults(d.kind().unwrap());
+    edit.highlights = -40.0;
+    edit.crop.angle = 45.0;
+    let inputs = d.export_inputs(&gpu, &edit, Target::Srgb).unwrap();
+    settle(&gpu, &mut d);
+    let mut export = ExportStages::new(&gpu);
+    let rect = Rect {
+        x: 0,
+        y: 0,
+        width: REGION,
+        height: REGION.min(inputs.size().1),
+    };
+    d.render_export(&gpu, &mut export, &inputs, rect).unwrap();
+    let held = export.bytes() + inputs.bytes();
+    eprintln!(
+        "export: stages {} B, base layer copy {} B, {} MB in all",
+        export.bytes(),
+        inputs.bytes(),
+        held / 1_000_000
+    );
+    assert!(held <= genzo_pipeline::budget::EXPORT, "{held}");
+}
