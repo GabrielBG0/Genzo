@@ -33,6 +33,8 @@ Genzo is GPL-3.0-only. A dependency is acceptable when its license is compatible
 | @tauri-apps/api | frontend | Apache-2.0 OR MIT | |
 | Public Sans (`@fontsource/public-sans`) | frontend, bundled | OFL-1.1 | Checked in `node_modules/@fontsource/public-sans/LICENSE`. OFL allows bundling with any software; the font may not be sold on its own |
 | JetBrains Mono (`@fontsource/jetbrains-mono`) | frontend, bundled | OFL-1.1 | Same as Public Sans |
+| Zen Kaku Gothic New Black | logo artwork, outlined in the SVGs, not bundled | OFL-1.1 | The 現像 in the mark (2026-11-05, `docs/UI/brand.md`). The owner states the license. Its license file is not checked yet |
+| JetBrains Mono Medium | logo artwork, outlined in the SVGs | OFL-1.1 | The frame number 12A in the mark (2026-11-05). Same family as the bundled font above |
 
 The other 400-odd transitive Rust crates use the licenses allowed in `deny.toml`. Frontend dev tooling (Vite, Svelte, ESLint, Vitest, Playwright) is not distributed with the app.
 
