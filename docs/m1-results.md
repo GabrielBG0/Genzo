@@ -174,5 +174,14 @@ OUT-01 criterion 8. `cli bench export FILE N`: the time from `ExportJpeg` to the
 
 ExifTool's validator finds no error in the exports of the Panasonic, Fujifilm and Pixel 4a files; its warnings are minor (ProcessingSoftware) or the source's own (the Pixel's GPSProcessingMethod).
 
+**Resized** (`bench export FILE N 2048`, part 2b):
+
+| File | Exported | p50 | p95 |
+|---|---|---|---|
+| Panasonic S5 II, 24 MP | 2048 × 1365 | 403 ms | 408 ms |
+| Fujifilm X-T5, 40 MP X-Trans | 2048 × 1365 | 1037 ms | 1146 ms |
+
+Stage 9 on the CPU first took 787 ms of the 24 MP export's 1.07 s on one thread; on a pool of half the cores the export takes 403 ms. The 40 MP file's regions are read back in the working space and added up on the CPU, about 300 ms more than its full-size export; a reduction on the GPU is the lever if that matters.
+
 **Still open:** criterion 7, editing while an export runs (`bench gpu` and `bench open` beside a 48 MP export), comes with the dialog, which is what starts exports while editing.
 

@@ -46,6 +46,33 @@ pub const SLOTS: (u32, u32) = (8, 8);
 /// for one transform, for its whole life.
 const KEY: u64 = 1;
 
+/// Stage 9's settings for an export (DEV-01, *Stage 9*).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Stage9 {
+    pub target: Target,
+    pub compress: bool,
+    pub dither: bool,
+}
+
+/// The size a resized export of a `size` image has for a long edge of
+/// `long_edge`: the image scaled so its long edge is `long_edge`, the other
+/// side rounded, at least 1. `None` when that would not be smaller: an
+/// export is never enlarged (OUT-01), so it goes out at full size.
+pub fn resized(size: (u32, u32), long_edge: u32) -> Option<(u32, u32)> {
+    let (w, h) = size;
+    if long_edge >= w.max(h) {
+        return None;
+    }
+    let side = |v: u32| {
+        ((f64::from(v) * f64::from(long_edge) / f64::from(w.max(h))).round() as u32).max(1)
+    };
+    Some(if w >= h {
+        (long_edge, side(h))
+    } else {
+        (side(w), long_edge)
+    })
+}
+
 /// What an export renders, taken when Export is pressed.
 #[derive(Debug)]
 pub struct ExportInputs {
@@ -64,6 +91,17 @@ impl ExportInputs {
     /// The shown image's size, at full resolution: the full-size export's.
     pub fn size(&self) -> (u32, u32) {
         self.frame.pixel_size(self.src.size())
+    }
+
+    /// What stage 9 does for this export: its target, whether it
+    /// compresses the gamut and whether it dithers. A resized export runs
+    /// stage 9 on the CPU with these.
+    pub fn stage9(&self) -> Stage9 {
+        Stage9 {
+            target: self.target,
+            compress: self.compress,
+            dither: self.dither,
+        }
     }
 
     /// The GPU memory it holds: the base layer's copy.
@@ -107,6 +145,37 @@ impl ExportStages {
         inputs: &ExportInputs,
         rect: Rect,
     ) -> Result<Vec<u8>, DevelopError> {
+        self.render_stages(gpu, stages, inputs, rect)?;
+        self.view.set_counting(false);
+        self.view.set_overlay(Overlay::default());
+        self.view
+            .output(gpu, inputs.target, inputs.compress, inputs.dither);
+        let pixels = self.view.read_frame(gpu)?;
+        Ok(pixels.into_flattened())
+    }
+
+    /// Renders `rect` at full resolution through stages 1 to 7 and reads it
+    /// back in the working space (linear AP1), row by row: a resized
+    /// export's region, reduced before stage 9 (OUT-01, *Resized*).
+    pub fn render_linear(
+        &mut self,
+        gpu: &Gpu,
+        stages: &mut RawStages,
+        inputs: &ExportInputs,
+        rect: Rect,
+    ) -> Result<Vec<[f32; 3]>, DevelopError> {
+        self.render_stages(gpu, stages, inputs, rect)?;
+        Ok(self.view.read_latest(gpu)?)
+    }
+
+    /// Stages 1 to 7 of `rect` into the view's latest cache.
+    fn render_stages(
+        &mut self,
+        gpu: &Gpu,
+        stages: &mut RawStages,
+        inputs: &ExportInputs,
+        rect: Rect,
+    ) -> Result<(), DevelopError> {
         let view = ViewSpec::Region {
             out: (rect.width, rect.height),
             zoom: 1.0,
@@ -141,11 +210,23 @@ impl ExportStages {
         if !look.color_is_identity() {
             self.view.color(gpu, look);
         }
-        self.view.set_counting(false);
-        self.view.set_overlay(Overlay::default());
-        self.view
-            .output(gpu, inputs.target, inputs.compress, inputs.dither);
-        let pixels = self.view.read_frame(gpu)?;
-        Ok(pixels.into_flattened())
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resized_fits_the_long_edge_and_never_enlarges() {
+        assert_eq!(resized((1300, 700), 400), Some((400, 215)));
+        assert_eq!(resized((700, 1300), 400), Some((215, 400)));
+        assert_eq!(resized((1300, 700), 1299), Some((1299, 699)));
+        // Not smaller: full size.
+        assert_eq!(resized((1300, 700), 1300), None);
+        assert_eq!(resized((1300, 700), 5000), None);
+        // The short side is at least 1.
+        assert_eq!(resized((5000, 2), 32), Some((32, 1)));
     }
 }

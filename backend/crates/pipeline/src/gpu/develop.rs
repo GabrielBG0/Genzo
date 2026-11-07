@@ -364,6 +364,19 @@ impl Develop {
         export.render(gpu, &mut self.stages, inputs, rect)
     }
 
+    /// [`Self::render_export`] through stages 1 to 7 only, in the working
+    /// space: a resized export's region (OUT-01).
+    pub fn render_export_linear(
+        &mut self,
+        gpu: &Gpu,
+        export: &mut super::export::ExportStages,
+        inputs: &super::export::ExportInputs,
+        rect: Rect,
+    ) -> Result<Vec<[f32; 3]>, DevelopError> {
+        debug_assert!(!self.rebuilding(), "an export region waits for the rebuild");
+        export.render_linear(gpu, &mut self.stages, inputs, rect)
+    }
+
     /// The open photo's decoded input, shared: what an export holds
     /// (OUT-01). `None` while a photo opened from its level 1 waits for it.
     pub fn source(&self) -> Option<Arc<RawSource>> {

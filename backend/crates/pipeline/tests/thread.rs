@@ -12,7 +12,7 @@ use genzo_model::edit::{Edit, Phase, WhiteBalanceMode};
 use genzo_pipeline::gpu::develop::{Photo, PhotoInfo, Readback, as_shot};
 use genzo_pipeline::gpu::raw_stages::{Level1, RawStages, TileConfig};
 use genzo_pipeline::gpu::synthetic::{scene_raw, with_camera_profile};
-use genzo_pipeline::gpu::thread::{DevelopFrame, DevelopRequest, RenderThread};
+use genzo_pipeline::gpu::thread::{DevelopFrame, DevelopRequest, ExportPiece, RenderThread};
 use genzo_pipeline::gpu::{AdapterChoice, Gpu, GpuError};
 use genzo_pipeline::histogram::Overlay;
 use genzo_pipeline::reference::sampling::ViewSpec;
@@ -501,7 +501,11 @@ fn a_prefetch_waits_for_an_export() {
     t.develop(request(1, 1, &defaults, ViewSpec::Fit((240, 180))))
         .unwrap()
         .unwrap();
-    let job = t.export(1, 7, &defaults, Target::Srgb).unwrap().unwrap();
+    let job = t
+        .export(1, 7, &defaults, Target::Srgb, None)
+        .unwrap()
+        .unwrap();
+    assert!(!job.resized());
     assert_eq!(job.size, (2300, 1200));
     let b = photo((500, 400));
     let white = Edit::defaults(as_shot(&b.src).1);
@@ -511,8 +515,10 @@ fn a_prefetch_waits_for_an_export() {
     std::thread::sleep(Duration::from_millis(500));
     assert!(unanswered(&pending), "the prefetch built beside the export");
     let mut rows = 0;
-    for strip in job.strips.iter() {
-        let strip = strip.unwrap();
+    for piece in job.strips.iter() {
+        let ExportPiece::Rows(strip) = piece.unwrap() else {
+            panic!("a full-size export sends rows");
+        };
         assert_eq!(strip.y, rows);
         assert_eq!(strip.rgba.len(), 2300 * strip.height as usize * 4);
         rows += strip.height;

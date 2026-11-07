@@ -5,3 +5,4 @@
 //! Basic JPEG export is scheduled for M1 (OUT-01), the rest for M4.
 
 pub mod jpeg;
+pub mod resize;
