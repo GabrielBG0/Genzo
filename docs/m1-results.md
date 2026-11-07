@@ -137,3 +137,27 @@ That left the 48 MP cold first pixels at about 0.55 s against 100 ms. The floor 
 **Still open:**
 - **The bench runs by hand.** `scripts/gpu-check.sh` doesn't run it yet, since it needs corpus copies. CI only runs a smoke test on small PNGs (`cli/tests/bench_open.rs`).
 - **The other machines** (macOS, the Linux laptop) are not measured.
+
+## Strip thumbnails on the reference desktop (2026-11-07)
+
+LIB-09 criterion 8. `cli bench thumbs FOLDER 3`: the strip's thumbnails made three times with an empty disk cache, then once from it. Each is read from the file's smallest embedded JPEG of at least 320 px, reduced to 320 px, converted and encoded (`engine::thumbs`), by two workers.
+
+| Folder | Made, per file | Files per second | From the disk tier, per file |
+|---|---|---|---|
+| The corpus, 22 files of 16 cameras (18 with a preview; 35.5 MB read per file) | 31.0 to 31.8 ms | 31 to 32 | 0.13 ms |
+| 20 copies of the 48 MP iPhone ProRAW file | 164 ms | 6 | 0.16 ms |
+
+**Result:** the corpus makes 32 thumbnails a second against the import budget of 20. The ProRAW file misses it: its only embedded preview is the full-size 8064 × 6048 JPEG, decoded on one thread per worker. A folder of them fills its strip in about 3 s per 20 photos, and once only: later sessions read the disk tier.
+
+**Beside photo switches.** `bench open --thumbs` makes the whole strip's thumbnails again before each switch, so a switch can start while one is being made. Two runs of three passes each, interleaved with plain runs (p95):
+
+| Target | Budget | 48 MP, plain | 48 MP, with thumbnails | 12 MP, plain | 12 MP, with thumbnails |
+|---|---|---|---|---|---|
+| First pixels, a switch to a photo not prefetched | under 100 ms | 109 to 111 ms | 104 to 106 ms | 10.0 ms | 9.3 ms |
+| Switch to a prefetched neighbor | under 150 ms | 100 to 108 ms | 92 to 98 ms | 23.1 ms | 22.2 ms |
+| Full fit-view render, not prefetched | under 1 s, under 2 s | 1321 to 1402 ms | 1429 to 1572 ms | 66 ms | 73 ms |
+
+- Thumbnails start no work during a switch or while prefetch has some, so the first pixels and the neighbor switch do not move.
+- The 48 MP fit render does, by up to 170 ms: a ProRAW thumbnail already being made when the switch starts keeps two cores for up to about 300 ms. It stays within its 2 s budget.
+- The plain 48 MP first pixels took 109 to 111 ms on this day, against 90 ms on 2026-10-30, with the same build of that path; the machine was slower, as the plain runs show.
+

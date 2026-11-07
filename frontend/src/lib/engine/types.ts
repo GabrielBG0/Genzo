@@ -27,4 +27,9 @@ export interface Engine {
   onEvent(listener: (event: Event) => void): () => void;
   /** The binary tile messages of a finished render generation. */
   fetchFrame(generation: number): Promise<ArrayBuffer>;
+  /**
+   * A strip photo's thumbnail, one JPEG tile message, once `thumbnailReady`
+   * said it was found (LIB-09).
+   */
+  fetchThumbnail(photo: number): Promise<ArrayBuffer>;
 }

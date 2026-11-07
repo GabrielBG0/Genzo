@@ -115,6 +115,10 @@ impl Engine {
             }
             Command::Undo { photo } => self.edited(photo, self.undo_of(photo)),
             Command::Redo { photo } => self.edited(photo, self.redo_of(photo)),
+            Command::RequestThumbnails { photos } => {
+                self.request_thumbnails(&photos);
+                Ok(CommandResult::Done)
+            }
             Command::RenderTestPattern { .. }
             | Command::LoadSpikeImage { .. }
             | Command::RenderSpike { .. }

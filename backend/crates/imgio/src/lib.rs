@@ -340,13 +340,22 @@ fn decode_cfa_dng(_: &[u8]) -> Result<DecodedImage, DecodeError> {
 /// Efficiency, a damaged file) still shows its preview. `Ok(None)` when the
 /// file holds none: PNG, a plain TIFF, Phase One IIQ, Kodak DCR.
 pub fn decode_preview(data: &[u8]) -> Result<Option<Preview>, DecodeError> {
+    decode_preview_near(data, preview::PREFERRED_EDGE)
+}
+
+/// As [`decode_preview`], preferring the smallest embedded stream whose
+/// long edge is at least `edge` pixels: a thumbnail's (LIB-09) takes a
+/// camera's small preview where [`decode_preview`] takes its larger one.
+/// Without one that large, the largest. A HEIC file has one thumbnail,
+/// whatever `edge` asks.
+pub fn decode_preview_near(data: &[u8], edge: u32) -> Result<Option<Preview>, DecodeError> {
     match sniff(data).ok_or(DecodeError::UnknownFormat)? {
         FileFormat::Heif => heic::decode_preview(data),
         // Only the EXIF thumbnail is a JPEG file's preview: not its own
         // image, nor the MPF images or gain maps (Ultra HDR) after it.
         FileFormat::Jpeg => Ok(jpeg_app1_exif(data)
-            .and_then(|app1| preview::decode(app1, &preview_hints(data, FileFormat::Jpeg)))),
-        format => Ok(preview::decode(data, &preview_hints(data, format))),
+            .and_then(|app1| preview::decode(app1, &preview_hints(data, FileFormat::Jpeg), edge))),
+        format => Ok(preview::decode(data, &preview_hints(data, format), edge)),
     }
 }
 

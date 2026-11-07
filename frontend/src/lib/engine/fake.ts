@@ -291,6 +291,14 @@ export class FakeEngine implements Engine {
         return this.edited(command.photo, (p) => p.undo(), 'End');
       case 'redo':
         return this.edited(command.photo, (p) => p.redo(), 'End');
+      case 'requestThumbnails': {
+        // No thumbnails in the fake yet: each strip photo shows its name.
+        const listed = new Set(this.folder.map((p) => p.photo.id));
+        for (const photo of new Set(command.photos)) {
+          if (listed.has(photo)) this.emit({ type: 'thumbnailReady', photo, found: false });
+        }
+        return { type: 'done' };
+      }
     }
   }
 
@@ -471,6 +479,10 @@ export class FakeEngine implements Engine {
     const frame = this.frames.get(generation);
     if (!frame) throw new Error(`frame ${generation} is gone`);
     return frame;
+  }
+
+  fetchThumbnail(photo: number): Promise<ArrayBuffer> {
+    return Promise.reject(new Error(`photo ${photo} has no thumbnail in the fake`));
   }
 
   private emit(event: Event) {

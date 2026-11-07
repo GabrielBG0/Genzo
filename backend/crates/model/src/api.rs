@@ -356,6 +356,12 @@ pub enum Command {
     /// Applies the photo's step undone last again. Answers
     /// [`CommandResult::Edit`].
     Redo { photo: u64 },
+    /// The strip's thumbnails (LIB-09), in the order to make them: the
+    /// visible cells first, then the rest. Replaces the order of an earlier
+    /// request; photos not named are not made. Each comes as
+    /// `ThumbnailReady`, at once for one already made. Answers
+    /// [`CommandResult::Done`].
+    RequestThumbnails { photos: Vec<u64> },
 }
 
 /// The answer to a [`Command`]. A failure the user cannot act on (no GPU,
@@ -477,6 +483,10 @@ pub enum Event {
         generation: u64,
         histogram: Histogram,
     },
+    /// A strip photo's thumbnail is made (LIB-09): fetch it by photo id.
+    /// `found` is false when the file has no embedded preview, or it
+    /// cannot be read: the neutral cell with the file name.
+    ThumbnailReady { photo: u64, found: bool },
 }
 
 #[cfg(test)]

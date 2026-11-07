@@ -25,7 +25,12 @@ Sources: FEATURES.md (LIB-09), the plan's M1 items (backend item 9, the engine's
 
 - 90 px high, one cell per photo, in the order above (the handoff's Filmstrip). Each cell shows the photo's embedded preview, scaled to fit, or a neutral cell with the file name when it has none.
 - **The current photo** has the white ring. **An edited photo** has the blue dot: its edit differs from its defaults (DEV-01, *Data*: the same comparison as the panels' dots). Undoing back to the defaults clears it (APP-10).
-- **Thumbnails load visible cells first**, then the rest. They come from the embedded previews, through the disk tier of the cache (`cache`), never from a render.
+- **Thumbnails load visible cells first**, then the rest. They come from the embedded previews, through the disk tier of the cache (`cache`), never from a render. A file without an embedded preview (PNG, a plain TIFF, Phase One IIQ, Kodak DCR) keeps the neutral cell with its file name.
+- **How the engine makes them** (`engine::thumbs`, contract 0.5.2):
+  - `RequestThumbnails` names the photos in the order to make them: the frontend sends the visible cells first, then the rest of the strip. A new request replaces the order; photos it does not name are not made. Each comes as `ThumbnailReady {photo, found}`, at once for one made already, and is fetched by photo id over its own URI scheme (`genzo-thumb`) as one JPEG tile message.
+  - A thumbnail is the smallest embedded JPEG whose long edge is at least 320 px (a camera's small preview, not its full-size one), reduced to fit in 320 × 320, upright, and in the frames' target (sRGB or Display P3), as the photo's preview is on a switch. A JPEG file's only preview is its EXIF thumbnail, often 160 px, which is kept at its size.
+  - Two workers, each on a rayon pool of one thread, so their work never queues on the pool a decode uses. They start no thumbnail during a photo switch, nor while prefetch has work.
+  - Kept in memory (an LRU of 32 MB, about 1000 thumbnails) and, when the engine has a cache directory (the shell passes the app's cache directory), on disk.
 - The strip scrolls to keep the current photo in view.
 
 ### Choosing a photo
@@ -77,7 +82,11 @@ All three are registered in the shortcut registry. ← and → do nothing while 
 
 ## Data
 
-Nothing is stored on disk in M1. The engine holds, for the session:
+Nothing is stored on disk in M1 but the thumbnails' cache, which only saves work: deleting it loses nothing.
+
+- **The thumbnails' disk tier:** one file per photo and target in `thumbs-v1/` under the app's cache directory, named by a 64-bit hash of its key. The key is the file's canonical path, length and modification time, the target and the size. The entry stores its key, so a hash collision is a miss, never another photo's picture. A changed file has a new key, so it is made again. An entry is written to a file of its own, then renamed, so a reader never sees half of one. A file with no preview is stored as such, so it is not read again. The tier has no size cap in M1 (about 30 KB a photo); M2's cache settings bound it.
+
+The engine holds, for the session:
 
 | Field | Type | Meaning |
 |---|---|---|
@@ -112,3 +121,4 @@ Nothing is stored on disk in M1. The engine holds, for the session:
 5. **Switching to a prefetched neighbor** renders at Fit without decoding, under 150 ms on the reference desktop (`cli bench open`, recorded in `docs/m1-results.md`: 19 ms at 12 MP and 99 ms at 48 MP, p95, on 2026-10-25).
 6. **The edited dot** follows the edit: set by an edit, cleared by undoing back to the defaults, kept across a folder switch and back (engine test, `tests/strip.rs`).
 7. **Frontend** (Vitest and Playwright against the fake engine): the ring, the dot, ← and →, the empty and no-photos states, and visible-first thumbnails, compared with the handoff's Filmstrip.
+8. **Thumbnails** (engine): made in the order asked, a newer request replacing it; none started during a switch or while prefetch has work; one JPEG tile, upright, reduced to 320 px, in the frames' target; none for a file without a preview; a later session served from the disk tier until the file changes (`engine/src/thumbs.rs`, `tests/thumbs.rs`). Throughput: the import budget, 20 files per second or better, on the reference desktop (`cli bench thumbs`, `docs/m1-results.md`).

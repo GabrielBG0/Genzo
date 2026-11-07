@@ -36,6 +36,7 @@ mod messages;
 mod prefetch;
 pub mod preview;
 pub mod strip;
+pub mod thumbs;
 
 /// The contract types, re-exported for the shell and the cli.
 pub mod api {
@@ -154,6 +155,8 @@ pub struct Engine {
     preview_sink: Option<preview::Sink>,
     /// The histogram's counts, their sink and the latest (DEV-03).
     histograms: Arc<histogram::Histograms>,
+    /// The strip's thumbnails (LIB-09).
+    thumbs: Arc<thumbs::Thumbs>,
     /// Where events go.
     events: Option<EventSink>,
 }
@@ -251,6 +254,7 @@ impl Engine {
                 },
             ),
         };
+        let prefetch: Arc<prefetch::Shared> = Arc::default();
         Self {
             adapter,
             gpu: gpu.map(Arc::new),
@@ -260,12 +264,35 @@ impl Engine {
             session: Arc::default(),
             switching: Mutex::new(()),
             decoder: Arc::new(strip::FileDecoder),
-            prefetch: Arc::default(),
+            thumbs: Arc::new(Self::thumbs_in(None, &prefetch)),
+            prefetch,
             worker: Mutex::new(None),
             preview_sink: None,
             histograms: Arc::default(),
             events: None,
         }
+    }
+
+    fn thumbs_in(dir: Option<PathBuf>, prefetch: &Arc<prefetch::Shared>) -> thumbs::Thumbs {
+        let prefetch = Arc::clone(prefetch);
+        thumbs::Thumbs::new(dir, Box::new(move || prefetch.busy()))
+    }
+
+    /// This engine, keeping the strip's thumbnails on disk under `dir`
+    /// (LIB-09), so a folder opened again reads no photo for them. Without
+    /// one they are kept in memory only. Call it before
+    /// [`Self::with_event_sink`] or [`Self::with_thumb_sink`].
+    pub fn with_cache_dir(mut self, dir: PathBuf) -> Self {
+        self.thumbs = Arc::new(Self::thumbs_in(Some(dir), &self.prefetch));
+        self
+    }
+
+    /// This engine, handing each made thumbnail to `sink`: the photo, and
+    /// whether it has one. [`Self::with_event_sink`] sets it to send
+    /// `ThumbnailReady`.
+    pub fn with_thumb_sink(self, sink: thumbs::ThumbSink) -> Self {
+        self.thumbs.set_sink(sink);
+        self
     }
 
     /// This engine, opening the strip's files with `decoder`.
@@ -291,12 +318,15 @@ impl Engine {
 
     /// This engine, sending every event to `sink`: the spike's, each
     /// Develop frame's `RenderFinished` (the prefetch's sharper render
-    /// too), `PreviewShown` and `HistogramReady`. A frame's
+    /// too), `PreviewShown`, `HistogramReady` and `ThumbnailReady`. A frame's
     /// `RenderFinished` goes before its `HistogramReady` (DEV-03). It
-    /// replaces the preview and histogram sinks.
+    /// replaces the preview, histogram and thumbnail sinks.
     pub fn with_event_sink(self, sink: Events) -> Self {
-        let (preview, counts) = (sink.clone(), sink.clone());
+        let (preview, counts, thumbs) = (sink.clone(), sink.clone(), sink.clone());
         let mut engine = self
+            .with_thumb_sink(Arc::new(move |photo, found| {
+                thumbs(Event::ThumbnailReady { photo, found })
+            }))
             .with_preview_sink(Arc::new(move |s: preview::Shown| {
                 preview(messages::preview_shown(&s))
             }))
@@ -576,6 +606,7 @@ impl Drop for Engine {
     /// Stops the prefetch worker before the render thread goes: it holds
     /// the thread too, and a second device in one process crashes WARP.
     fn drop(&mut self) {
+        self.thumbs.stop();
         let worker = self.worker.get_mut().ok().and_then(Option::take);
         if let Some(handle) = worker {
             self.prefetch.stop();
