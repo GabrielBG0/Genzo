@@ -174,6 +174,20 @@ pub(crate) struct StripSession {
 }
 
 impl StripSession {
+    /// Whether `path` (canonical) is a file this session listed, from any
+    /// folder opened: an export never writes over one (OUT-01).
+    pub(crate) fn is_listed(&self, path: &Path) -> bool {
+        self.ids.contains_key(path)
+    }
+
+    /// The file of strip photo `id`, if it is in the current strip.
+    pub(crate) fn path_of(&self, id: u64) -> Option<PathBuf> {
+        self.photos
+            .iter()
+            .find(|(p, _)| *p == id)
+            .map(|(_, f)| f.path.clone())
+    }
+
     /// Notes what decoding photo `id` said about its file.
     pub(crate) fn learn<T>(&mut self, id: u64, decoded: &Result<T, EngineError>) {
         if let Some(kind) = PhotoKind::of(decoded) {

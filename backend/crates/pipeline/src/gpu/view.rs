@@ -16,9 +16,10 @@ use genzo_color::output::{EDGE_STEPS, Target};
 
 use super::base::BaseLayer;
 use super::level0::{Level0Cache, Level0Error};
-use super::raw_stages::{Pass, Pyramid, RawStages, Slot, padded_row, pass_with};
+use super::raw_stages::{Pass, Pyramid, RawStages, Slot, level_sizes_for, padded_row, pass_with};
 use super::readback::Staging;
 use super::{Gpu, GpuError};
+use crate::camera_color::CameraTransform;
 use crate::histogram::{self, Histogram, Overlay, Preview};
 use crate::look::{BaseCurve, Look, Profile};
 use crate::raw::RawSource;
@@ -526,7 +527,40 @@ impl ViewStages {
         debug_assert_eq!(a.level, s.level, "the level depends on the zoom only");
         let pyramid = stages.pyramid().expect("built");
         let level0 = (s.level == 0).then_some(&*cache);
-        self.sample_at(gpu, pyramid, level0, &a, offset, out);
+        self.sample_at(gpu, Some(pyramid), level0, &a, offset, out);
+        Ok(s)
+    }
+
+    /// Shows `view` of `src` from level 0 alone, through `cache`, with no
+    /// pyramid: an export's region at 1:1 (OUT-01). It renders the level-0
+    /// tiles the view reads with `transform` (`key` as for
+    /// [`Level0Cache::ensure`]), then samples them at the view's anchored
+    /// position, as [`Self::show`] does at 1:1, so its pixels are the 1:1
+    /// view's. A view that would read a pyramid level (zoom under 1), or
+    /// that needs more tiles than `cache` holds, is an error: an export has
+    /// no level to fall back to.
+    #[allow(clippy::too_many_arguments)]
+    pub fn show_level0(
+        &mut self,
+        gpu: &Gpu,
+        stages: &mut RawStages,
+        cache: &mut Level0Cache,
+        src: &RawSource,
+        transform: &CameraTransform,
+        key: u64,
+        frame: Frame,
+        view: ViewSpec,
+    ) -> Result<Sampling, Level0Error> {
+        let size = src.size();
+        let levels = level_sizes_for(size);
+        let s = plan_view(size, &levels, frame, view);
+        assert_eq!(s.level, 0, "an export region reads level 0");
+        let out = view.out();
+        let tiles = Level0Cache::tiles_for(s.source_rect(out), size);
+        cache.ensure(gpu, stages, src, transform, key, &tiles)?;
+        let (anchored, offset) = view.anchored();
+        let a = plan_view(size, &levels, frame, anchored);
+        self.sample_at(gpu, None, Some(cache), &a, offset, out);
         Ok(s)
     }
 
@@ -540,7 +574,7 @@ impl ViewStages {
         s: &Sampling,
         out: (u32, u32),
     ) {
-        self.sample_at(gpu, pyramid, level0, s, (0, 0), out);
+        self.sample_at(gpu, Some(pyramid), level0, s, (0, 0), out);
     }
 
     /// [`Self::sample_with`] where `s` is the anchored view's sampling and
@@ -548,7 +582,7 @@ impl ViewStages {
     fn sample_at(
         &mut self,
         gpu: &Gpu,
-        pyramid: &Pyramid,
+        pyramid: Option<&Pyramid>,
         level0: Option<&Level0Cache>,
         s: &Sampling,
         offset: (i32, i32),
@@ -576,7 +610,9 @@ impl ViewStages {
             (0, Some(cache)) => (&self.sample_level0, cache.atlas_view(), Some(cache.table())),
             (0, None) => panic!("level 0 needs the tile cache"),
             (l, _) => {
-                level = pyramid.level_view(l);
+                level = pyramid
+                    .expect("levels 1 and up need the pyramid")
+                    .level_view(l);
                 (&self.sample, &level, None)
             }
         };

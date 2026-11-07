@@ -27,6 +27,7 @@ use genzo_pipeline::gpu::{AdapterChoice, GpuError};
 
 pub mod contract;
 pub mod develop;
+pub mod export;
 pub mod files;
 pub mod folder;
 mod frames;
@@ -143,8 +144,9 @@ pub struct Engine {
     autobench: Option<PathBuf>,
     /// Develop's photos, edits and histories, and the strip.
     session: Arc<Mutex<develop::Session>>,
-    /// Held for a whole photo switch, so two cannot interleave.
-    switching: Mutex<()>,
+    /// Held for a whole photo switch, so two cannot interleave. Exports
+    /// wait on it too, so their encoding never delays a switch.
+    switching: Arc<Mutex<()>>,
     /// What opens the strip's files.
     decoder: Arc<dyn strip::Decode>,
     /// The neighbors' prefetch: its plan and its cache.
@@ -157,6 +159,8 @@ pub struct Engine {
     histograms: Arc<histogram::Histograms>,
     /// The strip's thumbnails (LIB-09).
     thumbs: Arc<thumbs::Thumbs>,
+    /// The exports in progress (OUT-01).
+    exports: Arc<export::Exports>,
     /// Where events go.
     events: Option<EventSink>,
 }
@@ -262,7 +266,8 @@ impl Engine {
             frames: Arc::default(),
             autobench: None,
             session: Arc::default(),
-            switching: Mutex::new(()),
+            switching: Arc::default(),
+            exports: Arc::default(),
             decoder: Arc::new(strip::FileDecoder),
             thumbs: Arc::new(Self::thumbs_in(None, &prefetch)),
             prefetch,
@@ -606,6 +611,7 @@ impl Drop for Engine {
     /// Stops the prefetch worker before the render thread goes: it holds
     /// the thread too, and a second device in one process crashes WARP.
     fn drop(&mut self) {
+        self.exports.stop();
         self.thumbs.stop();
         let worker = self.worker.get_mut().ok().and_then(Option::take);
         if let Some(handle) = worker {

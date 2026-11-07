@@ -268,6 +268,20 @@ pub fn level_count(size: (u32, u32)) -> u32 {
     n
 }
 
+/// The pyramid's level sizes, level 1 first, for an image whose level 0 is
+/// `size`, as [`RawStages::render_pyramid`] makes them: for planning a view
+/// without the pyramid, as an export does (OUT-01).
+pub fn level_sizes_for(size: (u32, u32)) -> Vec<(u32, u32)> {
+    let mut s = half(size);
+    (0..level_count(s))
+        .map(|_| {
+            let level = s;
+            s = half(s);
+            level
+        })
+        .collect()
+}
+
 /// The bytes of a pyramid whose first level is `size` (RGBA16F).
 pub fn pyramid_bytes(size: (u32, u32)) -> u64 {
     let mut s = size;

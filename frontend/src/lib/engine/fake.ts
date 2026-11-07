@@ -8,6 +8,7 @@ import {
   type CommandResult,
   type Edit,
   type Event,
+  type ExportState,
   type Handshake,
   type HandshakeResult,
   type Histogram,
@@ -159,6 +160,7 @@ export class FakeEngine implements Engine {
   /** Each photo's thumbnail message, or null when it has none. */
   private thumbnails = new Map<number, ArrayBuffer | null>();
   private thumbnailQueue: number[] = [];
+  private exportJobs = 0;
   private makingThumbnails = false;
   private folder: FakePhoto[] = [];
   private strip: Strip = { photos: [], current: null, direction: 'next' };
@@ -299,6 +301,22 @@ export class FakeEngine implements Engine {
         return this.edited(command.photo, (p) => p.undo(), 'End');
       case 'redo':
         return this.edited(command.photo, (p) => p.redo(), 'End');
+      case 'exportJpeg': {
+        // The fake writes no file: it reports an export of the open photo's
+        // shown size, in one step, as the engine's progress would end.
+        const fake = this.folder.find((p) => p.photo.id === command.photo);
+        if (command.photo !== this.strip.current || !fake?.kind) throw new Error('no photo is open');
+        const job = ++this.exportJobs;
+        const rowsTotal = fake.height;
+        const progress = (rowsDone: number, state: ExportState) =>
+          this.emit({ type: 'exportProgress', job, photo: command.photo, path: command.path, rowsDone, rowsTotal, state });
+        progress(0, { type: 'queued' });
+        progress(0, { type: 'running' });
+        progress(rowsTotal, { type: 'finished', notes: [] });
+        return { type: 'export', job };
+      }
+      case 'cancelExport':
+        return DONE;
       case 'requestThumbnails': {
         this.thumbnailRequests.push([...command.photos]);
         const listed = new Set(this.folder.map((p) => p.photo.id));

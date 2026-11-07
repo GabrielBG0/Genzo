@@ -283,6 +283,17 @@ pub fn oklch(lab: [f64; 3]) -> [f64; 3] {
     [lab[0], c, h]
 }
 
+/// The sRGB ICC profile an export embeds (DEV-01, *Stage 9*; OUT-01),
+/// written once by moxcms.
+pub fn srgb_icc() -> &'static [u8] {
+    static ICC: OnceLock<Vec<u8>> = OnceLock::new();
+    ICC.get_or_init(|| {
+        moxcms::ColorProfile::new_srgb()
+            .encode()
+            .expect("moxcms writes its own sRGB profile")
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -598,5 +609,17 @@ mod tests {
                 assert!((q - (v * 255.0).round() as i32).abs() <= 1);
             }
         }
+    }
+
+    #[test]
+    fn the_export_profile_reads_back_as_srgb() {
+        let icc = srgb_icc();
+        let profile = moxcms::ColorProfile::new_from_slice(icc).expect("a valid profile");
+        let srgb = moxcms::ColorProfile::new_srgb();
+        assert_eq!(profile.red_colorant, srgb.red_colorant);
+        assert_eq!(profile.green_colorant, srgb.green_colorant);
+        assert_eq!(profile.blue_colorant, srgb.blue_colorant);
+        assert_eq!(profile.white_point, srgb.white_point);
+        assert!(icc.len() < 65_519, "fits one APP2 segment");
     }
 }

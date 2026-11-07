@@ -41,6 +41,9 @@ commands:
                                the switch to a prefetched neighbor, p50/p95.
                                With --thumbs, the whole strip's thumbnails are
                                made again before each switch, as a backlog
+  export FILE OUT [Q]          export FILE, unedited, as the JPEG OUT at quality Q
+                               (default 85; OUT-01), and print its progress
+  bench export FILE [N]        export FILE at full size N times, print p50/p95
   thumbs FOLDER OUT            write the thumbnail of each photo in FOLDER to OUT
                                as FILE_NAME.jpg (LIB-09); list those without one
   bench thumbs FOLDER [N]      make FOLDER's thumbnails N times with an empty
@@ -118,6 +121,8 @@ fn main() -> ExitCode {
         ["bench", "open", folder, rest @ ..] => bench_open(folder, rest, backlog, &mut metrics),
         ["bench", "thumbs", folder, rest @ ..] => bench_thumbs(folder, rest, &mut metrics),
         ["thumbs", folder, out] => write_thumbs(folder, out),
+        ["export", file, out, rest @ ..] => export(file, out, rest),
+        ["bench", "export", file, rest @ ..] => bench_export(file, rest, &mut metrics),
         _ => Err(USAGE.to_owned()),
     };
     let result = result.and_then(|()| match &json_out {
@@ -461,6 +466,109 @@ fn bench_open(
         metrics.add(name, p50, p95);
         println!("{name}, {count} samples: p50 {p50:.1} ms, p95 {p95:.1} ms");
     }
+    Ok(())
+}
+
+/// An engine with `file` open in Develop, sending each export's progress
+/// to `progress`; the photo's id.
+fn open_for_export(
+    file: &str,
+    progress: impl Fn(u32, u32, &genzo_engine::api::ExportState) + Send + Sync + 'static,
+) -> Result<(Engine, u64), String> {
+    let path = std::fs::canonicalize(file).map_err(|e| format!("{file}: {e}"))?;
+    let folder = path.parent().ok_or("a file in a folder")?;
+    let engine = Engine::new().with_event_sink(Arc::new(move |e| {
+        if let Event::ExportProgress {
+            rows_done,
+            rows_total,
+            state,
+            ..
+        } = e
+        {
+            progress(rows_done, rows_total, &state);
+        }
+    }));
+    let _ = engine.set_view(ViewSpec::Fit((1280, 960)), Target::Srgb);
+    let opened = engine.open_folder(folder).map_err(|e| e.to_string())?;
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned());
+    let id = opened
+        .strip
+        .photos
+        .iter()
+        .find(|p| Some(&p.file_name) == name.as_ref())
+        .map(|p| p.id)
+        .ok_or("the file is not one Genzo reads")?;
+    engine.select_photo(id).map_err(|e| e.to_string())?;
+    Ok((engine, id))
+}
+
+/// The last state of an export, from its progress.
+type LastState = Arc<Mutex<Option<genzo_engine::api::ExportState>>>;
+
+/// An error unless `last` says the export finished.
+fn finished(last: &LastState) -> Result<(), String> {
+    match last.lock().unwrap().take() {
+        Some(genzo_engine::api::ExportState::Finished { .. }) => Ok(()),
+        Some(other) => Err(format!("the export ended {other:?}")),
+        None => Err("the export sent no end".into()),
+    }
+}
+
+/// `export FILE OUT [Q]`: FILE as the JPEG OUT.
+fn export(file: &str, out: &str, args: &[&str]) -> Result<(), String> {
+    let quality = u8::try_from(parse_num(args, 0, 85)?).map_err(|_| "quality 1 to 100")?;
+    let last: LastState = Arc::default();
+    let seen = Arc::clone(&last);
+    let (engine, id) = open_for_export(file, move |done, total, state| {
+        println!("{done}/{total} rows: {state:?}");
+        *seen.lock().unwrap() = Some(state.clone());
+    })?;
+    engine
+        .export_jpeg(genzo_engine::export::ExportRequest {
+            photo: id,
+            path: out.into(),
+            long_edge: None,
+            quality,
+            replace: true,
+        })
+        .map_err(|e| e.to_string())?;
+    engine.wait_exports_idle();
+    finished(&last)
+}
+
+/// `bench export FILE [N]`: full-size exports of FILE, timed from the
+/// command to the renamed file.
+fn bench_export(file: &str, args: &[&str], metrics: &mut Metrics) -> Result<(), String> {
+    let passes = parse_num(args, 0, 5)?.max(1);
+    let last: LastState = Arc::default();
+    let seen = Arc::clone(&last);
+    let (engine, id) = open_for_export(file, move |_, _, state| {
+        *seen.lock().unwrap() = Some(state.clone());
+    })?;
+    let out = std::env::temp_dir().join(format!("genzo-bench-export-{}.jpg", std::process::id()));
+    let mut times = Vec::new();
+    for pass in 1..=passes {
+        let started = Instant::now();
+        engine
+            .export_jpeg(genzo_engine::export::ExportRequest {
+                photo: id,
+                path: out.clone(),
+                long_edge: None,
+                quality: 85,
+                replace: true,
+            })
+            .map_err(|e| e.to_string())?;
+        engine.wait_exports_idle();
+        let ms = started.elapsed().as_secs_f64() * 1000.0;
+        finished(&last)?;
+        let bytes = std::fs::metadata(&out).map(|m| m.len()).unwrap_or(0);
+        println!("pass {pass}: {ms:.0} ms, {:.1} MB", bytes as f64 / 1e6);
+        times.push(ms);
+    }
+    let _ = std::fs::remove_file(&out);
+    let (p50, p95) = percentiles(times);
+    metrics.add("export/full size", p50, p95);
+    println!("export, full size, quality 85: p50 {p50:.0} ms, p95 {p95:.0} ms");
     Ok(())
 }
 

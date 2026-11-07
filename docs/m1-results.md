@@ -161,3 +161,18 @@ LIB-09 criterion 8. `cli bench thumbs FOLDER 3`: the strip's thumbnails made thr
 - The 48 MP fit render does, by up to 170 ms: a ProRAW thumbnail already being made when the switch starts keeps two cores for up to about 300 ms. It stays within its 2 s budget.
 - The plain 48 MP first pixels took 109 to 111 ms on this day, against 90 ms on 2026-10-30, with the same build of that path; the machine was slower, as the plain runs show.
 
+## Export at full size on the reference desktop (2026-11-07)
+
+OUT-01 criterion 8. `cli bench export FILE N`: the time from `ExportJpeg` to the renamed file, quality 85, full size, the photo unedited and open in Develop at Fit.
+
+| File | Size | p50 | p95 | File size |
+|---|---|---|---|---|
+| Panasonic S5 II, `P1126458_mechanical.RW2` (Bayer) | 6000 × 4000, 24 MP | 275 ms | 305 ms | 5.3 MB |
+| Fujifilm X-T5, `DSCF0021.RAF` (X-Trans) | 7728 × 5152, 40 MP | 735 ms | 752 ms | 4.0 MB |
+
+**Result:** the 24 MP budget (1 s) holds with room. The regions render at 1:1 through the export's own level-0 atlas and view stages; the encoder takes each row of regions as it is finished, on its own thread.
+
+ExifTool's validator finds no error in the exports of the Panasonic, Fujifilm and Pixel 4a files; its warnings are minor (ProcessingSoftware) or the source's own (the Pixel's GPSProcessingMethod).
+
+**Still open:** criterion 7, editing while an export runs (`bench gpu` and `bench open` beside a 48 MP export), comes with the dialog, which is what starts exports while editing.
+

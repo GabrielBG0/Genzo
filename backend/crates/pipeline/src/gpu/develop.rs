@@ -304,6 +304,66 @@ impl Develop {
         Ok(())
     }
 
+    /// What an export of the open photo with `edit` renders (OUT-01), taken
+    /// now: its input, shared, and copies of everything else it reads, so
+    /// a switch or a later edit leaves it as it is. The photo is rendered
+    /// settled with `edit` first, in the view it shows, so the pyramid's
+    /// white and the base layer are `edit`'s, as after a release. Fails
+    /// with [`DevelopError::NeedsSource`] while a photo opened from its
+    /// level 1 waits for its input.
+    pub fn export_inputs(
+        &mut self,
+        gpu: &Gpu,
+        edit: &Edit,
+        target: Target,
+    ) -> Result<super::export::ExportInputs, DevelopError> {
+        let src = self.source().ok_or(DevelopError::NeedsSource)?;
+        let (view, shown_target) = self
+            .shown
+            .as_ref()
+            .map_or((ViewSpec::Fit((256, 256)), target), |s| (s.view, s.target));
+        self.render(gpu, edit, view, shown_target, Phase::End)?;
+        let p = self.photo.as_ref().ok_or(DevelopError::NoPhoto)?;
+        let file = p.info.orientation;
+        let mut geometry = Geometry::from(edit);
+        geometry.crop = fit(geometry.crop, p.info.size, geometry.orientation(file))
+            .ok_or(DevelopError::CropDoesNotFit)?;
+        let look = Look::from(edit);
+        let edited = edit.is_edited(&Edit::defaults(p.kind));
+        let pyramid = self.stages.pyramid().expect("rendered above");
+        let layer = if look.is_local() {
+            self.layer.duplicate(gpu)
+        } else {
+            None
+        };
+        Ok(super::export::ExportInputs {
+            src,
+            transform: pyramid.transform.clone(),
+            frame: Frame::of(&geometry, file),
+            look,
+            curve: p.curve.clone(),
+            layer,
+            compress: compresses(pyramid, target),
+            dither: dithers(pyramid, edited),
+            target,
+        })
+    }
+
+    /// Renders `rect` of an export through `export`'s own cache and view,
+    /// with this photo's stage 1 to 4 resources (OUT-01): RGBA8, row by
+    /// row. Never between the parts of a rebuild, which the next part
+    /// would find stale: the render thread runs it once the rebuild is done.
+    pub fn render_export(
+        &mut self,
+        gpu: &Gpu,
+        export: &mut super::export::ExportStages,
+        inputs: &super::export::ExportInputs,
+        rect: Rect,
+    ) -> Result<Vec<u8>, DevelopError> {
+        debug_assert!(!self.rebuilding(), "an export region waits for the rebuild");
+        export.render(gpu, &mut self.stages, inputs, rect)
+    }
+
     /// The open photo's decoded input, shared: what an export holds
     /// (OUT-01). `None` while a photo opened from its level 1 waits for it.
     pub fn source(&self) -> Option<Arc<RawSource>> {
