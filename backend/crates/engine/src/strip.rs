@@ -211,6 +211,7 @@ impl Engine {
     /// photo. A folder that cannot be read leaves the strip as it was.
     pub fn open_folder(&self, folder: &Path) -> Result<Opened, EngineError> {
         let _quiet = self.thumbs.pause();
+        let _exports = self.gpu.as_ref().map(|g| g.pause_exports());
         let listed = list_folder(folder)?;
         let _switch = self.switching.lock().expect("switching");
         let first = {
@@ -286,6 +287,7 @@ impl Engine {
     /// with nothing open, and its error returned.
     pub fn select_photo(&self, id: u64) -> Result<Applied, EngineError> {
         let _quiet = self.thumbs.pause();
+        let _exports = self.gpu.as_ref().map(|g| g.pause_exports());
         let _switch = self.switching.lock().expect("switching");
         self.switch_to(id)
     }
@@ -294,6 +296,7 @@ impl Engine {
     /// end of the strip, or with nothing selected: the strip does not wrap.
     pub fn step(&self, direction: Direction) -> Result<Option<Applied>, EngineError> {
         let _quiet = self.thumbs.pause();
+        let _exports = self.gpu.as_ref().map(|g| g.pause_exports());
         let _switch = self.switching.lock().expect("switching");
         let id = {
             let s = self.session.lock().expect("session");

@@ -35,7 +35,10 @@ commands:
   bench decode FILE [T N]      decode FILE N times with T threads, print p50/p95
   bench gpu [W H N]            open a W×H synthetic raw in Develop at Fit in a
                                2560 px viewport, N slider steps per case (drags
-                               and settled deltas), print GPU and engine p50/p95
+                               and settled deltas), print GPU, engine and
+                               latency (the command's wall time) p50/p95. With
+                               --export, an export of the photo runs during
+                               each case (OUT-01 criterion 7)
   bench open FOLDER [W H N]    open FOLDER at Fit in a W×H view, N times: first
                                pixels, the fit render of photos not prefetched and
                                the switch to a prefetched neighbor, p50/p95.
@@ -64,6 +67,7 @@ fn main() -> ExitCode {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
     let json_out = take_json_flag(&mut args);
     let backlog = take_flag(&mut args, "--thumbs");
+    let exporting = take_flag(&mut args, "--export");
     let args: Vec<&str> = args.iter().map(String::as_str).collect();
     let mut metrics = Metrics::default();
     let result = match args.as_slice() {
@@ -119,8 +123,10 @@ fn main() -> ExitCode {
         ["run", file] => run(file),
         ["bench", "test-pattern", rest @ ..] => bench_test_pattern(rest, &mut metrics),
         ["bench", "decode", file, rest @ ..] => bench_decode(file, rest, &mut metrics),
-        ["bench", "gpu", rest @ ..] => bench_gpu(rest, &mut metrics),
-        ["bench", "open", folder, rest @ ..] => bench_open(folder, rest, backlog, &mut metrics),
+        ["bench", "gpu", rest @ ..] => bench_gpu(rest, exporting, &mut metrics),
+        ["bench", "open", folder, rest @ ..] => {
+            bench_open(folder, rest, backlog, exporting, &mut metrics)
+        }
         ["bench", "thumbs", folder, rest @ ..] => bench_thumbs(folder, rest, &mut metrics),
         ["thumbs", folder, out] => write_thumbs(folder, out),
         ["export", file, out, rest @ ..] => export(file, out, rest),
@@ -308,7 +314,7 @@ fn bench_test_pattern(args: &[&str], metrics: &mut Metrics) -> Result<(), String
 ///
 /// "engine" is the request until its tiles are kept (render, readback,
 /// encoding), "gpu" the render's GPU time from timestamp queries.
-fn bench_gpu(args: &[&str], metrics: &mut Metrics) -> Result<(), String> {
+fn bench_gpu(args: &[&str], exporting: bool, metrics: &mut Metrics) -> Result<(), String> {
     use genzo_engine::api::edit::{Change, Phase, WhiteBalanceMode};
     use genzo_engine::api::{ColorSpace, View};
 
@@ -342,9 +348,11 @@ fn bench_gpu(args: &[&str], metrics: &mut Metrics) -> Result<(), String> {
         started.elapsed().as_secs_f64() * 1000.0
     );
 
-    // One delta, and the times of the frame it rendered.
-    let send = |changes: Vec<Change>, phase: Phase| -> Result<(f64, Option<f64>), String> {
+    // One delta: the times of the frame it rendered, and the command's
+    // wall time, which an export region in progress adds to.
+    let send = |changes: Vec<Change>, phase: Phase| -> Result<(f64, Option<f64>, f64), String> {
         events.try_iter().for_each(drop);
+        let started = Instant::now();
         engine
             .execute(Command::ApplyEditDelta {
                 photo,
@@ -352,16 +360,21 @@ fn bench_gpu(args: &[&str], metrics: &mut Metrics) -> Result<(), String> {
                 phase,
             })
             .map_err(|e| e.to_string())?;
+        let wall = started.elapsed().as_secs_f64() * 1000.0;
         events
             .try_iter()
             .find_map(|e| match e {
                 Event::RenderFinished {
                     render_ms, gpu_ms, ..
-                } => Some((render_ms, gpu_ms)),
+                } => Some((render_ms, gpu_ms, wall)),
                 _ => None,
             })
             .ok_or_else(|| "a delta rendered no frame".to_owned())
     };
+    let out = std::env::temp_dir().join(format!("genzo-bench-gpu-{}.jpg", std::process::id()));
+    if exporting {
+        println!("an export of the photo runs during each case");
+    }
     let exposure = |t: f32| vec![Change::Exposure(t * 2.0 - 1.0)];
     let white = |t: f32| {
         vec![Change::WhiteBalance {
@@ -390,24 +403,49 @@ fn bench_gpu(args: &[&str], metrics: &mut Metrics) -> Result<(), String> {
         ("white balance settled", white, false),
     ];
     for (name, delta, drag) in cases {
-        let (mut engine_ms, mut gpu_ms) = (Vec::new(), Vec::new());
+        let (mut engine_ms, mut gpu_ms, mut wall_ms) = (Vec::new(), Vec::new(), Vec::new());
+        // Started before the gesture: an export ends one in progress.
+        let job = if exporting {
+            Some(
+                engine
+                    .export_jpeg(genzo_engine::export::ExportRequest {
+                        photo,
+                        path: out.clone(),
+                        long_edge: None,
+                        quality: 85,
+                        replace: true,
+                    })
+                    .map_err(|e| e.to_string())?,
+            )
+        } else {
+            None
+        };
         if drag {
             send(delta(0.0), Phase::Start)?;
         }
         for i in 0..n {
             let t = (i + 1) as f32 / n as f32;
-            let (e, g) = send(delta(t), if drag { Phase::Update } else { Phase::End })?;
+            let (e, g, w) = send(delta(t), if drag { Phase::Update } else { Phase::End })?;
             engine_ms.push(e);
             gpu_ms.extend(g);
+            wall_ms.push(w);
         }
         if drag {
             send(delta(1.0), Phase::End)?;
+        }
+        if let Some(job) = job {
+            engine.cancel_export(job).map_err(|e| e.to_string())?;
+            engine.wait_exports_idle();
         }
         if timestamps && gpu_ms.len() != engine_ms.len() {
             return Err(format!("{name}: a render without its GPU time"));
         }
         let (e50, e95) = percentiles(engine_ms);
         metrics.add(format!("develop/{name}/engine"), e50, e95);
+        let (w50, w95) = percentiles(wall_ms);
+        if exporting {
+            metrics.add(format!("develop/{name}/latency, exporting"), w50, w95);
+        }
         let gpu = if gpu_ms.is_empty() {
             "GPU n/a (no timestamp queries)".to_owned()
         } else {
@@ -416,9 +454,10 @@ fn bench_gpu(args: &[&str], metrics: &mut Metrics) -> Result<(), String> {
             format!("GPU p50 {g50:.2} ms, p95 {g95:.2} ms")
         };
         println!(
-            "{name}, {n} steps: {gpu}; engine (render, readback, tiles) p50 {e50:.2} ms, p95 {e95:.2} ms"
+            "{name}, {n} steps: {gpu}; engine (render, readback, tiles) p50 {e50:.2} ms, p95 {e95:.2} ms; latency p50 {w50:.2} ms, p95 {w95:.2} ms"
         );
     }
+    let _ = std::fs::remove_file(&out);
     Ok(())
 }
 
@@ -442,6 +481,7 @@ fn bench_open(
     folder: &str,
     args: &[&str],
     backlog: bool,
+    exporting: bool,
     metrics: &mut Metrics,
 ) -> Result<(), String> {
     let view = (parse_num(args, 0, 2560)?, parse_num(args, 1, 1440)?);
@@ -450,7 +490,7 @@ fn bench_open(
     let mut times = OpenTimes::default();
     for pass in 1..=passes {
         println!("pass {pass} of {passes}");
-        open_pass(folder, view, backlog, &mut times)?;
+        open_pass(folder, view, backlog, exporting, &mut times)?;
     }
     for (name, times) in [
         ("open/first pixels", times.previews),
@@ -692,6 +732,7 @@ fn open_pass(
     folder: &std::path::Path,
     view: (u32, u32),
     backlog: bool,
+    exporting: bool,
     times: &mut OpenTimes,
 ) -> Result<(), String> {
     // When the last switch's preview arrived, and for which photo.
@@ -728,7 +769,19 @@ fn open_pass(
     }
     // A switch: its result, its time, and the time to its preview.
     let ids: Vec<u64> = photos.iter().map(|p| p.id).collect();
+    let out = std::env::temp_dir().join(format!("genzo-bench-open-{}.jpg", std::process::id()));
     let switch = |i: usize| -> Result<(Applied, f64, Option<f64>), String> {
+        if exporting && let Some(current) = engine.strip().current {
+            // An export of the photo being left, running through the switch
+            // (OUT-01 criterion 7); refused while one still runs.
+            let _ = engine.export_jpeg(genzo_engine::export::ExportRequest {
+                photo: current,
+                path: out.clone(),
+                long_edge: None,
+                quality: 85,
+                replace: true,
+            });
+        }
         if backlog {
             // Made again from the files: a backlog the switch meets.
             engine.forget_thumbnails();

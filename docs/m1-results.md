@@ -183,5 +183,23 @@ ExifTool's validator finds no error in the exports of the Panasonic, Fujifilm an
 
 Stage 9 on the CPU first took 787 ms of the 24 MP export's 1.07 s on one thread; on a pool of half the cores the export takes 403 ms. The 40 MP file's regions are read back in the working space and added up on the CPU, about 300 ms more than its full-size export; a reduction on the GPU is the lever if that matters.
 
-**Still open:** criterion 7, editing while an export runs (`bench gpu` and `bench open` beside a 48 MP export), comes with the dialog, which is what starts exports while editing.
+**Editing while exporting** (OUT-01 criterion 7, 2026-11-08). `bench gpu 8064 6048 50 --export`: an export of the open 48 MP photo starts before each case and runs through it. p95:
+
+| Case | GPU, without / with | Latency (the command's wall time), without / with | Budget |
+|---|---|---|---|
+| Exposure drag | 1.06 / 1.33 ms | 5.6 / 10.3 ms | 16 ms GPU, 50 ms to pixels |
+| White balance drag | 4.04 / 4.61 ms | 8.9 / 14.4 ms | 16 ms GPU, 50 ms to pixels |
+| Exposure settled | 2.14 / 2.58 ms | 24.2 / 31.1 ms | |
+| White balance settled | 49.2 / 44.8 ms | 74.4 / 70.9 ms | |
+
+A drag shares the GPU with the region in progress: about 5 ms more, inside its budgets.
+
+`bench open FOLDER 2560 1440 3 --export` (48 MP ProRAW): before each switch, an export of the photo being left starts. Two runs each, interleaved, p95:
+
+| Target | Budget | Without | With, at first | With, final |
+|---|---|---|---|---|
+| First pixels, not prefetched | 100 ms | 93–97 ms | 107–138 ms | 94–99 ms |
+| Switch to a prefetched neighbor | 150 ms | 86–91 ms | 98–118 ms | 83–85 ms |
+
+"At first" is before two changes: the export's stages are now made once and kept, and no region starts while a switch runs (`RenderThread::pause_exports`). Encoding never delayed a switch: pausing it every 16 rows instead of every strip changed nothing measurable.
 

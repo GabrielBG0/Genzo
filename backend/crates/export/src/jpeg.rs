@@ -24,6 +24,9 @@ use jpeg_encoder::{Encoder, ImageBuffer, JpegColorType, SamplingFactor, rgb_to_y
 /// Quality from which chroma is kept whole (4:4:4).
 pub const FULL_CHROMA_FROM: u8 = 90;
 
+/// Progress is reported every this many rows: a JPEG block row at 4:2:0.
+pub const ROWS_REPORTED: u32 = 16;
+
 /// One run of the image's rows: RGBA8, row by row, `height` rows from `y`,
 /// the image's full width.
 #[derive(Debug)]
@@ -70,7 +73,8 @@ pub fn temporary(destination: &Path) -> PathBuf {
 
 /// Writes the `size` image from `next` (which hands its strips in order,
 /// `None` to stop early) to `destination` as a JPEG, through a temporary
-/// file renamed at the end. `progress` gets the rows done after each strip.
+/// file renamed at the end. `progress` gets the rows done every
+/// [`ROWS_REPORTED`] rows and at the end, and may pause the encoder.
 pub fn write_file(
     destination: &Path,
     size: (u32, u32),
@@ -225,7 +229,9 @@ impl<N: FnMut() -> Option<Strip>, P: FnMut(u32)> ImageBuffer for Rows<N, P> {
             buffers[1].push(cb);
             buffers[2].push(cr);
         }
-        if y + 1 == u32::from(self.height) {
+        // Every block row, and the last: a caller can pause there (the
+        // engine waits out a photo switch) as well as follow the rows.
+        if (y + 1) % ROWS_REPORTED == 0 || y + 1 == u32::from(self.height) {
             self.report(y + 1);
         }
     }

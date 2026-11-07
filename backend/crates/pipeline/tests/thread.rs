@@ -526,3 +526,43 @@ fn a_prefetch_waits_for_an_export() {
     assert_eq!(rows, 1200);
     assert!(pending.recv_timeout(WAIT).unwrap().unwrap().is_some());
 }
+
+/// OUT-01: while a photo switch holds the pause, no export region starts;
+/// once it is let go, the export goes on to its last row.
+#[test]
+fn exports_wait_while_a_switch_holds_them() {
+    let _lock = ONE_DEVICE.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(t) = thread() else { return };
+    let a = photo((1500, 900));
+    let defaults = Edit::defaults(as_shot(&a.src).1);
+    t.open(1, a).unwrap();
+    t.develop(request(1, 1, &defaults, ViewSpec::Fit((240, 180))))
+        .unwrap()
+        .unwrap();
+    let paused = t.pause_exports();
+    let job = t
+        .export(1, 8, &defaults, Target::Srgb, None)
+        .unwrap()
+        .unwrap();
+    assert!(
+        matches!(
+            job.strips.recv_timeout(Duration::from_millis(400)),
+            Err(RecvTimeoutError::Timeout)
+        ),
+        "a region rendered during the pause"
+    );
+    // Renders still run meanwhile.
+    t.develop(request(2, 1, &defaults, ViewSpec::Fit((200, 150))))
+        .unwrap()
+        .unwrap();
+    drop(paused);
+    let rows: u32 = job
+        .strips
+        .iter()
+        .map(|p| match p.unwrap() {
+            ExportPiece::Rows(s) => s.height,
+            ExportPiece::Region { .. } => panic!("full size sends rows"),
+        })
+        .sum();
+    assert_eq!(rows, 900);
+}
