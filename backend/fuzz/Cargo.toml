@@ -116,6 +116,15 @@ test = false
 doc = false
 bench = false
 
+# imgio::metadata: a file's EXIF read per format and written again for an
+# export's APP1 (OUT-01). Seeds: the jpeg, tiff and preview seeds.
+[[bin]]
+name = "exif_rewrite"
+path = "fuzz_targets/exif_rewrite.rs"
+test = false
+doc = false
+bench = false
+
 # An embedded ICC profile into stage 4's curves and matrix
 # (genzo_color::encoding, moxcms underneath). Seeds are written by the color
 # test `write_fuzz_seeds`:
