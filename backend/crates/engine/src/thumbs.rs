@@ -229,9 +229,11 @@ impl Thumbs {
                 },
                 message.as_ref().map_or(NONE_BYTES, |m| m.len() as u64),
             );
+            // Sent before it counts as done, so `wait_idle` returns only
+            // after its event.
+            self.send(id, message.is_some());
             self.state.lock().expect("thumbs").running.remove(&id);
             self.changed.notify_all();
-            self.send(id, message.is_some());
         }
     }
 
