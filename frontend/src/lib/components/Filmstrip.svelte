@@ -74,9 +74,11 @@
     onvisible?.(range.first, range.last);
   });
 
-  // Keeps the current photo in view, centered when it had left it.
+  // Keeps the current photo in view, centered when it had left it. Only on
+  // a change of photo, width or count: a thumbnail arriving changes `items`,
+  // and must not pull back a strip the user scrolled away.
+  const at = $derived(items.findIndex((i) => i.id === selected));
   $effect(() => {
-    const at = items.findIndex((i) => i.id === selected);
     if (!strip || width <= 0 || at < 0) return;
     const left = PAD + at * PITCH;
     if (left < strip.scrollLeft || left + CELL > strip.scrollLeft + width) {

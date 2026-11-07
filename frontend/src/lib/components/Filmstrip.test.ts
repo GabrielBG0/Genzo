@@ -1,4 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/svelte';
+import { tick } from 'svelte';
 import { describe, expect, it, vi } from 'vitest';
 import Filmstrip, { visibleRange, type FilmstripItem } from './Filmstrip.svelte';
 
@@ -58,5 +59,44 @@ describe('Filmstrip (LIB-09)', () => {
     render(Filmstrip, { items: [item(1), item(2), item(3)], onvisible });
     // Unmeasured in jsdom: every cell.
     expect(onvisible).toHaveBeenLastCalledWith(0, 2);
+  });
+});
+
+describe('Filmstrip, measured (LIB-09)', () => {
+  it('keeps a scroll the user made while thumbnails arrive, and follows a new current photo', async () => {
+    // A strip 300 px wide: about two and a half cells.
+    const width = vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get').mockReturnValue(300);
+    const observers: ResizeObserverCallback[] = [];
+    const original = globalThis.ResizeObserver;
+    globalThis.ResizeObserver = class {
+      constructor(private readonly cb: ResizeObserverCallback) {
+        observers.push(cb);
+      }
+      observe(target: Element) {
+        this.cb([{ target } as ResizeObserverEntry], this as unknown as ResizeObserver);
+      }
+      unobserve() {}
+      disconnect() {}
+    };
+    try {
+      const items = Array.from({ length: 20 }, (_, i) => item(i));
+      const { rerender } = render(Filmstrip, { items, selected: '0' });
+      const strip = screen.getByRole('region', { name: 'Filmstrip' });
+      await tick();
+      // The user scrolls to the end, away from photo 0.
+      strip.scrollLeft = 1800;
+      await fireEvent.scroll(strip);
+      // A thumbnail arrives: a new items array, the same photo current.
+      await rerender({ items: items.map((it, i) => (i === 3 ? { ...it, noThumb: true } : { ...it })), selected: '0' });
+      await tick();
+      expect(strip.scrollLeft).toBe(1800);
+      // A new current photo out of view is brought into it, centered.
+      await rerender({ items, selected: '10' });
+      await tick();
+      expect(strip.scrollLeft).toBe(10 + 10 * 116 - (300 - 108) / 2);
+    } finally {
+      globalThis.ResizeObserver = original;
+      width.mockRestore();
+    }
   });
 });
