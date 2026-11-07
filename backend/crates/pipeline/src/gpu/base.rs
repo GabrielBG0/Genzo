@@ -246,6 +246,27 @@ impl BaseLayer {
         self.coefficients.as_ref()
     }
 
+    /// A copy of this layer for an export (OUT-01), which keeps it while
+    /// the photo it came from is closed or rebuilt: its coefficients copied
+    /// on the GPU, its sampling and size. `None` before a build.
+    pub fn duplicate(&self, gpu: &Gpu) -> Option<BaseLayer> {
+        let plane = self.coefficients.as_ref()?;
+        let mut copy = BaseLayer::new(gpu);
+        let target = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("base layer copy"),
+            size: plane.size(),
+            usage: plane.usage() | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let mut encoder = gpu.device.create_command_encoder(&Default::default());
+        encoder.copy_buffer_to_buffer(plane, 0, &target, 0, plane.size());
+        gpu.queue.submit([encoder.finish()]);
+        copy.coefficients = Some(target);
+        copy.sampling = self.sampling.clone();
+        copy.size = self.size;
+        Some(copy)
+    }
+
     /// Frees the coefficients, for a new photo.
     pub fn clear(&mut self) {
         self.coefficients = None;
