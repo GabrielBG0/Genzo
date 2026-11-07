@@ -401,7 +401,7 @@ Spec template for each feature: **Behavior** (what it does, step by step), **Inp
 - Priority: P0 · Screens: W7
 - Scope: Export presets, destination (folder, email, another app), file naming template, JPEG, AVIF, TIFF, PNG, DNG, quality, color space, size limit, resize to fit, resolution, output sharpening, metadata options including stripping location and people names, watermark, runs in background, size estimate.
 - Open questions: Publish services (online destinations) in scope?
-- Spec: _to be written_
+- Spec: [OUT-01](../specs/OUT-01.md) (M1 part)
 
 ### OUT-02 · Print
 - Priority: P2 · Screens: W8
