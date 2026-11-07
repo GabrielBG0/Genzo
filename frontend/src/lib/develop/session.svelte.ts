@@ -61,6 +61,8 @@ const tokenClipColors = (): ClipColors => ({
  */
 export class DevelopSession {
   strip: Strip = $state({ photos: [], current: null, direction: 'next' });
+  /** The folder opened last; none before the first (LIB-09, States). */
+  folder: string | null = $state(null);
   /** The engine's newest edit of the open photo. */
   edit: PhotoEdit | null = $state(null);
   /** Why the open photo does not render, for the status bar. */
@@ -127,10 +129,22 @@ export class DevelopSession {
   async openFolder(path: string): Promise<void> {
     const r = await this.engine.execute({ type: 'openFolder', path });
     if (r.type !== 'folder') throw new Error(`openFolder answered ${r.type}`);
+    this.folder = path;
     this.strip = r.strip;
     this.clearHistogram();
     this.opened(r.edit, r.reason);
     await this.fetchHistogram();
+  }
+
+  /**
+   * Selects the photo after or before the current one (← and →). Nothing
+   * at either end: the strip does not wrap.
+   */
+  async step(direction: 'next' | 'previous'): Promise<void> {
+    const at = this.strip.photos.findIndex((p) => p.id === this.strip.current);
+    const next = this.strip.photos[direction === 'next' ? at + 1 : at - 1];
+    if (at < 0 || !next) return;
+    await this.select(next.id);
   }
 
   async select(photo: number): Promise<void> {

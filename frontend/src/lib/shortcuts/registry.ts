@@ -63,10 +63,12 @@ function normalizeKey(key: string): string {
 }
 
 const MAC_SYMBOLS: Record<string, string> = { Mod: '⌘', Shift: '⇧', Alt: '⌥' };
+const KEY_SYMBOLS: Record<string, string> = { ArrowLeft: '←', ArrowRight: '→', ArrowUp: '↑', ArrowDown: '↓' };
 
 /** Formats a chord the way the handoff shows it: `Ctrl Shift Z` or `⌘⇧Z`. */
 export function formatChord(chord: string, platform: Platform): string {
   const c = parseChord(chord);
+  c.key = KEY_SYMBOLS[c.key] ?? c.key;
   const mods: string[] = [];
   if (c.mod) mods.push('Mod');
   if (c.alt) mods.push('Alt');
@@ -192,6 +194,8 @@ export class ShortcutRegistry {
   handle(e: KeyboardEvent, scope: Scope): boolean {
     const target = e.target as HTMLElement | null;
     if (target?.closest('input, textarea, [contenteditable="true"]')) return false;
+    // A focused slider moves with the arrows (DEV-02); they are not commands there.
+    if (e.key.startsWith('Arrow') && target?.closest('[role="slider"]')) return false;
     const cmd = this.match(e, scope);
     if (!cmd || !cmd.enabled()) return false;
     e.preventDefault();

@@ -13,6 +13,8 @@ describe('formatChord', () => {
     expect(formatChord('Mod+K', 'other')).toBe('Ctrl K');
     expect(formatChord('F6', 'other')).toBe('F6');
     expect(formatChord('\\', 'other')).toBe('\\');
+    expect(formatChord('ArrowLeft', 'other')).toBe('←');
+    expect(formatChord('ArrowRight', 'mac')).toBe('→');
   });
 });
 
@@ -83,5 +85,25 @@ describe('ShortcutRegistry', () => {
     input.dispatchEvent(e);
     expect(handled).toBe(false);
     expect(run).not.toHaveBeenCalled();
+  });
+
+  it('leaves the arrows to a focused slider, even a disabled one (LIB-09)', () => {
+    const r = createRegistry();
+    const run = vi.fn();
+    r.bind('photo.next', run, () => true);
+    const slider = document.createElement('div');
+    slider.setAttribute('role', 'slider');
+    document.body.append(slider);
+    const at = (target: HTMLElement, init: KeyboardEventInit) => {
+      let handled: boolean | undefined;
+      target.addEventListener('keydown', (ev) => (handled = r.handle(ev, 'develop')), { once: true });
+      target.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, ...init }));
+      return handled;
+    };
+    expect(at(slider, { key: 'ArrowRight' })).toBe(false);
+    expect(run).not.toHaveBeenCalled();
+    expect(at(document.body, { key: 'ArrowRight' })).toBe(true);
+    expect(run).toHaveBeenCalledOnce();
+    slider.remove();
   });
 });

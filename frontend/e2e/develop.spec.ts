@@ -225,3 +225,34 @@ test('Alt while dragging Exposure shows only what clips, until Alt goes up', asy
   await expect.poll(() => blackShare(page)).toBe(0);
   await page.keyboard.up('Alt');
 });
+
+test('the filmstrip shows thumbnails, the file name without one, and ← → move through it (LIB-09)', async ({
+  page,
+}) => {
+  await develop(page);
+  const strip = page.getByRole('region', { name: 'Filmstrip' });
+  const frames = strip.getByRole('button');
+  await expect(frames).toHaveCount(5);
+  // Four photos with a thumbnail drawn, the unsupported one with its name.
+  for (let i = 0; i < 4; i++) await expect(frames.nth(i).locator('canvas')).toBeVisible();
+  await expect(frames.nth(4).locator('canvas')).toHaveCount(0);
+  await expect(frames.nth(4).getByText('DSC_0420.NEF')).toBeVisible();
+
+  await expect(frames.nth(0)).toHaveAttribute('aria-current', 'true');
+  await page.keyboard.press('ArrowLeft');
+  await expect(frames.nth(0)).toHaveAttribute('aria-current', 'true');
+  await page.keyboard.press('ArrowRight');
+  await expect(frames.nth(1)).toHaveAttribute('aria-current', 'true');
+  await expect(page.getByRole('slider', { name: 'Temp' })).toHaveAttribute('aria-valuetext', '3200');
+  await page.keyboard.press('ArrowRight');
+  await expect(frames.nth(2)).toHaveAttribute('aria-current', 'true');
+  await page.keyboard.press('ArrowLeft');
+  await expect(frames.nth(1)).toHaveAttribute('aria-current', 'true');
+
+  // On a focused slider the arrows move the slider, not the photo.
+  const exposure = page.getByRole('slider', { name: 'Exposure' });
+  await exposure.focus();
+  await page.keyboard.press('ArrowRight');
+  await expect(frames.nth(1)).toHaveAttribute('aria-current', 'true');
+  await expect(exposure).not.toHaveAttribute('aria-valuetext', '0.00');
+});
