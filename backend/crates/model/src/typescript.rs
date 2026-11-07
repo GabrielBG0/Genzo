@@ -7,9 +7,9 @@ use ts_rs::{Config, TS};
 
 use crate::api::{
     AdapterInfo, AdapterKind, CaptureTime, Clipping, ClippingPreview, ColorSpace, Command,
-    CommandResult, Counted, Direction, EngineInfo, Event, Handshake, HandshakeResult, Histogram,
-    PhotoEdit, PhotoKind, Query, QueryResult, Rational, Shooting, SpikeSource, Strip, StripPhoto,
-    View, WhiteBalancePreset,
+    CommandResult, Counted, Direction, EngineInfo, Event, ExportState, Handshake, HandshakeResult,
+    Histogram, PhotoEdit, PhotoKind, Query, QueryResult, Rational, Shooting, SpikeSource, Strip,
+    StripPhoto, View, WhiteBalancePreset,
 };
 use crate::contract::{CONTRACT_VERSION, ContractVersion};
 use crate::edit::{
@@ -61,6 +61,7 @@ pub fn generate() -> String {
         decl::<Clipping>(&cfg),
         decl::<Histogram>(&cfg),
         decl::<Counted>(&cfg),
+        decl::<ExportState>(&cfg),
         decl::<Command>(&cfg),
         decl::<CommandResult>(&cfg),
         decl::<Query>(&cfg),

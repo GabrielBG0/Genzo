@@ -3,3 +3,5 @@
 //! so an export always matches what is on screen.
 //!
 //! Basic JPEG export is scheduled for M1 (OUT-01), the rest for M4.
+
+pub mod jpeg;

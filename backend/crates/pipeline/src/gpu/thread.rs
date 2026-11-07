@@ -16,21 +16,30 @@
 //! stops between tiles for any request and resumes after it. Each holds its
 //! photo's input until it is done or cancelled.
 //!
+//! **Exports** (OUT-01, [`RenderThread::export`]) take what they render
+//! when they are asked for, then render one region at a time while no
+//! request waits, after the rest of a rebuild and the whole-photo
+//! histogram, before the prefetch. A finished row of regions waits for the
+//! encoder to take it; the thread does not. One export runs at a time, in
+//! the order asked.
+//!
 //! **The whole-photo histogram** of a view other than Fit (DEV-03, *At
 //! 1:1*; [`RenderThread::whole_histogram`]) runs while no request waits,
 //! after the rest of a rebuild and before the prefetch. Any Develop render
 //! or photo opening that comes first cancels it.
 
 use std::sync::Arc;
-use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+use std::sync::mpsc::{self, Receiver, Sender, SyncSender, TryRecvError, TrySendError};
 use std::thread::JoinHandle;
 
 use std::collections::VecDeque;
 
 use genzo_color::output::Target;
 use genzo_model::edit::{Edit, Phase};
+use genzo_model::frame::Rect;
 
 use super::develop::{Develop, DevelopError, Photo, PhotoInfo, Readback, Reran};
+use super::export::{ExportInputs, ExportStages, REGION};
 use super::raw_stages::{Level1, Level1Build, TileConfig};
 use super::spike::{BayerImage, Frame, SpikeParams, SpikePipeline};
 use super::{AdapterChoice, Gpu, GpuError, GpuInfo};
@@ -93,6 +102,60 @@ enum Request {
     },
     /// The whole photo's histogram after Develop render `generation`.
     Histogram(Whole),
+    /// An export of photo `id` with `edit`, as job `job`.
+    Export {
+        id: u64,
+        job: u64,
+        edit: Box<Edit>,
+        target: Target,
+        strips: SyncSender<Result<ExportStrip, GpuError>>,
+        reply: Reply<Result<(u32, u32), DevelopError>>,
+    },
+    /// Cancels export `job`.
+    CancelExport {
+        job: u64,
+        reply: Reply<()>,
+    },
+}
+
+/// One row of an export's regions, the shown image's full width (OUT-01):
+/// RGBA8, row by row, from row `y`, `height` rows.
+#[derive(Debug)]
+pub struct ExportStrip {
+    pub y: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+}
+
+/// A started export: the shown image's size, and its rows of regions in
+/// order. The channel closes after the last, or on an error (sent first),
+/// or when the export is cancelled.
+#[derive(Debug)]
+pub struct ExportJob {
+    pub size: (u32, u32),
+    pub strips: Receiver<Result<ExportStrip, GpuError>>,
+}
+
+/// An export the thread renders, one region per idle turn.
+struct Exporting {
+    job: u64,
+    inputs: ExportInputs,
+    stages: Option<ExportStages>,
+    size: (u32, u32),
+    /// The next region's top left.
+    at: (u32, u32),
+    /// The row of regions being filled.
+    strip: Vec<u8>,
+    /// A finished row the encoder has not taken yet.
+    pending: Option<ExportStrip>,
+    out: SyncSender<Result<ExportStrip, GpuError>>,
+}
+
+impl Exporting {
+    /// The height of the row of regions at `y`.
+    fn row_height(&self, y: u32) -> u32 {
+        REGION.min(self.size.1 - y)
+    }
 }
 
 /// A whole-photo histogram waiting for the thread to be idle.
@@ -355,6 +418,43 @@ impl RenderThread {
         Ok(rx)
     }
 
+    /// Starts an export of photo `id`, open in Develop, with `edit` (OUT-01):
+    /// what it renders is taken now, its regions rendered later while the
+    /// thread is idle. Answers the shown image's size and its rows, two at
+    /// most waiting for the encoder. A photo not open, or not decoded yet
+    /// ([`DevelopError::NeedsSource`]), is refused.
+    pub fn export(
+        &self,
+        id: u64,
+        job: u64,
+        edit: &Edit,
+        target: Target,
+    ) -> Result<Result<ExportJob, DevelopError>, GpuError> {
+        let (reply, rx) = mpsc::channel();
+        let (strips, receive) = mpsc::sync_channel(1);
+        self.send(Request::Export {
+            id,
+            job,
+            edit: Box::new(edit.clone()),
+            target,
+            strips,
+            reply,
+        })?;
+        let size = rx.recv().map_err(|_| GpuError::ThreadGone)??;
+        Ok(size.map(|size| ExportJob {
+            size,
+            strips: receive,
+        }))
+    }
+
+    /// Cancels export `job` after the region it is rendering: its rows
+    /// channel closes.
+    pub fn cancel_export(&self, job: u64) -> Result<(), GpuError> {
+        let (reply, rx) = mpsc::channel();
+        self.send(Request::CancelExport { job, reply })?;
+        rx.recv().map_err(|_| GpuError::ThreadGone)?
+    }
+
     /// [`Self::submit`] and wait.
     pub fn develop(&self, request: DevelopRequest) -> Result<Option<DevelopFrame>, GpuError> {
         self.submit(request)?
@@ -389,6 +489,68 @@ impl Drop for RenderThread {
     }
 }
 
+/// How often the thread looks again at an export whose finished row waits
+/// for the encoder.
+const EXPORT_POLL: std::time::Duration = std::time::Duration::from_millis(5);
+
+/// One turn of export `x`: hands its finished row to the encoder, or
+/// renders its next region. True when it is over: all sent, failed, or no
+/// one takes its rows any more.
+fn export_turn(gpu: &Gpu, d: &mut Develop, x: &mut Exporting) -> bool {
+    if let Some(strip) = x.pending.take() {
+        return match x.out.try_send(Ok(strip)) {
+            Ok(()) => x.at.1 >= x.size.1,
+            Err(TrySendError::Full(Ok(strip))) => {
+                x.pending = Some(strip);
+                false
+            }
+            Err(_) => true,
+        };
+    }
+    let (w, _) = x.size;
+    let (rx, ry) = x.at;
+    let height = x.row_height(ry);
+    let rect = Rect {
+        x: rx,
+        y: ry,
+        width: REGION.min(w - rx),
+        height,
+    };
+    let stages = x.stages.get_or_insert_with(|| ExportStages::new(gpu));
+    let inputs = &x.inputs;
+    let region = guarded(gpu, || {
+        d.render_export(gpu, stages, inputs, rect)
+            .map_err(develop_error)
+    });
+    let pixels = match region {
+        Ok(p) => p,
+        Err(e) => {
+            let _ = x.out.try_send(Err(e));
+            return true;
+        }
+    };
+    if x.strip.is_empty() {
+        x.strip = vec![0; w as usize * height as usize * 4];
+    }
+    let row = rect.width as usize * 4;
+    for (i, line) in pixels.chunks_exact(row).enumerate() {
+        let at = (i * w as usize + rx as usize) * 4;
+        x.strip[at..at + row].copy_from_slice(line);
+    }
+    if rx + rect.width < w {
+        x.at = (rx + rect.width, ry);
+        return false;
+    }
+    x.pending = Some(ExportStrip {
+        y: ry,
+        height,
+        rgba: std::mem::take(&mut x.strip),
+    });
+    x.at = (0, ry + height);
+    // Sent on the next turn, or this one if the encoder is ready.
+    export_turn(gpu, d, x)
+}
+
 fn run(gpu: Gpu, rx: Receiver<Request>) {
     let mut pipeline = SpikePipeline::new(&gpu);
     // Made on the first Develop request, so spike-only use (the benches)
@@ -405,6 +567,8 @@ fn run(gpu: Gpu, rx: Receiver<Request>) {
     // that ran, as (photo, generation).
     let mut whole: Option<Whole> = None;
     let mut last: Option<(u64, u64)> = None;
+    // Exports, first asked first rendered.
+    let mut exports: VecDeque<Exporting> = VecDeque::new();
     loop {
         // Between requests: the rest of a white balance rebuild, stopped as
         // soon as a request comes (DEV-01, Generations). A failed rest
@@ -437,8 +601,19 @@ fn run(gpu: Gpu, rx: Receiver<Request>) {
             };
             let _ = w.reply.send(answer);
         }
-        // Then a neighbor's level 1, stopped the same way.
+        // Then a region of the first export.
         if queued.is_empty()
+            && !develop.as_ref().is_some_and(Develop::rebuilding)
+            && let Some(x) = exports.front_mut()
+            && let Some(d) = develop.as_mut()
+            && export_turn(&gpu, d, x)
+        {
+            exports.pop_front();
+        }
+        // Then a neighbor's level 1, stopped the same way, once no export
+        // runs (OUT-01: prefetch waits for the export).
+        if queued.is_empty()
+            && exports.is_empty()
             && let Some(q) = prefetch.front_mut()
         {
             let d = develop.get_or_insert_with(|| Develop::new(&gpu, TileConfig::default()));
@@ -482,8 +657,22 @@ fn run(gpu: Gpu, rx: Receiver<Request>) {
                 continue;
             }
         }
+        // An export waiting for its encoder looks again soon; one with a
+        // region to render goes round the loop at once.
+        let waiting = exports.front().is_some_and(|x| x.pending.is_some());
+        let rendering = exports.front().is_some_and(|x| x.pending.is_none());
         let first = match queued.pop_front() {
             Some(r) => r,
+            None if rendering => match rx.try_recv() {
+                Ok(r) => r,
+                Err(TryRecvError::Empty) => continue,
+                Err(TryRecvError::Disconnected) => return,
+            },
+            None if waiting => match rx.recv_timeout(EXPORT_POLL) {
+                Ok(r) => r,
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(mpsc::RecvTimeoutError::Disconnected) => return,
+            },
             None => match rx.recv() {
                 Ok(r) => r,
                 Err(_) => return,
@@ -596,6 +785,42 @@ fn run(gpu: Gpu, rx: Receiver<Request>) {
                     let _ = reply.send(picked);
                 }
                 Request::Prefetch(q) => prefetch.push_back(q),
+                Request::Export {
+                    id,
+                    job,
+                    edit,
+                    target,
+                    strips,
+                    reply,
+                } => {
+                    let answer = match develop.as_mut().filter(|_| open == Some(id)) {
+                        None => Ok(Err(DevelopError::NoPhoto)),
+                        Some(d) => match guarded(&gpu, || Ok(d.export_inputs(&gpu, &edit, target)))
+                        {
+                            Ok(Ok(inputs)) => {
+                                let size = inputs.size();
+                                exports.push_back(Exporting {
+                                    job,
+                                    inputs,
+                                    stages: None,
+                                    size,
+                                    at: (0, 0),
+                                    strip: Vec::new(),
+                                    pending: None,
+                                    out: strips,
+                                });
+                                Ok(Ok(size))
+                            }
+                            Ok(Err(DevelopError::Gpu(e))) | Err(e) => Err(e),
+                            Ok(Err(e)) => Ok(Err(e)),
+                        },
+                    };
+                    let _ = reply.send(answer);
+                }
+                Request::CancelExport { job, reply } => {
+                    exports.retain(|x| x.job != job);
+                    let _ = reply.send(Ok(()));
+                }
                 Request::Histogram(w) => {
                     if let Some(old) = whole.replace(w) {
                         let _ = old.reply.send(Ok(None));

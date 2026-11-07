@@ -123,6 +123,29 @@ pub enum View {
     Region { zoom: f64, x: f64, y: f64 },
 }
 
+/// Where an export is (OUT-01, *Progress and cancel*).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(
+    tag = "type",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum ExportState {
+    /// Waiting for the export before it.
+    Queued,
+    Running,
+    /// Written. `notes` say what did not go out as it was: maker notes too
+    /// large for the EXIF segment, metadata that could not be read.
+    Finished {
+        notes: Vec<String>,
+    },
+    /// Nothing was written; `reason` is the status bar's text.
+    Failed {
+        reason: String,
+    },
+    Cancelled,
+}
+
 /// The Alt clipping preview during a tone slider's drag (DEV-03).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -362,6 +385,24 @@ pub enum Command {
     /// `ThumbnailReady`, at once for one already made. Answers
     /// [`CommandResult::Done`].
     RequestThumbnails { photos: Vec<u64> },
+    /// Exports `photo`, open in Develop, as a JPEG at `path` (OUT-01): its
+    /// edit now, full size or fitted to `long_edge` pixels, never enlarged,
+    /// at `quality` 1 to 100. `replace` allows replacing a file there; the
+    /// frontend sets it only for the save dialog's own path. A destination
+    /// that is a photo Genzo opened, an existing file without `replace`,
+    /// or a path an export in progress will write is the command's error.
+    /// Answers [`CommandResult::Export`]; its progress comes as
+    /// `ExportProgress`.
+    ExportJpeg {
+        photo: u64,
+        path: String,
+        long_edge: Option<u32>,
+        quality: u8,
+        replace: bool,
+    },
+    /// Cancels export `job` after the region it is rendering. Answers
+    /// [`CommandResult::Done`].
+    CancelExport { job: u64 },
 }
 
 /// The answer to a [`Command`]. A failure the user cannot act on (no GPU,
@@ -397,6 +438,8 @@ pub enum CommandResult {
         edit: Option<PhotoEdit>,
         reason: Option<String>,
     },
+    /// The export started (or queued), as job `job`.
+    Export { job: u64 },
 }
 
 /// Requests that only read engine state.
@@ -487,6 +530,16 @@ pub enum Event {
     /// `found` is false when the file has no embedded preview, or it
     /// cannot be read: the neutral cell with the file name.
     ThumbnailReady { photo: u64, found: bool },
+    /// An export's progress (OUT-01): rows of the image written of its
+    /// total. Each job ends with exactly one finished, failed or cancelled.
+    ExportProgress {
+        job: u64,
+        photo: u64,
+        path: String,
+        rows_done: u32,
+        rows_total: u32,
+        state: ExportState,
+    },
 }
 
 #[cfg(test)]
