@@ -110,6 +110,13 @@ fn read(data: &[u8]) -> Option<Capture> {
     }
 }
 
+/// The capture in an EXIF block (a JPEG's APP1 payload): for the export's
+/// metadata round trip.
+#[cfg(test)]
+pub(crate) fn from_exif_block(block: &[u8]) -> Capture {
+    from_tiff(exif::tiff_payload(block), true).unwrap_or_default()
+}
+
 /// Whether a file of `head`'s format can keep its capture time past its
 /// head, so a reader that found none there should read the rest: TIFF
 /// structures point anywhere, a HEIF's EXIF item and a PNG's eXIf chunk

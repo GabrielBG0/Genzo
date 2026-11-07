@@ -18,6 +18,7 @@ mod heic;
 pub mod jpeg;
 #[cfg(feature = "raw")]
 mod ljpeg;
+pub mod metadata;
 pub mod opcodes;
 mod png_image;
 mod preview;
