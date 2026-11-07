@@ -32,4 +32,11 @@ export interface Engine {
    * said it was found (LIB-09).
    */
   fetchThumbnail(photo: number): Promise<ArrayBuffer>;
+  /** The system's folder dialog (Open folder, LIB-09); null when cancelled. */
+  chooseFolder(): Promise<string | null>;
+  /**
+   * The system's save dialog for a JPEG, opened at `suggested` (Export,
+   * OUT-01); null when cancelled. The dialog asks before replacing a file.
+   */
+  chooseSavePath(suggested: string): Promise<string | null>;
 }

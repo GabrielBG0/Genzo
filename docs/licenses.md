@@ -14,6 +14,8 @@ Genzo is GPL-3.0-only. A dependency is acceptable when its license is compatible
 | ts-rs | backend (`model`) | MIT | Contract generator |
 | thiserror | backend | MIT OR Apache-2.0 | |
 | tauri, tauri-build, wry, tao | shell | Apache-2.0 OR MIT | |
+| tauri-plugin-dialog 2.8.4, tauri-plugin-fs, tauri-plugin | shell | Apache-2.0 OR MIT | The system's folder and save dialogs (Open folder, LIB-09; Export, OUT-01), 2026-11-08. Read from the registry metadata; `cargo deny check` passes on the shell's tree |
+| rfd 0.17.2 | shell (through tauri-plugin-dialog) | MIT | The native dialogs themselves |
 | cssparser, selectors, dtoa-short, option-ext | shell (through Tauri) | MPL-2.0 | File-level copyleft, compatible with GPL-3.0 |
 | WebKitGTK 4.1 | Linux system library | LGPL-2.1 | Linked dynamically from the system, not bundled |
 | libheif 1.23.6 | backend (`genzo-heif`), bundled | LGPL-3.0-or-later | Read from `COPYING` and the source headers in the pinned submodule. Built from source and linked statically, with only the libde265 decoder enabled. Compatible with GPL-3.0: the combined work is distributed under GPL-3.0 with full source, which meets the LGPL's relinking terms |
@@ -31,6 +33,7 @@ Genzo is GPL-3.0-only. A dependency is acceptable when its license is compatible
 | tiff 0.11.3 | backend (`imgio`) | MIT | TIFF decode (M1, 2026-10-18), image-rs. Built with the deflate, lzw and jpeg features (not fax). Its tree adds weezl 0.1.12 and flate2 1.1.10 (MIT OR Apache-2.0), quick-error 2.0.1 (MIT/Apache-2.0), simd-adler32 0.3.10 (MIT), adler2 (0BSD OR MIT OR Apache-2.0), half and zune-jpeg |
 | memchr 2.8.3 | backend (`imgio`) | Unlicense OR MIT | Byte search for embedded previews (M1, 2026-10-18). Already in the tree through rawler, tiff and others |
 | @tauri-apps/api | frontend | Apache-2.0 OR MIT | |
+| @tauri-apps/plugin-dialog 2.8.4 | frontend (the transport module only) | Apache-2.0 OR MIT | The plugin's JavaScript side |
 | Public Sans (`@fontsource/public-sans`) | frontend, bundled | OFL-1.1 | Checked in `node_modules/@fontsource/public-sans/LICENSE`. OFL allows bundling with any software; the font may not be sold on its own |
 | JetBrains Mono (`@fontsource/jetbrains-mono`) | frontend, bundled | OFL-1.1 | Same as Public Sans |
 | Zen Kaku Gothic New Black | logo artwork, outlined in the SVGs, not bundled | OFL-1.1 | The 現像 in the mark (2026-11-05, `docs/UI/brand.md`). The owner states the license. Its license file is not checked yet |

@@ -160,6 +160,8 @@ export function timedEngine(engine: Engine, times: TransportTimes): Engine {
     query: (q) => engine.query(q),
     onEvent: (listener) => engine.onEvent(listener),
     fetchThumbnail: (photo) => engine.fetchThumbnail(photo),
+    chooseFolder: () => engine.chooseFolder(),
+    chooseSavePath: (suggested) => engine.chooseSavePath(suggested),
     async execute(command) {
       const t0 = performance.now();
       const result = await engine.execute(command);

@@ -256,3 +256,50 @@ test('the filmstrip shows thumbnails, the file name without one, and ← → mov
   await expect(frames.nth(1)).toHaveAttribute('aria-current', 'true');
   await expect(exposure).not.toHaveAttribute('aria-valuetext', '0.00');
 });
+
+test('Export: Ctrl Shift E, the file, replace, Esc, the quick action and the tab (OUT-01)', async ({ page }) => {
+  await develop(page);
+  const dialog = page.getByRole('dialog', { name: 'Export' });
+  const status = page.locator('footer');
+  await page.keyboard.press('Control+Shift+E');
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByText('demo/DSC_0412.jpg')).toBeVisible();
+  await expect(dialog.getByText('All EXIF metadata, including location.', { exact: false })).toBeVisible();
+  await dialog.getByRole('button', { name: 'Export', exact: true }).click();
+  await expect(dialog).toBeHidden();
+  await expect(status.getByText('Exported DSC_0412.jpg')).toBeVisible();
+
+  // Again to the same file: asked first, then replaced.
+  await page.keyboard.press('Control+Shift+E');
+  await page.keyboard.press('Enter');
+  await expect(dialog.getByText('DSC_0412.jpg already exists. Replace it?')).toBeVisible();
+  await dialog.getByRole('button', { name: 'Replace' }).click();
+  await expect(dialog).toBeHidden();
+
+  // Esc closes; the quick action and the tab open it.
+  await page.getByRole('toolbar', { name: 'Quick actions' }).getByRole('button', { name: /^Export/ }).click();
+  await expect(dialog).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(dialog).toBeHidden();
+  await page.getByRole('button', { name: 'Export', exact: true }).first().click();
+  await expect(dialog).toBeVisible();
+  // A long edge under 32 px is refused before it is sent.
+  await dialog.getByRole('radio', { name: /Long edge/ }).check();
+  await dialog.getByLabel('Long edge in pixels').fill('20');
+  await expect(dialog.getByRole('alert')).toHaveText('The long edge is 32 px at least.');
+  await expect(dialog.getByRole('button', { name: 'Export', exact: true })).toBeDisabled();
+  await page.keyboard.press('Escape');
+
+  // A photo that does not render cannot be exported.
+  await page.getByRole('region', { name: 'Filmstrip' }).getByRole('button').nth(4).click();
+  await expect(page.getByRole('slider', { name: 'Shadows' })).toHaveAttribute('aria-disabled', 'true');
+  await page.keyboard.press('Control+Shift+E');
+  await expect(dialog).toBeHidden();
+
+  // Ctrl O opens a folder through the system dialog (the fake's: demo).
+  await page.keyboard.press('Control+O');
+  await expect(page.getByRole('region', { name: 'Filmstrip' }).getByRole('button').nth(0)).toHaveAttribute(
+    'aria-current',
+    'true',
+  );
+});

@@ -3,6 +3,7 @@
 
 import { convertFileSrc, invoke, isTauri as tauriPresent } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import { open, save } from '@tauri-apps/plugin-dialog';
 import type {
   Command,
   CommandResult,
@@ -49,6 +50,15 @@ export class TauriEngine implements Engine {
     const res = await fetch(convertFileSrc(String(generation), FRAME_SCHEME));
     if (!res.ok) throw new Error(`frame ${generation}: HTTP ${res.status}`);
     return res.arrayBuffer();
+  }
+
+  async chooseFolder(): Promise<string | null> {
+    const picked = await open({ directory: true, multiple: false });
+    return typeof picked === 'string' ? picked : null;
+  }
+
+  chooseSavePath(suggested: string): Promise<string | null> {
+    return save({ defaultPath: suggested, filters: [{ name: 'JPEG', extensions: ['jpg', 'jpeg'] }] });
   }
 
   async fetchThumbnail(photo: number): Promise<ArrayBuffer> {

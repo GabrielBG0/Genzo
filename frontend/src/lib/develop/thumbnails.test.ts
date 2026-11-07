@@ -93,6 +93,8 @@ describe('Thumbnails', () => {
       execute: () => Promise.resolve<CommandResult>({ type: 'done' }),
       onEvent: (l) => ((listener = l), () => {}),
       fetchFrame: () => Promise.reject(new Error('unused')),
+      chooseFolder: () => Promise.resolve(null),
+      chooseSavePath: () => Promise.resolve(null),
       fetchThumbnail: () => Promise.resolve(message.slice().buffer),
     };
     const bitmap = { width: 320, height: 240 } as ImageBitmap;
@@ -179,6 +181,8 @@ describe('Thumbnails, bounded', () => {
       execute: () => Promise.resolve<CommandResult>({ type: 'done' }),
       onEvent: (l) => ((listener = l), () => {}),
       fetchFrame: () => Promise.reject(new Error('unused')),
+      chooseFolder: () => Promise.resolve(null),
+      chooseSavePath: () => Promise.resolve(null),
       fetchThumbnail: () => Promise.resolve(tile.slice().buffer),
     };
     const bitmaps: { close: ReturnType<typeof vi.fn> }[] = [];

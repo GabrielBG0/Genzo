@@ -23,6 +23,8 @@ serde_json = "1"
 [dependencies]
 genzo-engine = { path = "../backend/crates/engine" }
 tauri = { version = "2.12", features = [] }
+# The system's folder and save dialogs (Open folder, LIB-09; Export, OUT-01).
+tauri-plugin-dialog = "2"
 serde_json = "1"
 
 [profile.release]
