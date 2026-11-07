@@ -39,7 +39,7 @@ use genzo_model::edit::{Edit, Phase};
 use genzo_model::frame::Rect;
 
 use super::develop::{Develop, DevelopError, Photo, PhotoInfo, Readback, Reran};
-use super::export::{ExportInputs, ExportStages, REGION};
+use super::export::{ExportInputs, ExportStages, REGION, Stage9, resized};
 use super::raw_stages::{Level1, Level1Build, TileConfig};
 use super::spike::{BayerImage, Frame, SpikeParams, SpikePipeline};
 use super::{AdapterChoice, Gpu, GpuError, GpuInfo};
@@ -108,8 +108,9 @@ enum Request {
         job: u64,
         edit: Box<Edit>,
         target: Target,
-        strips: SyncSender<Result<ExportStrip, GpuError>>,
-        reply: Reply<Result<(u32, u32), DevelopError>>,
+        long_edge: Option<u32>,
+        strips: SyncSender<Result<ExportPiece, GpuError>>,
+        reply: Reply<Result<ExportStart, DevelopError>>,
     },
     /// Cancels export `job`.
     CancelExport {
@@ -127,13 +128,42 @@ pub struct ExportStrip {
     pub rgba: Vec<u8>,
 }
 
-/// A started export: the shown image's size, and its rows of regions in
-/// order. The channel closes after the last, or on an error (sent first),
-/// or when the export is cancelled.
+/// What an export sends, in order: at full size, its rows of regions, the
+/// shown image's full width; resized, its regions at full resolution in
+/// the working space, row of regions by row, left to right, for the CPU
+/// to reduce and run stage 9 on (OUT-01, *Resized*).
+#[derive(Debug)]
+pub enum ExportPiece {
+    Rows(ExportStrip),
+    Region { rect: Rect, rgb: Vec<[f32; 3]> },
+}
+
+/// What [`RenderThread::export`] knows once it has taken the inputs.
+#[derive(Debug, Clone, Copy)]
+struct ExportStart {
+    source: (u32, u32),
+    size: (u32, u32),
+    stage9: Stage9,
+}
+
+/// A started export: the shown image's size at full resolution, the
+/// export's size, stage 9's settings, and its pieces in order. The channel
+/// closes after the last, or on an error (sent first), or when the export
+/// is cancelled.
 #[derive(Debug)]
 pub struct ExportJob {
+    pub source: (u32, u32),
     pub size: (u32, u32),
-    pub strips: Receiver<Result<ExportStrip, GpuError>>,
+    pub stage9: Stage9,
+    pub strips: Receiver<Result<ExportPiece, GpuError>>,
+}
+
+impl ExportJob {
+    /// Whether the export is smaller than the shown image: its pieces are
+    /// regions to reduce.
+    pub fn resized(&self) -> bool {
+        self.size != self.source
+    }
 }
 
 /// An export the thread renders, one region per idle turn.
@@ -146,9 +176,11 @@ struct Exporting {
     at: (u32, u32),
     /// The row of regions being filled.
     strip: Vec<u8>,
-    /// A finished row, or the error that ends the export, not taken yet.
-    pending: Option<Result<ExportStrip, GpuError>>,
-    out: SyncSender<Result<ExportStrip, GpuError>>,
+    /// Regions go out as they are, in the working space, to be reduced.
+    resized: bool,
+    /// A finished piece, or the error that ends the export, not taken yet.
+    pending: Option<Result<ExportPiece, GpuError>>,
+    out: SyncSender<Result<ExportPiece, GpuError>>,
 }
 
 impl Exporting {
@@ -418,17 +450,19 @@ impl RenderThread {
         Ok(rx)
     }
 
-    /// Starts an export of photo `id`, open in Develop, with `edit` (OUT-01):
-    /// what it renders is taken now, its regions rendered later while the
-    /// thread is idle. Answers the shown image's size and its rows, two at
-    /// most waiting for the encoder. A photo not open, or not decoded yet
-    /// ([`DevelopError::NeedsSource`]), is refused.
+    /// Starts an export of photo `id`, open in Develop, with `edit` (OUT-01),
+    /// at full size or fitted to `long_edge` (never enlarged): what it
+    /// renders is taken now, its regions rendered later while the thread is
+    /// idle. Answers its sizes and its pieces, two at most waiting. A photo
+    /// not open, or not decoded yet ([`DevelopError::NeedsSource`]), is
+    /// refused.
     pub fn export(
         &self,
         id: u64,
         job: u64,
         edit: &Edit,
         target: Target,
+        long_edge: Option<u32>,
     ) -> Result<Result<ExportJob, DevelopError>, GpuError> {
         let (reply, rx) = mpsc::channel();
         let (strips, receive) = mpsc::sync_channel(1);
@@ -437,12 +471,15 @@ impl RenderThread {
             job,
             edit: Box::new(edit.clone()),
             target,
+            long_edge,
             strips,
             reply,
         })?;
-        let size = rx.recv().map_err(|_| GpuError::ThreadGone)??;
-        Ok(size.map(|size| ExportJob {
-            size,
+        let start = rx.recv().map_err(|_| GpuError::ThreadGone)??;
+        Ok(start.map(|s| ExportJob {
+            source: s.source,
+            size: s.size,
+            stage9: s.stage9,
             strips: receive,
         }))
     }
@@ -497,6 +534,9 @@ const EXPORT_POLL: std::time::Duration = std::time::Duration::from_millis(5);
 /// renders its next region. True when it is over: all sent, failed, or no
 /// one takes its rows any more.
 fn export_turn(gpu: &Gpu, d: &mut Develop, x: &mut Exporting) -> bool {
+    if x.resized {
+        return resized_turn(gpu, d, x);
+    }
     if let Some(item) = x.pending.take() {
         let failed = item.is_err();
         return match x.out.try_send(item) {
@@ -544,14 +584,51 @@ fn export_turn(gpu: &Gpu, d: &mut Develop, x: &mut Exporting) -> bool {
         x.at = (rx + rect.width, ry);
         return false;
     }
-    x.pending = Some(Ok(ExportStrip {
+    x.pending = Some(Ok(ExportPiece::Rows(ExportStrip {
         y: ry,
         height,
         rgba: std::mem::take(&mut x.strip),
-    }));
+    })));
     x.at = (0, ry + height);
     // Sent on the next turn, or this one if the encoder is ready.
     export_turn(gpu, d, x)
+}
+
+/// [`export_turn`] for a resized export: each region goes out on its own,
+/// in the working space.
+fn resized_turn(gpu: &Gpu, d: &mut Develop, x: &mut Exporting) -> bool {
+    if let Some(item) = x.pending.take() {
+        let failed = item.is_err();
+        return match x.out.try_send(item) {
+            Ok(()) => failed || x.at.1 >= x.size.1,
+            Err(TrySendError::Full(item)) => {
+                x.pending = Some(item);
+                false
+            }
+            Err(TrySendError::Disconnected(_)) => true,
+        };
+    }
+    let (w, h) = x.size;
+    let (rx, ry) = x.at;
+    let rect = Rect {
+        x: rx,
+        y: ry,
+        width: REGION.min(w - rx),
+        height: REGION.min(h - ry),
+    };
+    let stages = x.stages.get_or_insert_with(|| ExportStages::new(gpu));
+    let inputs = &x.inputs;
+    let region = guarded(gpu, || {
+        d.render_export_linear(gpu, stages, inputs, rect)
+            .map_err(develop_error)
+    });
+    x.at = if rx + rect.width < w {
+        (rx + rect.width, ry)
+    } else {
+        (0, ry + rect.height)
+    };
+    x.pending = Some(region.map(|rgb| ExportPiece::Region { rect, rgb }));
+    resized_turn(gpu, d, x)
 }
 
 fn run(gpu: Gpu, rx: Receiver<Request>) {
@@ -793,6 +870,7 @@ fn run(gpu: Gpu, rx: Receiver<Request>) {
                     job,
                     edit,
                     target,
+                    long_edge,
                     strips,
                     reply,
                 } => {
@@ -801,18 +879,25 @@ fn run(gpu: Gpu, rx: Receiver<Request>) {
                         Some(d) => match guarded(&gpu, || Ok(d.export_inputs(&gpu, &edit, target)))
                         {
                             Ok(Ok(inputs)) => {
-                                let size = inputs.size();
+                                let source = inputs.size();
+                                let out = long_edge.and_then(|l| resized(source, l));
+                                let start = ExportStart {
+                                    source,
+                                    size: out.unwrap_or(source),
+                                    stage9: inputs.stage9(),
+                                };
                                 exports.push_back(Exporting {
                                     job,
                                     inputs,
                                     stages: None,
-                                    size,
+                                    size: source,
                                     at: (0, 0),
                                     strip: Vec::new(),
+                                    resized: out.is_some(),
                                     pending: None,
                                     out: strips,
                                 });
-                                Ok(Ok(size))
+                                Ok(Ok(start))
                             }
                             Ok(Err(DevelopError::Gpu(e))) | Err(e) => Err(e),
                             Ok(Err(e)) => Ok(Err(e)),

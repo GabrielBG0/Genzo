@@ -1264,6 +1264,7 @@ dependencies = [
  "genzo-model",
  "genzo-pipeline",
  "jpeg-encoder",
+ "rayon",
  "thiserror 2.0.21",
 ]
 

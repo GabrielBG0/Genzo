@@ -188,6 +188,65 @@ fn an_export_writes_the_photo_with_its_metadata() {
     assert_eq!(tag(&written.exif, 40962).unwrap(), 1300u32.to_le_bytes());
     assert_eq!(tag(&written.exif, 40963).unwrap(), 700u32.to_le_bytes());
     assert!(file.windows(12).any(|w| w == b"ICC_PROFILE\0"));
+
+    // Resized: the long edge fitted, the other side rounded; never
+    // enlarged.
+    let small = dir.out("small.jpg");
+    let mut r = request(id, &small);
+    r.long_edge = Some(400);
+    let job = engine.export_jpeg(r).unwrap();
+    engine.wait_exports_idle();
+    let events = states(&seen, job);
+    assert_eq!(ends(&events), 1, "{events:?}");
+    assert_eq!(
+        events.last().unwrap(),
+        &(215, ExportState::Finished { notes: vec![] })
+    );
+    let file = std::fs::read(&small).unwrap();
+    let img = genzo_imgio::decode(&file, Default::default()).unwrap();
+    assert_eq!((img.width, img.height), (400, 215));
+    let at = file.windows(6).position(|w| w == b"Exif\0\0").unwrap();
+    let written = genzo_imgio::metadata::from_exif(&file[at..]).unwrap();
+    assert_eq!(tag(&written.exif, 40962).unwrap(), 400u32.to_le_bytes());
+    // Every part of it is the full-size export's, downscaled: close to box
+    // means of its decoded codes (the export averages in linear light, and
+    // both are JPEGs, so close and not equal).
+    let full = genzo_imgio::decode(&std::fs::read(&out).unwrap(), Default::default()).unwrap();
+    let rgb16 = |img: &genzo_imgio::DecodedImage| match &img.pixels {
+        genzo_imgio::Pixels::Rgba16 { data, .. } => data.clone(),
+        other => panic!("{other:?}"),
+    };
+    let (big_px, small_px) = (rgb16(&full), rgb16(&img));
+    let starts = |len: u32, n: u32| -> Vec<u32> { (0..=n).map(|i| i * len / n).collect() };
+    let (cs, rs) = (starts(1300, 400), starts(700, 215));
+    let mut worst = 0.0f64;
+    for oy in 0..215u32 {
+        for ox in 0..400u32 {
+            for c in 0..3 {
+                let mut sum = 0.0;
+                let mut n = 0.0;
+                for y in rs[oy as usize]..rs[oy as usize + 1] {
+                    for x in cs[ox as usize]..cs[ox as usize + 1] {
+                        sum += f64::from(big_px[((y * 1300 + x) * 4 + c) as usize]) / 257.0;
+                        n += 1.0;
+                    }
+                }
+                let got = f64::from(small_px[((oy * 400 + ox) * 4 + c) as usize]) / 257.0;
+                worst = worst.max((got - sum / n).abs());
+            }
+        }
+    }
+    assert!(
+        worst < 6.0,
+        "{worst:.1} codes from the full-size export, downscaled"
+    );
+    let big = dir.out("big.jpg");
+    let mut r = request(id, &big);
+    r.long_edge = Some(5000);
+    engine.export_jpeg(r).unwrap();
+    engine.wait_exports_idle();
+    let img = genzo_imgio::decode(&std::fs::read(&big).unwrap(), Default::default()).unwrap();
+    assert_eq!((img.width, img.height), (1300, 700), "never enlarged");
 }
 
 #[test]
@@ -237,8 +296,11 @@ fn originals_existing_files_and_busy_paths_are_refused() {
         Err(EngineError::Io(_))
     ));
     let mut r = request(id, &dir.out("small.jpg"));
-    r.long_edge = Some(32);
-    assert!(engine.export_jpeg(r).is_err());
+    r.long_edge = Some(31);
+    assert!(matches!(
+        engine.export_jpeg(r),
+        Err(EngineError::Invalid(_))
+    ));
     // Nothing was written over the photos.
     assert_eq!(
         std::fs::read(dir.photos().join("a.jpg")).unwrap(),

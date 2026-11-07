@@ -18,3 +18,4 @@ genzo-imgio.workspace = true
 genzo-color.workspace = true
 thiserror.workspace = true
 jpeg-encoder.workspace = true
+rayon.workspace = true

@@ -22,7 +22,7 @@ use std::sync::{Arc, Mutex};
 
 use genzo_model::api::{Event, ExportState};
 use genzo_pipeline::gpu::develop::DevelopError;
-use genzo_pipeline::gpu::thread::ExportJob;
+use genzo_pipeline::gpu::thread::{ExportJob, ExportPiece};
 
 use crate::develop::Target;
 use crate::{Engine, EngineError, EventSink};
@@ -43,6 +43,9 @@ pub struct ExportRequest {
 /// Refused: the destination is a photo Genzo opened (OUT-01).
 pub const ORIGINAL: &str =
     "Genzo does not write over the photos it opens. Choose another name or folder.";
+
+/// The smallest long edge an export takes: DEV-01's smallest crop.
+pub const MIN_LONG_EDGE: u32 = 32;
 
 /// How long a command waits for a photo opened from its prefetched level 1
 /// to be decoded before its export can start.
@@ -138,11 +141,12 @@ impl Engine {
         if !(1..=100).contains(&request.quality) {
             return Err(EngineError::Invalid(format!("quality {}", request.quality)));
         }
-        if request.long_edge.is_some() {
-            // OUT-01 part 2b.
-            return Err(EngineError::Refused(
-                "Resized export is not built yet; export at full size.".into(),
-            ));
+        if let Some(edge) = request.long_edge
+            && edge < MIN_LONG_EDGE
+        {
+            return Err(EngineError::Invalid(format!(
+                "a long edge of {edge} px; {MIN_LONG_EDGE} at least"
+            )));
         }
         let jpeg = request
             .path
@@ -190,7 +194,7 @@ impl Engine {
         };
         let started = std::time::Instant::now();
         let export = loop {
-            match gpu.export(request.photo, job, &edit, Target::Srgb) {
+            match gpu.export(request.photo, job, &edit, Target::Srgb, request.long_edge) {
                 Ok(Ok(export)) => break Ok(export),
                 Ok(Err(DevelopError::NeedsSource))
                     if started.elapsed() < DECODE_WAIT
@@ -302,16 +306,23 @@ impl Task {
         };
         let mut failure: Option<String> = None;
         let mut running = false;
+        let mut reducer = self.export.resized().then(|| {
+            genzo_export::resize::Reducer::new(
+                self.export.source,
+                self.export.size,
+                self.export.stage9,
+            )
+        });
         let result = genzo_export::jpeg::write_file(
             &self.destination,
             self.export.size,
             &settings,
-            || {
+            || loop {
                 if self.cancelled.load(Ordering::SeqCst) {
                     return None;
                 }
-                let strip = match self.export.strips.recv() {
-                    Ok(Ok(s)) => s,
+                let piece = match self.export.strips.recv() {
+                    Ok(Ok(p)) => p,
                     Ok(Err(e)) => {
                         failure = Some(e.to_string());
                         return None;
@@ -324,11 +335,29 @@ impl Task {
                     running = true;
                     self.progress(0, ExportState::Running);
                 }
-                Some(genzo_export::jpeg::Strip {
-                    y: strip.y,
-                    height: strip.height,
-                    rgba: strip.rgba,
-                })
+                match (piece, reducer.as_mut()) {
+                    (ExportPiece::Rows(strip), None) => {
+                        return Some(genzo_export::jpeg::Strip {
+                            y: strip.y,
+                            height: strip.height,
+                            rgba: strip.rgba,
+                        });
+                    }
+                    (ExportPiece::Region { rect, rgb }, Some(r)) => {
+                        r.add(rect, &rgb);
+                        // The output rows the row of regions finished.
+                        if rect.x + rect.width == self.export.source.0 {
+                            let (y, rgba, height) = r.finish(rect.y + rect.height);
+                            if height > 0 {
+                                return Some(genzo_export::jpeg::Strip { y, height, rgba });
+                            }
+                        }
+                    }
+                    _ => {
+                        failure = Some("the export's pieces were not of its kind".into());
+                        return None;
+                    }
+                }
             },
             |rows| self.progress(rows, ExportState::Running),
         );

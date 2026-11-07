@@ -41,9 +41,11 @@ commands:
                                the switch to a prefetched neighbor, p50/p95.
                                With --thumbs, the whole strip's thumbnails are
                                made again before each switch, as a backlog
-  export FILE OUT [Q]          export FILE, unedited, as the JPEG OUT at quality Q
-                               (default 85; OUT-01), and print its progress
-  bench export FILE [N]        export FILE at full size N times, print p50/p95
+  export FILE OUT [Q [L]]      export FILE, unedited, as the JPEG OUT at quality Q
+                               (default 85), fitted to a long edge of L px (default
+                               full size; OUT-01), and print its progress
+  bench export FILE [N [L]]    export FILE N times at full size, or fitted to L px,
+                               print p50/p95
   thumbs FOLDER OUT            write the thumbnail of each photo in FOLDER to OUT
                                as FILE_NAME.jpg (LIB-09); list those without one
   bench thumbs FOLDER [N]      make FOLDER's thumbnails N times with an empty
@@ -517,6 +519,7 @@ fn finished(last: &LastState) -> Result<(), String> {
 /// `export FILE OUT [Q]`: FILE as the JPEG OUT.
 fn export(file: &str, out: &str, args: &[&str]) -> Result<(), String> {
     let quality = u8::try_from(parse_num(args, 0, 85)?).map_err(|_| "quality 1 to 100")?;
+    let long_edge = args.get(1).map(|_| parse_num(args, 1, 0)).transpose()?;
     let last: LastState = Arc::default();
     let seen = Arc::clone(&last);
     let (engine, id) = open_for_export(file, move |done, total, state| {
@@ -527,7 +530,7 @@ fn export(file: &str, out: &str, args: &[&str]) -> Result<(), String> {
         .export_jpeg(genzo_engine::export::ExportRequest {
             photo: id,
             path: out.into(),
-            long_edge: None,
+            long_edge,
             quality,
             replace: true,
         })
@@ -540,6 +543,7 @@ fn export(file: &str, out: &str, args: &[&str]) -> Result<(), String> {
 /// command to the renamed file.
 fn bench_export(file: &str, args: &[&str], metrics: &mut Metrics) -> Result<(), String> {
     let passes = parse_num(args, 0, 5)?.max(1);
+    let long_edge = args.get(1).map(|_| parse_num(args, 1, 0)).transpose()?;
     let last: LastState = Arc::default();
     let seen = Arc::clone(&last);
     let (engine, id) = open_for_export(file, move |_, _, state| {
@@ -553,7 +557,7 @@ fn bench_export(file: &str, args: &[&str], metrics: &mut Metrics) -> Result<(), 
             .export_jpeg(genzo_engine::export::ExportRequest {
                 photo: id,
                 path: out.clone(),
-                long_edge: None,
+                long_edge,
                 quality: 85,
                 replace: true,
             })
@@ -567,8 +571,12 @@ fn bench_export(file: &str, args: &[&str], metrics: &mut Metrics) -> Result<(), 
     }
     let _ = std::fs::remove_file(&out);
     let (p50, p95) = percentiles(times);
-    metrics.add("export/full size", p50, p95);
-    println!("export, full size, quality 85: p50 {p50:.0} ms, p95 {p95:.0} ms");
+    let name = match long_edge {
+        Some(l) => format!("export/long edge {l}"),
+        None => "export/full size".into(),
+    };
+    metrics.add(&name, p50, p95);
+    println!("{name}, quality 85: p50 {p50:.0} ms, p95 {p95:.0} ms");
     Ok(())
 }
 
