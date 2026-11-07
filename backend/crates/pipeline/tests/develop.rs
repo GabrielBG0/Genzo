@@ -802,3 +802,34 @@ fn each_render_has_its_gpu_time() {
         "the rebuild {white} ms, stage 9 {output} ms"
     );
 }
+
+/// OUT-01: an export holds the open photo's input without copying it, and
+/// keeps it after the photo is closed for another.
+#[test]
+fn the_input_is_shared_and_outlives_its_photo() {
+    let Some((_lock, gpu)) = gpu() else {
+        eprintln!("skipped: no GPU adapter");
+        return;
+    };
+    let (mut d, _) = opened(&gpu);
+    let held = d.source().expect("decoded");
+    assert!(
+        std::sync::Arc::ptr_eq(&held, &d.source().unwrap()),
+        "no copy"
+    );
+    let before = held.data.clone();
+    d.open(&gpu, photo()).unwrap();
+    assert!(!std::sync::Arc::ptr_eq(&held, &d.source().unwrap()));
+    assert_eq!(
+        std::sync::Arc::strong_count(&held),
+        1,
+        "only the export holds it now"
+    );
+    assert_eq!(held.data, before);
+    // A photo opened from its level 1 has none until it is attached.
+    let l1 = level1(&gpu);
+    d.open_level1(&gpu, PhotoInfo::of(&photo()), &l1).unwrap();
+    assert!(d.source().is_none());
+    d.attach(photo().src).unwrap();
+    assert!(d.source().is_some());
+}
