@@ -131,3 +131,68 @@ describe('Thumbnails, answered twice', () => {
     expect(calls).toBe(2);
   });
 });
+
+describe('Thumbnails, bounded', () => {
+  it('keeps at most the cap decoded, never a visible one, and fetches a dropped one again when shown', async () => {
+    const engine = new FakeEngine();
+    await engine.execute({ type: 'openFolder', path: 'demo' });
+    const fetched: number[] = [];
+    const fetch = engine.fetchThumbnail.bind(engine);
+    engine.fetchThumbnail = (photo) => (fetched.push(photo), fetch(photo));
+    const thumbnails = new Thumbnails(engine, undefined, 2);
+    const ids = [1, 2, 3, 4, 5];
+    thumbnails.show(ids, 0, 0);
+    await until(() => fetched.length === 4 && thumbnails.decodedCount === 2);
+    await wait(10);
+    // 1 is visible; 4 came last. 2 and 3 were dropped.
+    expect(typeof thumbnails.get(1)).toBe('object');
+    expect(typeof thumbnails.get(4)).toBe('object');
+    expect(thumbnails.get(2)).toBe('pending');
+    expect(thumbnails.get(3)).toBe('pending');
+    expect(thumbnails.get(5)).toBe('none');
+    // Shown again: fetched from the engine, not asked to be made.
+    thumbnails.show(ids, 1, 2);
+    await until(() => typeof thumbnails.get(2) === 'object' && typeof thumbnails.get(3) === 'object');
+    expect(fetched).toEqual([1, 2, 3, 4, 2, 3]);
+    expect(engine.thumbnailRequests).toHaveLength(1);
+    expect(thumbnails.decodedCount).toBe(2);
+    expect(thumbnails.get(1)).toBe('pending');
+  });
+
+  it('closes the bitmaps it drops', async () => {
+    let listener: (e: Event) => void = () => {};
+    const tile = encodeTile(
+      {
+        generation: 0,
+        rect: { x: 0, y: 0, width: 4, height: 3 },
+        mipLevel: 0,
+        format: 'jpegSrgb',
+        imageWidth: 4,
+        imageHeight: 3,
+      },
+      new Uint8Array([0xff, 0xd8, 0xff, 0xd9]),
+    );
+    const engine: Engine = {
+      kind: 'tauri',
+      handshake: () => Promise.reject(new Error('unused')),
+      query: () => Promise.reject(new Error('unused')),
+      execute: () => Promise.resolve<CommandResult>({ type: 'done' }),
+      onEvent: (l) => ((listener = l), () => {}),
+      fetchFrame: () => Promise.reject(new Error('unused')),
+      fetchThumbnail: () => Promise.resolve(tile.slice().buffer),
+    };
+    const bitmaps: { close: ReturnType<typeof vi.fn> }[] = [];
+    const decode: JpegDecoder = () => {
+      const b = { width: 4, height: 3, close: vi.fn() };
+      bitmaps.push(b);
+      return Promise.resolve(b as unknown as ImageBitmap);
+    };
+    const thumbnails = new Thumbnails(engine, decode, 1);
+    listener({ type: 'thumbnailReady', photo: 1, found: true });
+    await until(() => thumbnails.decodedCount === 1);
+    listener({ type: 'thumbnailReady', photo: 2, found: true });
+    await until(() => bitmaps.length === 2 && thumbnails.get(1) === 'pending');
+    expect(bitmaps[0]?.close).toHaveBeenCalledOnce();
+    expect(bitmaps[1]?.close).not.toHaveBeenCalled();
+  });
+});
