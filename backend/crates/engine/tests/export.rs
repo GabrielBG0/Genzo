@@ -278,6 +278,22 @@ fn a_cancelled_export_writes_nothing_and_an_edit_meanwhile_changes_nothing() {
     assert_eq!(state.edit.shadows, 35.0);
     engine.undo().unwrap();
 
+    // Two commands for one path at once, as a double click sends them:
+    // one starts, the other is refused.
+    let twice = dir.out("twice.jpg");
+    let results: Vec<_> = std::thread::scope(|scope| {
+        let a = scope.spawn(|| engine.export_jpeg(request(id, &twice)));
+        let b = scope.spawn(|| engine.export_jpeg(request(id, &twice)));
+        vec![a.join().unwrap(), b.join().unwrap()]
+    });
+    engine.wait_exports_idle();
+    assert_eq!(
+        results.iter().filter(|r| r.is_ok()).count(),
+        1,
+        "{results:?}"
+    );
+    assert!(std::fs::read(&twice).unwrap().starts_with(&[0xFF, 0xD8]));
+
     // Alone.
     let alone = dir.out("alone.jpg");
     engine.export_jpeg(request(id, &alone)).unwrap();

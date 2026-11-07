@@ -502,11 +502,26 @@ fn open_for_export(
     Ok((engine, id))
 }
 
+/// The last state of an export, from its progress.
+type LastState = Arc<Mutex<Option<genzo_engine::api::ExportState>>>;
+
+/// An error unless `last` says the export finished.
+fn finished(last: &LastState) -> Result<(), String> {
+    match last.lock().unwrap().take() {
+        Some(genzo_engine::api::ExportState::Finished { .. }) => Ok(()),
+        Some(other) => Err(format!("the export ended {other:?}")),
+        None => Err("the export sent no end".into()),
+    }
+}
+
 /// `export FILE OUT [Q]`: FILE as the JPEG OUT.
 fn export(file: &str, out: &str, args: &[&str]) -> Result<(), String> {
     let quality = u8::try_from(parse_num(args, 0, 85)?).map_err(|_| "quality 1 to 100")?;
-    let (engine, id) = open_for_export(file, |done, total, state| {
+    let last: LastState = Arc::default();
+    let seen = Arc::clone(&last);
+    let (engine, id) = open_for_export(file, move |done, total, state| {
         println!("{done}/{total} rows: {state:?}");
+        *seen.lock().unwrap() = Some(state.clone());
     })?;
     engine
         .export_jpeg(genzo_engine::export::ExportRequest {
@@ -518,14 +533,18 @@ fn export(file: &str, out: &str, args: &[&str]) -> Result<(), String> {
         })
         .map_err(|e| e.to_string())?;
     engine.wait_exports_idle();
-    Ok(())
+    finished(&last)
 }
 
 /// `bench export FILE [N]`: full-size exports of FILE, timed from the
 /// command to the renamed file.
 fn bench_export(file: &str, args: &[&str], metrics: &mut Metrics) -> Result<(), String> {
     let passes = parse_num(args, 0, 5)?.max(1);
-    let (engine, id) = open_for_export(file, |_, _, _| {})?;
+    let last: LastState = Arc::default();
+    let seen = Arc::clone(&last);
+    let (engine, id) = open_for_export(file, move |_, _, state| {
+        *seen.lock().unwrap() = Some(state.clone());
+    })?;
     let out = std::env::temp_dir().join(format!("genzo-bench-export-{}.jpg", std::process::id()));
     let mut times = Vec::new();
     for pass in 1..=passes {
@@ -541,6 +560,7 @@ fn bench_export(file: &str, args: &[&str], metrics: &mut Metrics) -> Result<(), 
             .map_err(|e| e.to_string())?;
         engine.wait_exports_idle();
         let ms = started.elapsed().as_secs_f64() * 1000.0;
+        finished(&last)?;
         let bytes = std::fs::metadata(&out).map(|m| m.len()).unwrap_or(0);
         println!("pass {pass}: {ms:.0} ms, {:.1} MB", bytes as f64 / 1e6);
         times.push(ms);

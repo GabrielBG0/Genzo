@@ -66,12 +66,24 @@ struct Running {
 }
 
 impl Exports {
-    fn reserved(&self, destination: &Path) -> bool {
-        self.jobs
-            .lock()
-            .expect("exports")
-            .values()
-            .any(|r| r.destination == destination)
+    /// Reserves `destination` for a new job, unless an export in progress
+    /// will write it: the check and the reservation under one lock, so two
+    /// commands for one path (a double click) cannot both pass.
+    fn reserve(&self, destination: &Path, cancelled: &Arc<AtomicBool>) -> Option<u64> {
+        let mut jobs = self.jobs.lock().expect("exports");
+        if jobs.values().any(|r| r.destination == destination) {
+            return None;
+        }
+        let job = self.next.fetch_add(1, Ordering::SeqCst) + 1;
+        jobs.insert(
+            job,
+            Running {
+                destination: destination.to_path_buf(),
+                cancelled: Arc::clone(cancelled),
+                thread: None,
+            },
+        );
+        Some(job)
     }
 
     /// Waits until every export has ended.
@@ -167,24 +179,15 @@ impl Engine {
                 .to_string_lossy();
             return Err(EngineError::Refused(format!("{name} already exists")));
         }
-        if self.exports.reserved(&destination) {
-            return Err(EngineError::Refused(
-                "An export to this file is in progress".into(),
-            ));
-        }
         let gpu = self.gpu()?;
-        let job = self.exports.next.fetch_add(1, Ordering::SeqCst) + 1;
         // Reserved before the snapshot, so a second command for the same
         // path in the meantime is refused.
         let cancelled = Arc::new(AtomicBool::new(false));
-        self.exports.jobs.lock().expect("exports").insert(
-            job,
-            Running {
-                destination: destination.clone(),
-                cancelled: Arc::clone(&cancelled),
-                thread: None,
-            },
-        );
+        let Some(job) = self.exports.reserve(&destination, &cancelled) else {
+            return Err(EngineError::Refused(
+                "An export to this file is in progress".into(),
+            ));
+        };
         let started = std::time::Instant::now();
         let export = loop {
             match gpu.export(request.photo, job, &edit, Target::Srgb) {

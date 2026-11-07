@@ -146,8 +146,8 @@ struct Exporting {
     at: (u32, u32),
     /// The row of regions being filled.
     strip: Vec<u8>,
-    /// A finished row the encoder has not taken yet.
-    pending: Option<ExportStrip>,
+    /// A finished row, or the error that ends the export, not taken yet.
+    pending: Option<Result<ExportStrip, GpuError>>,
     out: SyncSender<Result<ExportStrip, GpuError>>,
 }
 
@@ -497,14 +497,17 @@ const EXPORT_POLL: std::time::Duration = std::time::Duration::from_millis(5);
 /// renders its next region. True when it is over: all sent, failed, or no
 /// one takes its rows any more.
 fn export_turn(gpu: &Gpu, d: &mut Develop, x: &mut Exporting) -> bool {
-    if let Some(strip) = x.pending.take() {
-        return match x.out.try_send(Ok(strip)) {
-            Ok(()) => x.at.1 >= x.size.1,
-            Err(TrySendError::Full(Ok(strip))) => {
-                x.pending = Some(strip);
+    if let Some(item) = x.pending.take() {
+        let failed = item.is_err();
+        return match x.out.try_send(item) {
+            Ok(()) => failed || x.at.1 >= x.size.1,
+            // Kept, an error too: the encoder takes it after the row before,
+            // so the export fails with its reason, never as cancelled.
+            Err(TrySendError::Full(item)) => {
+                x.pending = Some(item);
                 false
             }
-            Err(_) => true,
+            Err(TrySendError::Disconnected(_)) => true,
         };
     }
     let (w, _) = x.size;
@@ -525,8 +528,8 @@ fn export_turn(gpu: &Gpu, d: &mut Develop, x: &mut Exporting) -> bool {
     let pixels = match region {
         Ok(p) => p,
         Err(e) => {
-            let _ = x.out.try_send(Err(e));
-            return true;
+            x.pending = Some(Err(e));
+            return export_turn(gpu, d, x);
         }
     };
     if x.strip.is_empty() {
@@ -541,11 +544,11 @@ fn export_turn(gpu: &Gpu, d: &mut Develop, x: &mut Exporting) -> bool {
         x.at = (rx + rect.width, ry);
         return false;
     }
-    x.pending = Some(ExportStrip {
+    x.pending = Some(Ok(ExportStrip {
         y: ry,
         height,
         rgba: std::mem::take(&mut x.strip),
-    });
+    }));
     x.at = (0, ry + height);
     // Sent on the next turn, or this one if the encoder is ready.
     export_turn(gpu, d, x)
