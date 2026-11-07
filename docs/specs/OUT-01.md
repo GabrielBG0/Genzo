@@ -1,16 +1,16 @@
 # OUT-01 · Export (M1 part)
 
-M1's export writes the photo open in Develop as a JPEG file, rendered through the same pipeline as the viewport. The user picks where, the size, and the quality. It runs in the background while editing goes on. M4 builds the rest of the W7 export view (presets, batches, other formats, naming templates, sharpening, watermarks).
+M1's export writes the photo open in Develop as a JPEG file, rendered through the same pipeline as the viewport. The user picks where, the size, and the quality. It runs in the background while editing goes on. M4 builds the rest of the W7 export view (presets, the queue of several photos, other formats, naming templates, sharpening, watermarks).
 
 Sources: the technical spec (export renders through the same GPU pipeline, in tiles; the budget "Export, 24 MP JPEG: 1 per second or better"), the development plan (M1 backend step 10, frontend item 14, contract 0.6.0: `ExportJpeg`, `ExportProgress`), FEATURES.md's OUT-01 entry, screen W7 of the UI handoff, `docs/specs/DEV-01.md` (stage 9 and the export target, *Tiling and the mip pyramid*), and `docs/specs/DEV-03.md`. Where this spec and the technical spec disagree, the technical spec wins and this file is corrected.
 
 **Owner decisions (2026-11-07):**
-- M1 exports **the current photo only**. Batches come with M2's selection.
+- M1 exports **the current photo only**. Exporting several photos at once needs a selection of several, which M2's Library brings; the export queue that runs them is M4's (W7).
 - **Size:** the full cropped image, or *Resize to fit* a long edge in pixels, never enlarged.
 - **Metadata:** all of the source's EXIF, **location (GPS) included**, with the orientation reset. Removing location is an M4 option.
 
 **Out of scope for M1**, with their milestone:
-- export presets, batches, the queue and size estimates: M4 (W7);
+- export presets, the queue of several photos and size estimates: M4 (W7);
 - AVIF, TIFF, PNG and DNG; email and "another app" destinations; file naming templates: M4;
 - output sharpening, watermarks, the *Remove location* and *Remove people names* options, resolution (ppi): M4;
 - color spaces other than sRGB: M4;
@@ -27,7 +27,7 @@ Sources: the technical spec (export renders through the same GPU pipeline, in ti
   - **Quality:** 1 to 100, default 85 (W7).
   - **Color space:** sRGB, shown and fixed.
   - **Size:** *Full size* (default), or *Long edge* with a number of pixels (default 2048, W7's). A long edge larger than the photo's exports at full size: never enlarged (W7's *Don't enlarge*, always on in M1).
-  - **Metadata:** one line of text, "All metadata, including location", so the user knows the GPS position goes out with the file.
+  - **Metadata:** one line of text, "All EXIF metadata, including location. XMP and IPTC are not included.", so the user knows the GPS position goes out with the file, and that keywords or captions kept only in XMP or IPTC do not.
   - **Export** and **Cancel** buttons. Enter exports; Esc cancels.
 - The dialog keeps its values for the session: the next export opens with the last quality, size and folder.
 
@@ -51,8 +51,9 @@ An export is a job that holds everything it reads. It never uses the open photo'
 - **Full size:** the output is rendered in regions of 1024 × 1024 output pixels (512 × 512 for X-Trans), stages 1 to 9, as the 1:1 view renders its tiles (DEV-01, *At 1:1 and during export*). The dither is anchored at each pixel's place in the shown image. So **a full-size export is, before JPEG encoding, the same codes as the 1:1 view**, pixel for pixel (criterion 1).
 - **Resized:** each region is rendered at full resolution through stages 1 to 8. It is reduced to the output size by box means in the working space (linear AP1, before the output transform). Each output pixel is then the mean of the full-resolution pixels it covers, split as `preview::reduce` splits them. Stage 9 runs on the reduced pixels, with its dither anchored at output pixels.
   - That is a definition, not a Fit frame. A Fit frame samples the pyramid (DEV-01, *Readback*), and the job holds no pyramid. Reducing in linear light is the right average for a downscale. A resized export is close to the Fit frame of the same size but not equal to it (criterion 2).
-  - A region's apron covers the rows and columns its output pixels need, so no output pixel straddles two regions.
-- **Order:** regions go in rows, top to bottom, left to right, so the encoder receives complete rows in order.
+  - **An output pixel can need more than one region:** at a large reduction, the full-resolution pixels it covers span several regions, and at the smallest long edge (32 px, DEV-01's crop minimum) one output pixel covers more than 250 regions of a 48 MP image. So the box sums are not taken inside a region. Each region adds its pixels into an accumulator of the output rows it touches (RGBA f32 sums, the output's width by those rows), on the GPU. Stage 9 runs on an output row once every region it covers has added into it, and that row goes to the encoder. The accumulator holds the output rows of one row of regions, plus one shared at each edge: at most the output width × (1024 × scale + 2) rows.
+  - **The smallest long edge is 32 px**, as DEV-01's smallest crop; the dialog does not go lower.
+- **Order:** regions go in rows, top to bottom, left to right, so the encoder receives complete output rows in order.
 - **Scheduling on the render thread:** one region per idle slot. The order of priority is:
   1. Develop's renders;
   2. the whole-photo histogram (DEV-03);
@@ -68,9 +69,10 @@ An export is a job that holds everything it reads. It never uses the open photo'
 - **JPEG:** baseline, quality as chosen. Chroma is subsampled 4:2:0 below quality 90, and kept whole (4:4:4) from 90. The encoder takes rows as they are rendered (`jpeg-encoder`'s interleaved mode), so the job holds one row of regions of the 8-bit output, not the whole image: 33 MB for an 8064 px wide image (8064 × 1024 × 4 bytes).
 - **On a one-thread pool**, paused during a photo switch, like the thumbnails (LIB-09), so the encode never delays a switch's first pixels.
 - **Written to a temporary file in the destination folder**, then renamed to its name. A cancel, a failure or a crash leaves no half-written file under the destination name. A temporary file left by a crash has a name the next export of the same path removes.
-- **An existing file at the destination** is replaced. The system save dialog has already asked the user. The rename replaces it in one step.
-- **The originals are never written** (CLAUDE.md, *Architecture rules*). The engine refuses a destination that resolves, after canonicalization, to any file of the opened folder's strip, not only the exported photo's own file. Exporting `harbor.jpg` from the strip over itself is refused, with "Genzo does not write over the photos it opens. Choose another name or folder."
-- **The extension:** a name without `.jpg` or `.jpeg` (any case) gets `.jpg` added.
+- **An existing file at the destination is replaced only when the user said so.** `ExportJpeg` carries `replace`. The frontend sends it true only for the path the system save dialog returned unchanged, since that dialog has asked already. Otherwise the engine refuses a destination that exists ("DSC_0412.jpg already exists"), and the dialog asks "Replace it?" before sending again with `replace`. The rename then replaces the file in one step.
+- **A destination a running or queued export will write** is refused ("An export to this file is in progress"), whatever `replace` says: neither save dialog could have seen that file, which does not exist yet. The user cancels that export or picks another name.
+- **The originals are never written** (CLAUDE.md, *Architecture rules*). The engine refuses a destination that resolves, after canonicalization, to any file it has listed this session: the opened folder's, and those of every folder opened before (LIB-09 keeps their ids by canonical path). Exporting `harbor.jpg` over itself, or over a JPEG of a folder opened earlier, is refused with "Genzo does not write over the photos it opens. Choose another name or folder."
+- **The extension:** the save dialog offers `.jpg`. A name the user typed without `.jpg` or `.jpeg` (any case) gets `.jpg` added by the frontend. That is no longer the path the dialog checked, so it goes with `replace` false, and a file already there is asked about as above.
 
 ### Metadata
 
@@ -116,6 +118,8 @@ All are registered in the shortcut registry.
 | **No photo open, or one that does not render** | Export disabled; its tooltip says why | Open a photo that renders |
 | **Dialog open** | The fields with their last values | Change them, Export, Cancel |
 | **A destination that is an original** | The dialog's message, Export disabled | Choose another name or folder |
+| **A destination that exists** (not from the save dialog) | "Replace it?" | Replace, or choose another name |
+| **A destination an export in progress will write** | "An export to this file is in progress" | Choose another name, or cancel that export |
 | **Running** | The status bar's progress; the quick action's ring | Keep editing, switch photos, cancel |
 | **Queued** (a second export) | "Starts after the export in progress" | Cancel it |
 | **Finished** | "Exported DSC_0412.jpg" in the status bar | Export again |
@@ -128,7 +132,7 @@ Nothing is stored on disk but the exported file. The engine holds the running jo
 
 ## Contract (0.6.0)
 
-- `ExportJpeg { photo, path, longEdge: number | null, quality }`: answers `Export { job }`. A refused destination, or a photo that does not render, answers the command's error with the reason.
+- `ExportJpeg { photo, path, longEdge: number | null, quality, replace }`: answers `Export { job }`. A refused destination (an original, an existing file without `replace`, a path a job will write), or a photo that does not render, answers the command's error with the reason.
 - `CancelExport { job }`: answers `Done`.
 - `ExportProgress { job, photo, path, rowsDone, rowsTotal, state }`. `state` is `queued`, `running`, `finished` with notes (the dropped maker notes, unreadable metadata), `failed` with the reason, or `cancelled`.
 - `cli export FILE OUT [--long-edge N] [--quality Q]` opens a file, applies an edit given as JSON if any, and exports it; `cli run` takes `ExportJpeg` too.
@@ -141,17 +145,17 @@ Nothing is stored on disk but the exported file. The engine holds the running jo
 - **A very tight crop** (DEV-01's 32 px minimum) exports at that size.
 - **The disk fills during the write:** the temporary file is deleted, and the export fails with the system's reason.
 - **The destination folder is the opened folder:** allowed, under any name that is not one of the strip's files. The new JPEG is not added to the strip; there is no watching in M1 (LIB-09).
-- **Two exports to the same path:** the second, queued, replaces the first's file when it runs, as the save dialog allowed.
+- **Two exports to the same path:** the second is refused while the first is queued or running (see *Encoding and writing*). Once the first has finished, the file exists, and the second asks to replace it as for any file.
 - **The app quits during an export:** see *Progress and cancel*.
 
 ## Acceptance criteria
 
 1. **Full size equals 1:1:** before encoding, a full-size export's codes equal the 1:1 view's at every pixel, for Bayer, X-Trans, linear DNG and non-RAW sources with an edit that moves every stage (crop and straighten included). Region boundaries leave no trace: 1024 px regions give the same codes as one region (engine test, synthetic sources).
-2. **Resized:** a long-edge export matches the CPU reference (full-resolution stages 1–8, box means in linear AP1, stage 9) within one code. Against the Fit frame of the same size: mean ΔE2000 under 1, recorded (engine test).
+2. **Resized:** a long-edge export matches the CPU reference (full-resolution stages 1–8, box means in linear AP1, stage 9) within one code, at long edges whose output pixels span several regions, down to 32 px. Against the Fit frame of the same size: mean ΔE2000 under 1, recorded (engine test).
 3. **The file:** decodes to the rendered codes within the JPEG's error at quality 100 (PSNR above 45 dB). Its APP2 segment is the sRGB profile, and it is 4:4:4 from quality 90 and 4:2:0 below.
 4. **Metadata:** on every corpus file, ExifTool reads the same capture time, make, model, lens, ISO, exposure time, f-number, focal length and GPS position from the export as from the source. Orientation is 1, and the pixel dimensions are the export's. A MakerNote over the limit is dropped and reported. The EXIF reader and writer have a fuzz target (`exif_rewrite`).
 5. **A job holds its inputs:** an export started, followed by a switch, an edit and an undo, writes the edit as it was when it started, the same bytes as an export run alone.
-6. **Never an original:** a destination equal to any strip file, through a different spelling of the path or a link, is refused, and nothing is written. A cancelled or failed export leaves no file under the destination name, and the original's bytes and modification time are unchanged (engine test).
+6. **Never an original:** a destination equal to any file listed this session, of the current folder or one opened before, through a different spelling of the path or a link, is refused, and nothing is written. An existing destination without `replace`, and one a queued or running export will write, are refused too. A cancelled or failed export leaves no file under the destination name, and the original's bytes and modification time are unchanged (engine test).
 7. **Editing stays fast:** `bench gpu`'s drag p95 with an export of a 48 MP photo running stays within its budgets (16 ms GPU, the RTX 3060 baseline + 10 %). `bench open`'s first pixels and neighbor switch stay within theirs. Recorded in `docs/m1-results.md`.
 8. **Throughput:** a 24 MP full-size export at quality 85 takes 1 s or less on the reference desktop, alone (`cli bench export`, recorded).
 9. **Progress:** `ExportProgress` rows are monotonic and end in exactly one of finished, failed or cancelled. Cancel stops within one region.
