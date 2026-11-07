@@ -28,7 +28,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost genzo-frame: http://genzo-frame.localhost; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self'"
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost genzo-frame: http://genzo-frame.localhost genzo-thumb: http://genzo-thumb.localhost; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self'"
     }
   },
   "bundle": {

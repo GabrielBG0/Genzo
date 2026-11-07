@@ -218,6 +218,13 @@ impl Shared {
         }
     }
 
+    /// Whether the worker has a task running or queued: thumbnails wait
+    /// for it (`thumbs`).
+    pub fn busy(&self) -> bool {
+        let plan = self.plan.lock().expect("plan");
+        !plan.stop && (plan.running.is_some() || !plan.tasks.is_empty())
+    }
+
     /// Asks the worker to stop after its task.
     pub fn stop(&self) {
         self.plan.lock().expect("plan").stop = true;

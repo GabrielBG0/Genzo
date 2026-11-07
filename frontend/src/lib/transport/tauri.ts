@@ -14,9 +14,10 @@ import type {
 } from '$contract/genzo';
 import type { Engine } from '../engine/types';
 
-/** Event name and URI scheme; must match shell/src/main.rs. */
+/** Event name and URI schemes; must match shell/src/main.rs. */
 const EVENT = 'genzo://event';
 const FRAME_SCHEME = 'genzo-frame';
+const THUMB_SCHEME = 'genzo-thumb';
 
 /** Whether the app runs inside the Tauri shell rather than a plain browser. */
 export function isTauri(): boolean {
@@ -47,6 +48,12 @@ export class TauriEngine implements Engine {
     // Pixels travel over a custom URI scheme as raw bytes, never as JSON.
     const res = await fetch(convertFileSrc(String(generation), FRAME_SCHEME));
     if (!res.ok) throw new Error(`frame ${generation}: HTTP ${res.status}`);
+    return res.arrayBuffer();
+  }
+
+  async fetchThumbnail(photo: number): Promise<ArrayBuffer> {
+    const res = await fetch(convertFileSrc(String(photo), THUMB_SCHEME));
+    if (!res.ok) throw new Error(`thumbnail ${photo}: HTTP ${res.status}`);
     return res.arrayBuffer();
   }
 }

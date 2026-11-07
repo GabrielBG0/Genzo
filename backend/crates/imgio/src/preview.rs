@@ -8,7 +8,9 @@
 //! ARW, RAF, ORF, RW2 and the rest, and still works on a file whose
 //! container is damaged. Of the candidates, the smallest whose long edge is
 //! at least `PREFERRED_EDGE` is decoded: big enough for a first frame, small
-//! enough to decode within the budget. Without one, the largest. Color
+//! enough to decode within the budget. Without one, the largest. A
+//! thumbnail asks for a smaller edge (`decode_preview_near`), and takes the
+//! camera's smaller preview when it has one (LIB-09). Color
 //! streams come before grayscale ones: an iPhone ProRAW DNG stores its
 //! semantic mattes (sky, skin, hair) as grayscale JPEGs of the preview's
 //! size. A grayscale stream is still the preview of a file with no color
@@ -158,12 +160,11 @@ pub(crate) fn candidates(data: &[u8]) -> Vec<Candidate> {
 }
 
 /// The candidates in the order they are tried: color ones before grayscale
-/// ones, and among each, the smallest with a long edge of at least
-/// `PREFERRED_EDGE` first, then larger ones, then the smaller ones from
-/// largest down.
-pub(crate) fn preference(mut c: Vec<Candidate>) -> Vec<Candidate> {
+/// ones, and among each, the smallest with a long edge of at least `edge`
+/// first, then larger ones, then the smaller ones from largest down.
+pub(crate) fn preference(mut c: Vec<Candidate>, edge: u32) -> Vec<Candidate> {
     c.sort_by_key(|c| {
-        let big = c.long_edge() >= PREFERRED_EDGE;
+        let big = c.long_edge() >= edge;
         (
             c.components == 1,
             !big,
@@ -247,10 +248,10 @@ pub(crate) struct FileHints {
     pub color: Option<ColorEncoding>,
 }
 
-/// The embedded preview of a file, by the rule above; `None` when the file
-/// holds no usable JPEG stream.
-pub(crate) fn decode(data: &[u8], hints: &FileHints) -> Option<Preview> {
-    for c in preference(candidates(data)) {
+/// The embedded preview of a file, by the rule above with `edge` as the
+/// preferred long edge; `None` when the file holds no usable JPEG stream.
+pub(crate) fn decode(data: &[u8], hints: &FileHints, edge: u32) -> Option<Preview> {
+    for c in preference(candidates(data), edge) {
         if let Some((rgba, color, orientation)) = decode_candidate(data, c) {
             return Some(Preview {
                 width: c.width,
@@ -282,11 +283,14 @@ mod tests {
 
     #[test]
     fn prefers_the_smallest_preview_big_enough() {
-        let order = preference(vec![c(160, 120), c(8256, 5504), c(1620, 1080), c(640, 424)]);
+        let order = preference(
+            vec![c(160, 120), c(8256, 5504), c(1620, 1080), c(640, 424)],
+            PREFERRED_EDGE,
+        );
         let sizes: Vec<_> = order.iter().map(|c| c.width).collect();
         assert_eq!(sizes, [1620, 8256, 640, 160]);
         // Nothing big enough: the largest first.
-        let order = preference(vec![c(160, 120), c(640, 424)]);
+        let order = preference(vec![c(160, 120), c(640, 424)], PREFERRED_EDGE);
         assert_eq!(order[0].width, 640);
     }
 
@@ -298,15 +302,29 @@ mod tests {
             components: 1,
             ..c(w, h)
         };
-        let order = preference(vec![gray(2016, 1512), c(2015, 1512), gray(2017, 1512)]);
+        let order = preference(
+            vec![gray(2016, 1512), c(2015, 1512), gray(2017, 1512)],
+            PREFERRED_EDGE,
+        );
         let sizes: Vec<_> = order.iter().map(|c| c.width).collect();
         assert_eq!(sizes, [2015, 2016, 2017]);
         // A smaller color one still comes first.
-        let order = preference(vec![gray(2016, 1512), c(320, 240)]);
+        let order = preference(vec![gray(2016, 1512), c(320, 240)], PREFERRED_EDGE);
         assert_eq!(order[0].components, 3);
         // Only grayscale (a monochrome camera): the usual rule among them.
-        let order = preference(vec![gray(4000, 3000), gray(1620, 1080)]);
+        let order = preference(vec![gray(4000, 3000), gray(1620, 1080)], PREFERRED_EDGE);
         assert_eq!(order[0].width, 1620);
+    }
+
+    /// A thumbnail's smaller edge takes the camera's small preview, not
+    /// its 160 px EXIF thumbnail nor its larger preview.
+    #[test]
+    fn a_smaller_edge_takes_the_smallest_big_enough_for_it() {
+        let all = || vec![c(160, 120), c(8256, 5504), c(1620, 1080), c(640, 424)];
+        let sizes: Vec<_> = preference(all(), 320).iter().map(|c| c.width).collect();
+        assert_eq!(sizes, [640, 1620, 8256, 160]);
+        // Only the EXIF thumbnail is too small: the next one up.
+        assert_eq!(preference(all(), 700)[0].width, 1620);
     }
 
     fn fixture(name: &str) -> Vec<u8> {
@@ -326,7 +344,7 @@ mod tests {
             found.iter().map(|c| c.components).collect::<Vec<_>>(),
             [1, 3]
         );
-        let p = decode(&file, &FileHints::default()).unwrap();
+        let p = decode(&file, &FileHints::default(), PREFERRED_EDGE).unwrap();
         assert!(
             p.rgba
                 .as_chunks::<4>()
@@ -348,15 +366,15 @@ mod tests {
         file.extend_from_slice(&wide[..wide.len() / 2]);
         file.extend_from_slice(b"more raw data");
         file.extend_from_slice(&small);
-        let found = preference(candidates(&file));
+        let found = preference(candidates(&file), PREFERRED_EDGE);
         assert_eq!(found.first().map(|c| c.width), Some(17000), "{found:?}");
-        let p = decode(&file, &FileHints::default()).expect("the small preview");
+        let p = decode(&file, &FileHints::default(), PREFERRED_EDGE).expect("the small preview");
         assert_eq!((p.width, p.height), (37, 29));
         // The whole wide one decodes when intact.
         let mut file = b"RAWDATA".to_vec();
         file.extend_from_slice(&wide);
         assert_eq!(
-            decode(&file, &FileHints::default()).map(|p| p.width),
+            decode(&file, &FileHints::default(), PREFERRED_EDGE).map(|p| p.width),
             Some(17000)
         );
     }
@@ -366,12 +384,17 @@ mod tests {
         let mut file = b"RAWDATA".to_vec();
         file.extend_from_slice(&fixture("jpeg-exif6-xmp.jpg"));
         // The stream's own EXIF says 6.
-        assert_eq!(decode(&file, &FileHints::default()).unwrap().orientation, 6);
+        assert_eq!(
+            decode(&file, &FileHints::default(), PREFERRED_EDGE)
+                .unwrap()
+                .orientation,
+            6
+        );
         let hints = FileHints {
             orientation: Some(3),
             color: Some(ColorEncoding::AdobeRgb),
         };
-        let p = decode(&file, &hints).unwrap();
+        let p = decode(&file, &hints, PREFERRED_EDGE).unwrap();
         assert_eq!((p.orientation, p.color), (3, ColorEncoding::AdobeRgb));
     }
 
@@ -382,7 +405,7 @@ mod tests {
             *b = (i.wrapping_mul(2_654_435_761) >> 13) as u8;
         }
         data[100..103].copy_from_slice(&[0xFF, 0xD8, 0xFF]);
-        assert!(decode(&data, &FileHints::default()).is_none());
+        assert!(decode(&data, &FileHints::default(), PREFERRED_EDGE).is_none());
         for len in 0..data.len() {
             let _ = candidates(&data[..len]);
         }

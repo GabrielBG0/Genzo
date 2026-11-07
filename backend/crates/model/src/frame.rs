@@ -26,6 +26,10 @@
 //! `image width` and `image height` are the full image at that mip level.
 //! Readers skip `header length` bytes before the payload, so the header can
 //! grow without breaking old readers.
+//!
+//! A strip thumbnail (LIB-09) is one message of one JPEG tile: the whole
+//! thumbnail, upright, at mip level 0 and generation 0. It is fetched by
+//! photo id, not by generation.
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;

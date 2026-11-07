@@ -196,6 +196,7 @@ impl Engine {
     /// Lists `folder`, replaces the strip with it and selects its first
     /// photo. A folder that cannot be read leaves the strip as it was.
     pub fn open_folder(&self, folder: &Path) -> Result<Opened, EngineError> {
+        let _quiet = self.thumbs.pause();
         let listed = list_folder(folder)?;
         let _switch = self.switching.lock().expect("switching");
         let first = {
@@ -270,6 +271,7 @@ impl Engine {
     /// settled at Fit. A photo that does not decode is still selected,
     /// with nothing open, and its error returned.
     pub fn select_photo(&self, id: u64) -> Result<Applied, EngineError> {
+        let _quiet = self.thumbs.pause();
         let _switch = self.switching.lock().expect("switching");
         self.switch_to(id)
     }
@@ -277,6 +279,7 @@ impl Engine {
     /// Selects the photo after or before the current one. `None` at that
     /// end of the strip, or with nothing selected: the strip does not wrap.
     pub fn step(&self, direction: Direction) -> Result<Option<Applied>, EngineError> {
+        let _quiet = self.thumbs.pause();
         let _switch = self.switching.lock().expect("switching");
         let id = {
             let s = self.session.lock().expect("session");
@@ -432,6 +435,64 @@ impl Engine {
                 .spawn(move || w.run())
                 .ok();
         }
+    }
+
+    /// Makes the thumbnails of the strip's photos `ids`, in this order
+    /// (LIB-09): the visible cells first, then the rest. Replaces the
+    /// order asked before; each comes to the thumbnail sink, at once for
+    /// one made already. Ids not in the strip are passed over: a request
+    /// can cross a folder switch.
+    pub fn request_thumbnails(&self, ids: &[u64]) {
+        let (photos, target) = {
+            let s = self.session.lock().expect("session");
+            let paths: std::collections::HashMap<u64, &std::path::PathBuf> = s
+                .strip
+                .photos
+                .iter()
+                .map(|(id, p)| (*id, &p.path))
+                .collect();
+            let photos = ids
+                .iter()
+                .filter_map(|id| paths.get(id).map(|p| (*id, (*p).clone())))
+                .collect();
+            (photos, s.target)
+        };
+        self.thumbs.request(photos, target);
+    }
+
+    /// Photo `id`'s thumbnail, one JPEG tile message (`api::TileHeader`),
+    /// for the frames' current target. `None` when it is not made, the
+    /// file has none, or the photo is not in the strip.
+    pub fn thumbnail(&self, id: u64) -> Option<Vec<u8>> {
+        let (path, target) = {
+            let s = self.session.lock().expect("session");
+            let path = s
+                .strip
+                .photos
+                .iter()
+                .find(|(p, _)| *p == id)?
+                .1
+                .path
+                .clone();
+            (path, s.target)
+        };
+        self.thumbs
+            .get(id, target, Some(&path))
+            .map(|m| m.as_ref().clone())
+    }
+
+    /// Drops the thumbnails kept in memory, so they are made again: for
+    /// `cli bench open --thumbs`, whose engine has no cache directory.
+    #[doc(hidden)]
+    pub fn forget_thumbnails(&self) {
+        self.thumbs.forget();
+    }
+
+    /// Waits until every thumbnail asked for is made: for the tests and
+    /// `cli bench`.
+    #[doc(hidden)]
+    pub fn wait_thumbnails_idle(&self) {
+        self.thumbs.wait_idle();
     }
 
     /// Waits until the prefetch has nothing left to do: for the tests and

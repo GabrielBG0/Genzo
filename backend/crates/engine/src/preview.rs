@@ -179,7 +179,7 @@ const BAND: usize = 16;
 const MEMO: usize = 4096;
 
 /// `p` upright and in `target`, at its own size.
-fn convert(p: &Preview, target: Target) -> Option<ShownPreview> {
+pub(crate) fn convert(p: &Preview, target: Target) -> Option<ShownPreview> {
     let (w, h) = (p.width, p.height);
     if w == 0 || h == 0 || p.rgba.len() != 4 * w as usize * h as usize {
         return None;

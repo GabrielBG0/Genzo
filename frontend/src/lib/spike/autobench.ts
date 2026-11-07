@@ -159,6 +159,7 @@ export function timedEngine(engine: Engine, times: TransportTimes): Engine {
     handshake: (hello) => engine.handshake(hello),
     query: (q) => engine.query(q),
     onEvent: (listener) => engine.onEvent(listener),
+    fetchThumbnail: (photo) => engine.fetchThumbnail(photo),
     async execute(command) {
       const t0 = performance.now();
       const result = await engine.execute(command);

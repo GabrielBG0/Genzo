@@ -26,5 +26,8 @@ fuzz_target!(
         // hints (EXIF, CR3 boxes). Errors and None are expected; crashes,
         // hangs and huge allocations are bugs.
         let _ = genzo_imgio::decode_preview(data);
+        // A thumbnail's smaller preferred edge (LIB-09) tries the
+        // candidates in another order.
+        let _ = genzo_imgio::decode_preview_near(data, 320);
     }
 );
