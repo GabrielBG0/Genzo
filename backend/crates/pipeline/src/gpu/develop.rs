@@ -32,6 +32,8 @@
 //! [`Develop::reran`] says what the last render ran, so tests can hold it
 //! to DEV-01's re-run table. Only the render thread holds it.
 
+use std::sync::Arc;
+
 use genzo_color::encoding::InputEncoding;
 use genzo_color::output::Target;
 use genzo_imgio::raw::CameraColor;
@@ -209,14 +211,16 @@ pub struct Develop {
 struct Loaded {
     info: PhotoInfo,
     /// None while a photo opened from its level 1 waits for its input.
-    src: Option<RawSource>,
+    /// Shared: an export (OUT-01) holds it while the photo it came from
+    /// is closed for another.
+    src: Option<Arc<RawSource>>,
     kind: PhotoKind,
     as_shot: CameraTransform,
     curve: Option<BaseCurve>,
 }
 
 impl Loaded {
-    fn new(info: PhotoInfo, src: Option<RawSource>) -> Self {
+    fn new(info: PhotoInfo, src: Option<Arc<RawSource>>) -> Self {
         let (as_shot, kind) = as_shot_of(&info.color, info.encoding.as_ref());
         let curve = info.encoding.is_none().then(|| BaseCurve::new(&info.color));
         Self {
@@ -258,7 +262,9 @@ impl Develop {
     pub fn open(&mut self, gpu: &Gpu, photo: Photo) -> Result<(), DevelopError> {
         self.close();
         let info = PhotoInfo::of(&photo);
-        let loaded = self.photo.insert(Loaded::new(info, Some(photo.src)));
+        let loaded = self
+            .photo
+            .insert(Loaded::new(info, Some(Arc::new(photo.src))));
         // Failed, the photo stays open and the next render tries again.
         let src = loaded.src.as_ref().expect("given");
         self.stages.render_pyramid(gpu, src, &loaded.as_shot)?;
@@ -294,8 +300,14 @@ impl Develop {
                 want: p.info.size,
             });
         }
-        p.src = Some(src);
+        p.src = Some(Arc::new(src));
         Ok(())
+    }
+
+    /// The open photo's decoded input, shared: what an export holds
+    /// (OUT-01). `None` while a photo opened from its level 1 waits for it.
+    pub fn source(&self) -> Option<Arc<RawSource>> {
+        self.photo.as_ref()?.src.clone()
     }
 
     /// Whether the open photo has its input.
@@ -595,7 +607,7 @@ impl Develop {
                 gpu,
                 &mut self.stages,
                 &mut self.cache,
-                p.src.as_ref(),
+                p.src.as_deref(),
                 size,
                 self.key,
                 frame,
