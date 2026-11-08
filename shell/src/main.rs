@@ -13,12 +13,16 @@ use genzo_engine::api::{
     QueryResult,
 };
 use tauri::http::{Response, StatusCode, header};
-use tauri::{Emitter, Manager, State};
+use tauri::menu::{Menu, MenuItem};
+use tauri::{AppHandle, Emitter, Manager, RunEvent, Runtime, State};
 
 /// Event name and URI scheme; must match frontend/src/lib/transport/tauri.ts.
 const EVENT: &str = "genzo://event";
 const FRAME_SCHEME: &str = "genzo-frame";
 const THUMB_SCHEME: &str = "genzo-thumb";
+
+/// The macOS app menu's Quit, which closes the window instead (OUT-01).
+const QUIT: &str = "quit";
 
 /// The contract version of the bundled frontend, from contract/contract.lock.
 const APP_CONTRACT_VERSION: &str = env!("GENZO_APP_CONTRACT_VERSION");
@@ -48,7 +52,11 @@ async fn execute(
 /// The tile messages under `path`'s number: a frame's by generation, a
 /// thumbnail's by photo id.
 fn bytes_response(path: &str, get: impl FnOnce(u64) -> Option<Vec<u8>>) -> Response<Vec<u8>> {
-    let bytes = path.trim_start_matches('/').parse::<u64>().ok().and_then(get);
+    let bytes = path
+        .trim_start_matches('/')
+        .parse::<u64>()
+        .ok()
+        .and_then(get);
     let (status, body) = match bytes {
         Some(bytes) => (StatusCode::OK, bytes),
         None => (StatusCode::NOT_FOUND, Vec::new()),
@@ -59,6 +67,36 @@ fn bytes_response(path: &str, get: impl FnOnce(u64) -> Option<Vec<u8>>) -> Respo
         .header(header::ACCESS_CONTROL_ALLOW_ORIGIN, "*")
         .body(body)
         .expect("static response parts are valid")
+}
+
+/// Tauri's default menu with its Quit replaced by one that closes the
+/// window, so quitting during an export asks first as closing it does
+/// (OUT-01). The default Quit ends the process without asking.
+fn menu_quitting_through_the_window<R: Runtime>(app: &AppHandle<R>) -> tauri::Result<Menu<R>> {
+    let menu = Menu::default(app)?;
+    for item in menu.items()? {
+        let Some(sub) = item.as_submenu() else {
+            continue;
+        };
+        for entry in sub.items()? {
+            let Some(quit) = entry.as_predefined_menuitem() else {
+                continue;
+            };
+            if quit.text()?.starts_with("Quit") {
+                let text = quit.text()?;
+                sub.remove(quit)?;
+                sub.append(&MenuItem::with_id(
+                    app,
+                    QUIT,
+                    text,
+                    true,
+                    Some("CmdOrCtrl+Q"),
+                )?)?;
+                return Ok(menu);
+            }
+        }
+    }
+    Ok(menu)
 }
 
 fn main() {
@@ -72,7 +110,23 @@ fn main() {
         std::process::exit(1);
     }
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    // Only macOS has an app menu by default; elsewhere closing the window
+    // is the way to quit.
+    let builder = if cfg!(target_os = "macos") {
+        builder
+            .menu(menu_quitting_through_the_window)
+            .on_menu_event(|app, event| {
+                if event.id() == QUIT {
+                    for window in app.webview_windows().values() {
+                        let _ = window.close();
+                    }
+                }
+            })
+    } else {
+        builder
+    };
+    builder
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let handle = app.handle().clone();
@@ -97,6 +151,16 @@ fn main() {
             bytes_response(request.uri().path(), |photo| engine.thumbnail(photo))
         })
         .invoke_handler(tauri::generate_handler![handshake, query, execute])
-        .run(tauri::generate_context!())
-        .expect("error while running Genzo");
+        .build(tauri::generate_context!())
+        .expect("error while building Genzo")
+        .run(|app, event| {
+            // Quitting by any other way (the Dock, logging out) asks nothing,
+            // but leaves no export's temporary file: the process ends
+            // without dropping the engine.
+            if let RunEvent::Exit = event
+                && let Some(engine) = app.try_state::<Arc<Engine>>()
+            {
+                engine.stop_exports();
+            }
+        });
 }

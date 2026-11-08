@@ -396,4 +396,18 @@ fn a_cancelled_export_writes_nothing_and_an_edit_meanwhile_changes_nothing() {
     assert!(!genzo_export::jpeg::temporary(&gone).exists());
     // Cancelling an export that ended is no error.
     engine.cancel_export(job).unwrap();
+
+    // Quitting: every export stops and has ended when `stop_exports`
+    // returns, none leaving a temporary file (OUT-01).
+    let quit: Vec<_> = ["quit-a.jpg", "quit-b.jpg"].map(|n| dir.out(n)).into();
+    let jobs: Vec<_> = quit
+        .iter()
+        .map(|p| engine.export_jpeg(request(id, p)).unwrap())
+        .collect();
+    engine.stop_exports();
+    for (job, path) in jobs.into_iter().zip(&quit) {
+        let events = states(&seen, job);
+        assert_eq!(ends(&events), 1, "{events:?}");
+        assert!(!genzo_export::jpeg::temporary(path).exists());
+    }
 }

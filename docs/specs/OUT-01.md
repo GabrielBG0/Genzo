@@ -95,7 +95,8 @@ An export is a job that holds everything it reads. It never uses the open photo'
 - The status bar shows "Exporting DSC_0412.jpg, 40 %", then "Exported DSC_0412.jpg" for a few seconds (APP-07). The quick action shows the progress as a ring around its icon.
 - **Cancel:** clicking the status bar's progress, or Export again during the export, offers "Cancel export". When the export the status bar follows ends while an older one still runs, the older one's next progress takes the status bar back. A cancelled export stops after the region it is rendering and deletes its temporary file.
 - **Closing the app during an export** asks first ("An export is in progress. Quit anyway?", *Quit* or *Keep exporting*, the system's dialog). Quitting cancels every export and waits, at most 3 s, for them to end, so none leaves its temporary file: Tauri ends the process without dropping the engine.
-  - **Not yet:** quitting through the macOS app menu (⌘Q, Tauri's default menu) neither asks nor cancels; an export then leaves its temporary file, which the next export of that path removes. APP-02's menu brings Quit through the same question.
+  - **On macOS, the app menu's Quit (⌘Q)** closes the window, so it asks the same question: the shell replaces Tauri's default Quit, which ended the process without asking.
+  - **Quitting any other way** (the Dock's Quit, logging out) cannot ask: on the way out the shell stops every export (`Engine::stop_exports`, which waits for each to end), so none leaves its temporary file.
 
 ## GPU memory
 
