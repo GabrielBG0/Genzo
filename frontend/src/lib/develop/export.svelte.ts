@@ -1,13 +1,13 @@
-import { SvelteSet } from "svelte/reactivity";
-import type { Event, ExportState } from "$contract/genzo";
-import type { Engine } from "../engine/types";
+import { SvelteSet } from 'svelte/reactivity';
+import type { Event, ExportState } from '$contract/genzo';
+import type { Engine } from '../engine/types';
 
 /** The export dialog's values, kept for the session (OUT-01). */
 export interface ExportSettings {
   /** The folder exported to last; null before the first export. */
   folder: string | null;
   quality: number;
-  size: "full" | "long";
+  size: 'full' | 'long';
   longEdge: number;
 }
 
@@ -22,8 +22,7 @@ export interface ExportProgress {
 }
 
 /** What starting an export answered. */
-export type Started =
-  { ok: true } | { ok: false; exists: boolean; reason: string };
+export type Started = { ok: true } | { ok: false; exists: boolean; reason: string };
 
 /** How long "Exported NAME" stays in the status bar. */
 export const DONE_FOR_MS = 4000;
@@ -32,28 +31,26 @@ export const DONE_FOR_MS = 4000;
 export const QUIT_WAIT_MS = 3000;
 
 /** What quitting during an export asks (OUT-01). */
-export const QUIT_QUESTION = "An export is in progress. Quit anyway?";
+export const QUIT_QUESTION = 'An export is in progress. Quit anyway?';
 
 /** The smallest long edge the engine takes (DEV-01's smallest crop). */
 export const MIN_LONG_EDGE = 32;
 
 /** The folder of `path`, or '' for a bare name. */
 export function folderOf(path: string): string {
-  const at = Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\"));
-  return at < 0 ? "" : path.slice(0, at);
+  const at = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
+  return at < 0 ? '' : path.slice(0, at);
 }
 
 /** The file name of `path`. */
 export function nameOf(path: string): string {
-  return path.slice(
-    Math.max(path.lastIndexOf("/"), path.lastIndexOf("\\")) + 1,
-  );
+  return path.slice(Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\')) + 1);
 }
 
 /** `folder` and `name` joined with the separator `folder` already uses. */
 export function join(folder: string, name: string): string {
   if (!folder) return name;
-  const sep = folder.includes("\\") && !folder.includes("/") ? "\\" : "/";
+  const sep = folder.includes('\\') && !folder.includes('/') ? '\\' : '/';
   return folder.endsWith(sep) ? folder + name : folder + sep + name;
 }
 
@@ -64,7 +61,7 @@ export function withJpg(path: string): string {
 
 /** A photo's export name: its file name with `.jpg` for its extension. */
 export function exportName(fileName: string): string {
-  const dot = fileName.lastIndexOf(".");
+  const dot = fileName.lastIndexOf('.');
   return `${dot > 0 ? fileName.slice(0, dot) : fileName}.jpg`;
 }
 
@@ -79,12 +76,7 @@ function message(e: unknown): string {
  * text from `ExportProgress`.
  */
 export class Exports {
-  settings: ExportSettings = $state({
-    folder: null,
-    quality: 85,
-    size: "full",
-    longEdge: 2048,
-  });
+  settings: ExportSettings = $state({ folder: null, quality: 85, size: 'full', longEdge: 2048 });
   current: ExportProgress | null = $state(null);
   /** Each job's destination. Not state: nothing renders from it. */
   // eslint-disable-next-line svelte/prefer-svelte-reactivity
@@ -109,7 +101,7 @@ export class Exports {
   /** Whether an export is queued or running. */
   get busy(): boolean {
     const s = this.current?.state.type;
-    return s === "queued" || s === "running";
+    return s === 'queued' || s === 'running';
   }
 
   /** Whether any export is queued or running: quitting asks first (OUT-01). */
@@ -124,9 +116,7 @@ export class Exports {
   get progress(): number | null {
     const c = this.current;
     if (!c || !this.busy) return null;
-    return c.state.type === "running" && c.rowsTotal > 0
-      ? Math.min(1, c.rowsDone / c.rowsTotal)
-      : 0;
+    return c.state.type === 'running' && c.rowsTotal > 0 ? Math.min(1, c.rowsDone / c.rowsTotal) : 0;
   }
 
   /**
@@ -145,38 +135,32 @@ export class Exports {
     const { quality, size, longEdge } = this.settings;
     try {
       const r = await this.engine.execute({
-        type: "exportJpeg",
+        type: 'exportJpeg',
         photo,
         path,
-        longEdge: size === "long" ? longEdge : null,
+        longEdge: size === 'long' ? longEdge : null,
         quality,
         replace,
       });
-      if (r.type !== "export") throw new Error(`exportJpeg answered ${r.type}`);
+      if (r.type !== 'export') throw new Error(`exportJpeg answered ${r.type}`);
       this.settings.folder = folderOf(path) || this.settings.folder;
       this.paths.set(r.job, path);
       if (!this.ended.has(r.job)) this.active.add(r.job);
       // Its events may have come before the answer.
       if (this.current?.job !== r.job) {
-        this.follow({
-          job: r.job,
-          name: nameOf(path),
-          rowsDone: 0,
-          rowsTotal: 0,
-          state: { type: "queued" },
-        });
+        this.follow({ job: r.job, name: nameOf(path), rowsDone: 0, rowsTotal: 0, state: { type: 'queued' } });
       }
       return { ok: true };
     } catch (e) {
       const reason = message(e);
-      return { ok: false, exists: reason.endsWith("already exists"), reason };
+      return { ok: false, exists: reason.endsWith('already exists'), reason };
     }
   }
 
   /** Cancels the export the status bar follows. */
   async cancel(): Promise<void> {
     if (!this.current || !this.busy) return;
-    await this.engine.execute({ type: "cancelExport", job: this.current.job });
+    await this.engine.execute({ type: 'cancelExport', job: this.current.job });
   }
 
   /**
@@ -185,9 +169,7 @@ export class Exports {
    */
   async cancelAll(waitMs = QUIT_WAIT_MS): Promise<void> {
     const jobs = [...this.active];
-    await Promise.allSettled(
-      jobs.map((job) => this.engine.execute({ type: "cancelExport", job })),
-    );
+    await Promise.allSettled(jobs.map((job) => this.engine.execute({ type: 'cancelExport', job })));
     const deadline = Date.now() + waitMs;
     while (this.active.size > 0 && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 20));
@@ -210,21 +192,18 @@ export class Exports {
     const c = this.current;
     if (!c) return null;
     switch (c.state.type) {
-      case "queued":
+      case 'queued':
         return `Waiting to export ${c.name}`;
-      case "running": {
-        const pct =
-          c.rowsTotal > 0 ? Math.floor((100 * c.rowsDone) / c.rowsTotal) : 0;
+      case 'running': {
+        const pct = c.rowsTotal > 0 ? Math.floor((100 * c.rowsDone) / c.rowsTotal) : 0;
         return `Exporting ${c.name}, ${pct} %`;
       }
-      case "finished":
-        return c.state.notes.length > 0
-          ? `Exported ${c.name}. ${c.state.notes.join(". ")}`
-          : `Exported ${c.name}`;
-      case "failed":
+      case 'finished':
+        return c.state.notes.length > 0 ? `Exported ${c.name}. ${c.state.notes.join('. ')}` : `Exported ${c.name}`;
+      case 'failed':
         return `Export failed: ${c.state.reason}`;
-      case "cancelled":
-        return "Export cancelled";
+      case 'cancelled':
+        return 'Export cancelled';
     }
   }
 
@@ -234,7 +213,7 @@ export class Exports {
       this.clear = null;
     }
     this.current = p;
-    if (p.state.type === "finished" || p.state.type === "cancelled") {
+    if (p.state.type === 'finished' || p.state.type === 'cancelled') {
       this.clear = setTimeout(() => {
         if (this.current?.job === p.job) this.current = null;
       }, DONE_FOR_MS);
@@ -242,8 +221,8 @@ export class Exports {
   }
 
   private onEvent(e: Event) {
-    if (e.type !== "exportProgress") return;
-    const live = e.state.type === "queued" || e.state.type === "running";
+    if (e.type !== 'exportProgress') return;
+    const live = e.state.type === 'queued' || e.state.type === 'running';
     if (live && !this.ended.has(e.job)) {
       this.active.add(e.job);
     } else if (!live) {

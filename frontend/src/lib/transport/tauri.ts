@@ -1,14 +1,10 @@
 // The only module that touches the Tauri API (architecture rule, enforced by
 // eslint). Everything else talks to the `Engine` interface.
 
-import {
-  convertFileSrc,
-  invoke,
-  isTauri as tauriPresent,
-} from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
-import { getCurrentWindow } from "@tauri-apps/api/window";
-import { ask, open, save } from "@tauri-apps/plugin-dialog";
+import { convertFileSrc, invoke, isTauri as tauriPresent } from '@tauri-apps/api/core';
+import { listen } from '@tauri-apps/api/event';
+import { getCurrentWindow } from '@tauri-apps/api/window';
+import { ask, open, save } from '@tauri-apps/plugin-dialog';
 import type {
   Command,
   CommandResult,
@@ -17,13 +13,13 @@ import type {
   HandshakeResult,
   Query,
   QueryResult,
-} from "$contract/genzo";
-import type { Engine } from "../engine/types";
+} from '$contract/genzo';
+import type { Engine } from '../engine/types';
 
 /** Event name and URI schemes; must match shell/src/main.rs. */
-const EVENT = "genzo://event";
-const FRAME_SCHEME = "genzo-frame";
-const THUMB_SCHEME = "genzo-thumb";
+const EVENT = 'genzo://event';
+const FRAME_SCHEME = 'genzo-frame';
+const THUMB_SCHEME = 'genzo-thumb';
 
 /** Whether the app runs inside the Tauri shell rather than a plain browser. */
 export function isTauri(): boolean {
@@ -31,18 +27,18 @@ export function isTauri(): boolean {
 }
 
 export class TauriEngine implements Engine {
-  readonly kind = "tauri";
+  readonly kind = 'tauri';
 
   handshake(hello: Handshake): Promise<HandshakeResult> {
-    return invoke("handshake", { hello });
+    return invoke('handshake', { hello });
   }
 
   query(query: Query): Promise<QueryResult> {
-    return invoke("query", { query });
+    return invoke('query', { query });
   }
 
   execute(command: Command): Promise<CommandResult> {
-    return invoke("execute", { command });
+    return invoke('execute', { command });
   }
 
   onEvent(listener: (event: Event) => void): () => void {
@@ -59,23 +55,15 @@ export class TauriEngine implements Engine {
 
   async chooseFolder(): Promise<string | null> {
     const picked = await open({ directory: true, multiple: false });
-    return typeof picked === "string" ? picked : null;
+    return typeof picked === 'string' ? picked : null;
   }
 
   chooseSavePath(suggested: string): Promise<string | null> {
-    return save({
-      defaultPath: suggested,
-      filters: [{ name: "JPEG", extensions: ["jpg", "jpeg"] }],
-    });
+    return save({ defaultPath: suggested, filters: [{ name: 'JPEG', extensions: ['jpg', 'jpeg'] }] });
   }
 
   ask(message: string, ok: string, cancel: string): Promise<boolean> {
-    return ask(message, {
-      title: "Genzo",
-      kind: "warning",
-      okLabel: ok,
-      cancelLabel: cancel,
-    });
+    return ask(message, { title: 'Genzo', kind: 'warning', okLabel: ok, cancelLabel: cancel });
   }
 
   onCloseRequested(allow: () => Promise<boolean>): () => void {
