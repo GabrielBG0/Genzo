@@ -144,6 +144,9 @@ Values are stored as f32 (DEV-01). The display rounds; it never changes the stor
 
 - **Type a value:** a click on the value turns it into a field. Enter applies (one history step), Esc cancels. A value out of range is clamped to it.
 - **Reset:** a double-click on the label or the handle resets that slider to its default; for Temp or Tint, it resets white balance to As Shot. A double-click on a group label ("Tone", "Presence", "White balance") resets the group. The panel's own reset is "Reset Basic panel" in the slider context menu (APP-06). Each reset is one history step.
+- **Detent** (owner, 2026-11-05): a bipolar slider, whose range spans 0 (every slider here but RAW Temp), has a tick at 0. A drag catches at 0 while the pointer is within 1.5 % of the track's width of it, and the tick lights while it holds there. Shift disables the catch. The keyboard and typed values step through 0 as any value.
+- **Fine adjust** (owner, 2026-11-05): Shift held during a pointer drag moves the value at 1/10 of the pointer's speed, from where Shift went down; releasing Shift goes back to full speed from where the value is, so the thumb never jumps. The thumb narrows while it is fine.
+- **The reset animates** (owner, 2026-11-05): after a double-click, the thumb goes home over 200 ms, ease-out; the value is sent at once (one step), only the thumb moves. A drag never animates, so it adds no latency. With reduced motion nothing animates.
 - **Optimistic values:** the slider shows its own value at once. The engine's edit, which comes back with the render, replaces it, which matters only when the engine clamped it.
 
 **Edited state** (DEV-13, the technical spec's "edited markers"):
@@ -261,3 +264,7 @@ The white balance presets are constants in `color` (their xy), not stored.
    - The dropdown names a preset when the values match it and says "Custom" when they do not.
    - The panel matches screen D1 of the handoff, apart from the rows M1 leaves out.
 10. **Performance.** The base curve adds at most 1 ms to stage 6 at 2560 × 1920 on the RTX 3060, within DEV-01 criterion 14's 16 ms per slider. *Check:* the stage 6 criterion benchmark.
+11. **Detent, fine adjust and reset** (Vitest of SliderRow):
+   - A drag that passes within 1.5 % of 0 on a bipolar slider sends 0, and the tick shows lit; with Shift held it does not catch. RAW Temp has no tick.
+   - With Shift down mid-drag, a pointer move of 100 px moves the value as 10 px would; releasing Shift does not jump the value.
+   - A double-click sends the reset once, and the thumb animates (it has the resetting state) while a drag never does.

@@ -1,6 +1,7 @@
 <script lang="ts">
   import { CONTRACT_VERSION, type EngineInfo } from '$contract/genzo';
   import { APP_VERSION } from '../version';
+  import Logo from './Logo.svelte';
 
   interface Props {
     info: EngineInfo;
@@ -31,7 +32,7 @@
     bind:this={dialog}
     {onkeydown}
   >
-    <h2 id="about-title">Genzo</h2>
+    <h2 id="about-title"><span class="mark"><Logo size={22} /></span>Genzo</h2>
     <dl>
       <dt>Version</dt>
       <dd class="mono">{APP_VERSION}</dd>
@@ -75,9 +76,17 @@
   }
 
   h2 {
+    display: flex;
+    align-items: center;
+    gap: 10px;
     margin: 0;
     font-size: 15px;
     font-weight: 600;
+    color: var(--text-strong);
+  }
+
+  /* The glyph takes the text's color; the frame is never recolored (brand.md). */
+  .mark {
     color: var(--text-strong);
   }
 

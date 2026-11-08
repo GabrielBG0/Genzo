@@ -129,6 +129,19 @@
     all[next]?.focus();
   }
 
+  /**
+   * A shortcut's modifiers and its key, shown apart (APP-02's Decided
+   * style): "Ctrl Shift" and "E", or "⌘⇧" and "E".
+   */
+  function splitShortcut(s: string): { mods: string; key: string } {
+    if (s.includes(' ')) {
+      const at = s.lastIndexOf(' ');
+      return { mods: s.slice(0, at + 1), key: s.slice(at + 1) };
+    }
+    const m = /^([⌘⇧⌥⌃]*)(.*)$/u.exec(s);
+    return { mods: m?.[1] ?? '', key: m?.[2] ?? s };
+  }
+
   function shortcutOf(item: Exclude<MenuItem, { separator: true }>): string {
     if (item.shortcut !== undefined) return item.shortcut;
     return item.command && registry.has(item.command) ? registry.shortcut(item.command) : '';
@@ -169,6 +182,7 @@
     {#if item.separator}
       <div class="sep" role="separator"></div>
     {:else}
+      {@const sc = splitShortcut(shortcutOf(item))}
       <button
         data-segment
         class={['item', i === lit && 'lit', item.danger && 'danger']}
@@ -187,7 +201,7 @@
       >
         <span class="check">{item.check === true ? '✓' : item.check === 'mixed' ? '–' : ''}</span>
         <span class="label">{item.label}</span>
-        <span class="shortcut mono">{shortcutOf(item)}</span>
+        <span class="shortcut mono"><span class="mods">{sc.mods}</span>{sc.key}</span>
         <span class="sub">{item.submenu ? '›' : ''}</span>
       </button>
     {/if}
@@ -198,7 +212,7 @@
   /* Opens from its anchor (the top left corner) in 140 ms. */
   .menu {
     transform-origin: top left;
-    animation: menu-open 140ms ease-out;
+    animation: menu-open var(--t-menu-in) ease-out;
     max-width: calc(100vw - 48px);
     padding: 5px;
     border-radius: var(--r-menu);
@@ -260,6 +274,10 @@
     white-space: nowrap;
   }
 
+  .mods {
+    color: var(--text-dim);
+  }
+
   .sub {
     width: 10px;
     flex: none;
@@ -298,9 +316,10 @@
     }
   }
 
+  /* Inset to the labels (APP-02's Decided style). */
   .sep {
     height: 1px;
-    margin: 4px 8px;
+    margin: 4px 8px 4px 30px;
     background: var(--line);
   }
 </style>

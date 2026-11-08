@@ -1,6 +1,5 @@
 /** Stroke icons from the UI handoff, 24×24 view box, drawn with currentColor. */
 export const ICONS = {
-  logo: 'M12 3l3.5 6M21 12h-7M16.5 19.5L13 13.5M7.5 19.5L11 13.5M3 12h7M7.5 4.5L11 10.5',
   undo: 'M9 14L4 9l5-5M4 9h10a6 6 0 0 1 0 12h-3',
   redo: 'M15 14l5-5-5-5M20 9H10a6 6 0 0 0 0 12h3',
   copy: 'M9 9h10v10H9zM5 15V5h10',

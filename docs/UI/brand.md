@@ -45,11 +45,14 @@ The top bar's logo button uses `logo/svg/genzo-glyph-currentcolor.svg`, which ta
 
 ## Files
 
-The files go in `logo/`, and its README describes them.
+The files are in [`logo/`](logo/), and [its README](logo/README.md) describes each one.
 
 | File | Use |
 |---|---|
-| `logo/README.md` | what each file is |
-| `logo/svg/genzo-glyph-currentcolor.svg` | the top bar's logo button |
+| [`logo/README.md`](logo/README.md) | what each file is, and how the app icons are made from them |
+| [`logo/svg/genzo-glyph-currentcolor.svg`](logo/svg/genzo-glyph-currentcolor.svg) | the top bar's logo button and the About dialog; in the app as `frontend/src/lib/components/Logo.svelte`, the same frame drawn as one path |
+| `logo/svg/genzo-icon-{color,bw}.svg`, `-small.svg`, `-macos.svg` | the app icon masters: the full tile, 32 px and below, and Apple's grid |
+| `logo/svg/genzo-mark-{color,bw}[-small]-on-{dark,light}.svg` | the mark without the tile, for docs, the website, the splash and About screens |
+| `logo/png/{color,bw}/` | PNGs from 16 to 1024 px, the `.ico` and `.icns` files, the favicons, and `icon-1024-macos-source.png` for `tauri icon` |
 
-> The `logo/` folder is not in the repository yet. When it lands, link these paths and complete this table from its README.
+The app and installer icons in `shell/icons` come from these with packaging (M5), as the plan says.
