@@ -55,4 +55,4 @@ The files are in [`logo/`](logo/), and [its README](logo/README.md) describes ea
 | `logo/svg/genzo-mark-{color,bw}[-small]-on-{dark,light}.svg` | the mark without the tile, for docs, the website, the splash and About screens |
 | `logo/png/{color,bw}/` | PNGs from 16 to 1024 px, the `.ico` and `.icns` files, the favicons, and `icon-1024-macos-source.png` for `tauri icon` |
 
-The app and installer icons in `shell/icons` come from these with packaging (M5), as the plan says.
+The app icons in `shell/icons` are made from these, as the logo README says (since 2026-11-08: `tauri icon` from `png/color/icon-1024-macos-source.png`, then the small mark's `icon-32.png` and `genzo-color.ico` over its 32 px and `.ico` files). The installers come with packaging (M5).
