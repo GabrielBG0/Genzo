@@ -29,6 +29,7 @@
 //! or photo opening that comes first cancels it.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, SyncSender, TryRecvError, TrySendError};
 use std::thread::JoinHandle;
 
@@ -277,6 +278,18 @@ pub struct RenderThread {
     tx: Option<Sender<Request>>,
     info: GpuInfo,
     handle: Option<JoinHandle<()>>,
+    /// Photo switches in progress: no export region starts meanwhile.
+    exports_paused: Arc<AtomicUsize>,
+}
+
+/// Held while a photo switch runs: [`RenderThread::pause_exports`].
+#[derive(Debug)]
+pub struct ExportsPaused(Arc<AtomicUsize>);
+
+impl Drop for ExportsPaused {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::SeqCst);
+    }
 }
 
 impl RenderThread {
@@ -284,12 +297,14 @@ impl RenderThread {
     pub fn spawn(choice: AdapterChoice) -> Result<Self, GpuError> {
         let (tx, rx) = mpsc::channel::<Request>();
         let (ready_tx, ready_rx) = mpsc::channel();
+        let exports_paused = Arc::new(AtomicUsize::new(0));
+        let paused = Arc::clone(&exports_paused);
         let handle = std::thread::Builder::new()
             .name("genzo-render".into())
             .spawn(move || match Gpu::open(choice) {
                 Ok(gpu) => {
                     let _ = ready_tx.send(Ok(gpu.info.clone()));
-                    run(gpu, rx);
+                    run(gpu, rx, paused);
                 }
                 Err(e) => {
                     let _ = ready_tx.send(Err(e));
@@ -301,6 +316,7 @@ impl RenderThread {
             tx: Some(tx),
             info,
             handle: Some(handle),
+            exports_paused,
         })
     }
 
@@ -484,6 +500,14 @@ impl RenderThread {
         }))
     }
 
+    /// No export region starts until the guard drops: a photo switch's first
+    /// pixels and decode come first (OUT-01). The region in progress, if
+    /// any, finishes.
+    pub fn pause_exports(&self) -> ExportsPaused {
+        self.exports_paused.fetch_add(1, Ordering::SeqCst);
+        ExportsPaused(Arc::clone(&self.exports_paused))
+    }
+
     /// Cancels export `job` after the region it is rendering: its rows
     /// channel closes.
     pub fn cancel_export(&self, job: u64) -> Result<(), GpuError> {
@@ -631,7 +655,7 @@ fn resized_turn(gpu: &Gpu, d: &mut Develop, x: &mut Exporting) -> bool {
     resized_turn(gpu, d, x)
 }
 
-fn run(gpu: Gpu, rx: Receiver<Request>) {
+fn run(gpu: Gpu, rx: Receiver<Request>, exports_paused: Arc<AtomicUsize>) {
     let mut pipeline = SpikePipeline::new(&gpu);
     // Made on the first Develop request, so spike-only use (the benches)
     // holds no second GPU state.
@@ -649,6 +673,8 @@ fn run(gpu: Gpu, rx: Receiver<Request>) {
     let mut last: Option<(u64, u64)> = None;
     // Exports, first asked first rendered.
     let mut exports: VecDeque<Exporting> = VecDeque::new();
+    // The stages the last export used, for the next (`budget::EXPORT`).
+    let mut spare_stages: Option<ExportStages> = None;
     loop {
         // Between requests: the rest of a white balance rebuild, stopped as
         // soon as a request comes (DEV-01, Generations). A failed rest
@@ -681,14 +707,29 @@ fn run(gpu: Gpu, rx: Receiver<Request>) {
             };
             let _ = w.reply.send(answer);
         }
-        // Then a region of the first export.
+        // Then a region of the first export, with the stages the last one
+        // left: made once, not at each export, whose first region would
+        // otherwise wait for their textures and pipelines.
+        let paused = exports_paused.load(Ordering::SeqCst) > 0;
         if queued.is_empty()
+            && !paused
             && !develop.as_ref().is_some_and(Develop::rebuilding)
             && let Some(x) = exports.front_mut()
             && let Some(d) = develop.as_mut()
-            && export_turn(&gpu, d, x)
         {
-            exports.pop_front();
+            if x.stages.is_none() {
+                x.stages = Some(
+                    spare_stages
+                        .take()
+                        .unwrap_or_else(|| ExportStages::new(&gpu)),
+                );
+            }
+            if export_turn(&gpu, d, x)
+                && let Some(done) = exports.pop_front()
+                && let Some(stages) = done.stages
+            {
+                spare_stages.get_or_insert(stages);
+            }
         }
         // Then a neighbor's level 1, stopped the same way, once no export
         // runs (OUT-01: prefetch waits for the export).
@@ -739,8 +780,12 @@ fn run(gpu: Gpu, rx: Receiver<Request>) {
         }
         // An export waiting for its encoder looks again soon; one with a
         // region to render goes round the loop at once.
-        let waiting = exports.front().is_some_and(|x| x.pending.is_some());
-        let rendering = exports.front().is_some_and(|x| x.pending.is_none());
+        // A paused export looks again soon too, never spinning.
+        let paused = exports_paused.load(Ordering::SeqCst) > 0;
+        let waiting = exports
+            .front()
+            .is_some_and(|x| x.pending.is_some() || paused);
+        let rendering = !paused && exports.front().is_some_and(|x| x.pending.is_none());
         let first = match queued.pop_front() {
             Some(r) => r,
             None if rendering => match rx.try_recv() {
@@ -906,7 +951,12 @@ fn run(gpu: Gpu, rx: Receiver<Request>) {
                     let _ = reply.send(answer);
                 }
                 Request::CancelExport { job, reply } => {
-                    exports.retain(|x| x.job != job);
+                    let (gone, kept): (VecDeque<_>, VecDeque<_>) =
+                        exports.drain(..).partition(|x| x.job == job);
+                    exports = kept;
+                    if let Some(stages) = gone.into_iter().find_map(|x| x.stages) {
+                        spare_stages.get_or_insert(stages);
+                    }
                     let _ = reply.send(Ok(()));
                 }
                 Request::Histogram(w) => {

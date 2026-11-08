@@ -306,6 +306,7 @@ impl Task {
         };
         let mut failure: Option<String> = None;
         let mut running = false;
+        let mut reported = 0u32;
         let mut reducer = self.export.resized().then(|| {
             genzo_export::resize::Reducer::new(
                 self.export.source,
@@ -359,7 +360,20 @@ impl Task {
                     }
                 }
             },
-            |rows| self.progress(rows, ExportState::Running),
+            |rows| {
+                // Not during a photo switch, between block rows too: its
+                // first pixels come first.
+                drop(self.switching.lock());
+                // An event a percent, not a block row.
+                let total = self.export.size.1.max(1);
+                if u64::from(rows) * 100 / u64::from(total)
+                    != u64::from(reported) * 100 / u64::from(total)
+                    || rows == total
+                {
+                    reported = rows;
+                    self.progress(rows, ExportState::Running);
+                }
+            },
         );
         let state = match result {
             Ok(()) => ExportState::Finished { notes },
