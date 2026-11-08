@@ -14,7 +14,6 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::edit::{Change, Edit, Param, Phase};
-use crate::frame::PixelFormat;
 
 /// What kind of GPU adapter the render thread got.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -84,18 +83,6 @@ pub struct EngineInfo {
     /// The RAW white balance presets, in the dropdown's order after As
     /// Shot (contract 0.5.1). Non-RAW photos have none.
     pub white_balance_presets: Vec<WhiteBalancePreset>,
-}
-
-/// Where the raw image of the 0.D GPU spike comes from.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[serde(
-    tag = "type",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase"
-)]
-pub enum SpikeSource {
-    /// A generated Bayer scene of this size, standing in for a raw file.
-    Synthetic { width: u32, height: u32 },
 }
 
 /// The color space a view's frames are encoded for: the display's.
@@ -322,40 +309,15 @@ pub struct Counted {
     rename_all_fields = "camelCase"
 )]
 pub enum Command {
-    /// M0 spike: render a synthetic test pattern and stream it as tiles.
-    /// Used to measure the pixels-through-the-webview path (0.E).
-    RenderTestPattern {
-        width: u32,
-        height: u32,
-        /// Changes the pattern, standing in for a slider value.
-        phase: f32,
-        format: PixelFormat,
-    },
-    /// M0 spike 0.D: load the raw image the GPU pipeline renders.
-    LoadSpikeImage { source: SpikeSource },
-    /// M0 spike 0.D: render the loaded raw image through the GPU pipeline
-    /// into a viewport that fits `width` × `height`, and stream it as tiles.
-    RenderSpike {
-        width: u32,
-        height: u32,
-        exposure_ev: f32,
-        /// White balance gains for red, green and blue.
-        wb: [f32; 3],
-        format: PixelFormat,
-        /// A slider is being dragged: white balance is applied after the
-        /// cached demosaic. Send `false` once the drag ends for the full
-        /// quality render.
-        interactive: bool,
-        /// Send a half-size JPEG preview instead of the full frame. Only
-        /// honored together with `interactive`; the frontend shows it scaled
-        /// up. It exists because moving raw pixels into the webview is the
-        /// bottleneck of a drag (0.E).
-        proxy: bool,
-    },
-    /// M0 spike 0.E: store the autobench report (JSON written by the
-    /// frontend) at the path the engine was started with. Fails when the
-    /// engine is not in autobench mode.
+    /// The autobench (M0 0.E, in the app since M1): store its report (JSON
+    /// written by the frontend) at the path the engine was started with.
+    /// Fails when the engine is not in autobench mode.
     SaveAutobenchReport { report: String },
+    /// The autobench's photo: a synthetic RAW of about `width` × `height`
+    /// with a camera profile, opened in Develop as a folder of one, as `cli
+    /// bench gpu` opens it. Fails when the engine is not in autobench
+    /// mode. Answers [`CommandResult::Folder`].
+    OpenSynthetic { width: u32, height: u32 },
     /// Lists a folder, makes it the strip and selects its first photo
     /// (LIB-09). Answers [`CommandResult::Folder`].
     OpenFolder { path: String },
@@ -541,8 +503,6 @@ pub enum Event {
         /// GPU time of the stages that ran, when the adapter can measure it.
         gpu_ms: Option<f64>,
     },
-    /// The spike's raw image is loaded; renders now show it.
-    SpikeImageLoaded { width: u32, height: u32 },
     /// A selected photo's embedded preview, before it decodes (DEV-01,
     /// *Opening*): its tiles, lossless, under `generation`. Both are
     /// `None` when it has none: the neutral fill and the file name.
@@ -580,61 +540,13 @@ mod tests {
 
     #[test]
     fn command_json_shape() {
-        let c = Command::RenderTestPattern {
-            width: 2560,
-            height: 1440,
-            phase: 0.5,
-            format: PixelFormat::Rgba8Srgb,
-        };
-        let json = serde_json::to_value(&c).unwrap();
-        assert_eq!(
-            json,
-            serde_json::json!({
-                "type": "renderTestPattern",
-                "width": 2560,
-                "height": 1440,
-                "phase": 0.5,
-                "format": "rgba8Srgb"
-            })
-        );
-    }
-
-    #[test]
-    fn render_spike_json_shape() {
-        let c = Command::RenderSpike {
-            width: 2560,
-            height: 1440,
-            exposure_ev: 0.5,
-            wb: [2.0, 1.0, 1.5],
-            format: PixelFormat::Rgba8DisplayP3,
-            interactive: true,
-            proxy: true,
+        let c = Command::OpenSynthetic {
+            width: 4032,
+            height: 3024,
         };
         assert_eq!(
             serde_json::to_value(&c).unwrap(),
-            serde_json::json!({
-                "type": "renderSpike",
-                "width": 2560,
-                "height": 1440,
-                "exposureEv": 0.5,
-                "wb": [2.0, 1.0, 1.5],
-                "format": "rgba8DisplayP3",
-                "interactive": true,
-                "proxy": true
-            })
-        );
-        let load = Command::LoadSpikeImage {
-            source: SpikeSource::Synthetic {
-                width: 8064,
-                height: 6048,
-            },
-        };
-        assert_eq!(
-            serde_json::to_value(&load).unwrap(),
-            serde_json::json!({
-                "type": "loadSpikeImage",
-                "source": { "type": "synthetic", "width": 8064, "height": 6048 }
-            })
+            serde_json::json!({ "type": "openSynthetic", "width": 4032, "height": 3024 })
         );
     }
 

@@ -14,7 +14,6 @@ import {
   type Histogram,
   type Phase,
   type PhotoEdit,
-  type PixelFormat,
   type Query,
   type QueryResult,
   type Strip,
@@ -154,7 +153,6 @@ export class FakeEngine implements Engine {
   private listeners = new Set<(e: Event) => void>();
   private frames = new Map<number, ArrayBuffer>();
   private generation = 0;
-  private spikeSize: [number, number] | null = null;
   /** Reported in the engine info; tests set it to run the autobench. */
   autobench = false;
   /** The last report sent with `saveAutobenchReport`. */
@@ -272,25 +270,6 @@ export class FakeEngine implements Engine {
   private run(command: Command): CommandResult {
     this.counts.set(command.type, (this.counts.get(command.type) ?? 0) + 1);
     switch (command.type) {
-      case 'renderTestPattern': {
-        const { width, height, phase, format } = command;
-        this.renderPattern(width, height, phase, format);
-        return DONE;
-      }
-      case 'loadSpikeImage': {
-        // The fake has no GPU: it remembers the size and renders the test pattern.
-        const { width, height } = command.source;
-        this.spikeSize = [width & ~1, height & ~1];
-        this.emit({ type: 'spikeImageLoaded', width: this.spikeSize[0], height: this.spikeSize[1] });
-        return DONE;
-      }
-      case 'renderSpike': {
-        if (!this.spikeSize) throw new Error('no image loaded');
-        const [w, h] = fit(this.spikeSize, [command.width, command.height]);
-        // Exposure moves the pattern, so a stale frame is easy to spot.
-        this.renderPattern(w, h, (command.exposureEv + 3) / 6, command.format);
-        return DONE;
-      }
       case 'saveAutobenchReport': {
         if (!this.autobench) throw new Error('not in autobench mode');
         this.autobenchReport = command.report;
@@ -313,6 +292,27 @@ export class FakeEngine implements Engine {
           edit: selected?.edit ?? null,
           reason: selected?.reason ?? null,
         };
+      }
+      case 'openSynthetic': {
+        // As `Engine` in autobench mode: a synthetic RAW, as a folder of one.
+        // A new id each time, as the engine gives one.
+        this.endGesture();
+        const id = 1000 + this.edits.size;
+        const name = `Synthetic ${command.width} × ${command.height}`;
+        const photo: StripPhoto = {
+          id,
+          fileName: name,
+          captureTime: null,
+          shooting: { iso: null, exposureTime: null, fNumber: null, focalLength: null },
+          kind: 'renders',
+          reason: null,
+          edited: false,
+        };
+        this.folder = [{ photo, kind: { raw: true, asShotTemp: 5000, asShotTint: 0 }, width: command.width, height: command.height }];
+        this.folderPath = name;
+        this.strip = { photos: [photo], current: null, direction: 'next' };
+        const selected = this.select(id);
+        return { type: 'folder', strip: structuredClone(this.strip), edit: selected.edit, reason: selected.reason };
       }
       case 'setView':
         this.view = { width: command.width, height: command.height, view: command.view };
@@ -671,40 +671,6 @@ export class FakeEngine implements Engine {
     this.emit({ type: 'histogramReady', photo: id, generation, histogram: structuredClone(histogram) });
   }
 
-  private renderPattern(width: number, height: number, phase: number, format: PixelFormat) {
-    const started = performance.now();
-    const generation = ++this.generation;
-    const parts: Uint8Array[] = [];
-    for (let y = 0; y < height; y += TILE_SIZE) {
-      for (let x = 0; x < width; x += TILE_SIZE) {
-        const rect = {
-          x,
-          y,
-          width: Math.min(TILE_SIZE, width - x),
-          height: Math.min(TILE_SIZE, height - y),
-        };
-        const header: TileHeader = {
-          generation,
-          rect,
-          mipLevel: 0,
-          format,
-          imageWidth: width,
-          imageHeight: height,
-        };
-        parts.push(encodeTile(header, testPatternTile(width, height, rect, phase)));
-      }
-    }
-    this.keepFrame(generation, parts);
-    this.emit({
-      type: 'renderFinished',
-      photo: null,
-      generation,
-      tileCount: parts.length,
-      renderMs: performance.now() - started,
-      gpuMs: null,
-    });
-  }
-
   private keepFrame(generation: number, parts: Uint8Array[]) {
     this.frames.set(generation, concat(parts));
     this.frames.delete(generation - 4);
@@ -791,7 +757,7 @@ export class FakeEngine implements Engine {
   }
 }
 
-/** Mirrors genzo_pipeline::gpu::spike::fit: fit inside bounds, never enlarge. */
+/** The Fit view's size: inside the bounds, aspect kept, never enlarged (`ViewSpec::Fit`). */
 export function fit([w, h]: [number, number], [bw, bh]: [number, number]): [number, number] {
   const s = Math.min(bw / w, bh / h, 1);
   return [Math.max(1, Math.round(w * s)), Math.max(1, Math.round(h * s))];
@@ -948,28 +914,6 @@ function count(h: Histogram, rgba: Uint8Array) {
       h.shadows.blue ||= b === 0;
     }
   }
-}
-
-/** Mirrors genzo_pipeline::test_pattern::render_tile. */
-function testPatternTile(
-  width: number,
-  height: number,
-  rect: { x: number; y: number; width: number; height: number },
-  phase: number,
-): Uint8Array {
-  const out = new Uint8Array(rect.width * rect.height * 4);
-  const shift = Math.floor(Math.min(1, Math.max(0, phase)) * 255);
-  let i = 0;
-  for (let y = rect.y; y < rect.y + rect.height; y++) {
-    const g = Math.floor((y * 255) / Math.max(1, height));
-    for (let x = rect.x; x < rect.x + rect.width; x++) {
-      out[i++] = (Math.floor((x * 255) / Math.max(1, width)) + shift) % 256;
-      out[i++] = g;
-      out[i++] = (Math.floor(x / 64) + Math.floor(y / 64)) % 2 === 0 ? 200 : 60;
-      out[i++] = 255;
-    }
-  }
-  return out;
 }
 
 function concat(parts: Uint8Array[]): ArrayBuffer {

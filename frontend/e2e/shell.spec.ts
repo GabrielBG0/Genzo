@@ -10,23 +10,13 @@ test('app shell renders against the fake engine', async ({ page }) => {
   await expect(page.getByText('No photo open')).toBeHidden();
 });
 
-test('exposure slider drives the latency probe through the spike pipeline', async ({ page }) => {
-  await page.goto('/?engine=fake#/spike');
-  const slider = page.getByRole('slider', { name: 'Exposure' });
-  await slider.focus();
-  for (let i = 0; i < 5; i++) await page.keyboard.press('ArrowRight');
-  await expect(slider).toHaveAttribute('aria-valuenow', '0.05');
-  await expect(page.getByText(/Input → pixels p95/)).toBeVisible();
-  await expect(page.getByText('No photo open')).toBeHidden();
-});
-
-test('test pattern source drives the phase slider', async ({ page }) => {
-  await page.goto('/?engine=fake#/spike');
-  await page.getByRole('combobox').first().selectOption('Test pattern');
-  const slider = page.getByRole('slider', { name: 'Phase' });
-  await slider.focus();
-  for (let i = 0; i < 5; i++) await page.keyboard.press('ArrowRight');
-  await expect(slider).toHaveAttribute('aria-valuenow', '5');
+test('the autobench runs in the app, through Develop, and saves its report (M1 item 15)', async ({ page }) => {
+  await page.goto('/?engine=fake&autobench');
+  // Every case opens its synthetic RAW and drags through the session; then the color check.
+  await expect(page.getByRole('status').filter({ hasText: 'Autobench done' })).toContainText('5 of 5 cases', {
+    timeout: 60_000,
+  });
+  await expect(page.getByRole('img', { name: 'Photo' })).toBeVisible();
 });
 
 test('gallery shows every shared component', async ({ page }) => {

@@ -200,6 +200,23 @@ export class DevelopSession {
   }
 
   /**
+   * The autobench's photo: a synthetic RAW of `width` × `height`, opened
+   * through Develop as a folder of one (`OpenSynthetic`, autobench mode only).
+   */
+  async openSynthetic(width: number, height: number): Promise<void> {
+    if (this.inGesture && this.gestureChanges) this.change(this.gestureChanges, 'End');
+    await this.idle();
+    this.shownState.clear();
+    const r = await this.engine.execute({ type: 'openSynthetic', width, height });
+    if (r.type !== 'folder') throw new Error(`openSynthetic answered ${r.type}`);
+    this.folder = `Synthetic ${width} × ${height}`;
+    this.strip = r.strip;
+    this.clearHistogram();
+    this.opened(r.edit, r.reason);
+    await this.fetchHistogram();
+  }
+
+  /**
    * Selects the photo after or before the current one (← and →). Nothing
    * at either end: the strip does not wrap.
    */
