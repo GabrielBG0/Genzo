@@ -302,3 +302,59 @@ describe('DevelopSession, the strip (LIB-09)', () => {
     expect(selects).toEqual([2, 3, 2, 3, 4, 5]);
   });
 });
+
+describe('DevelopSession, before / after (WF-02)', () => {
+  it('toggles the before, records nothing, and a change shows the after again', async () => {
+    const { engine, session } = await open();
+    session.change([{ Exposure: 1 }]);
+    await settled(session);
+    const revision = session.edit?.revision;
+    session.toggleBefore();
+    // At once, before the reply.
+    expect(session.before).toBe(true);
+    await settled(session);
+    expect(session.before).toBe(true);
+    expect(session.edit?.revision).toBe(revision);
+    expect(session.canUndo).toBe(true);
+    expect(engine.sent.at(-1)).toEqual({ type: 'showBefore', photo: session.photo, before: true });
+    // Twice quickly: back to the after.
+    session.toggleBefore();
+    session.toggleBefore();
+    await settled(session);
+    expect(session.before).toBe(true);
+    // A drag's start turns it off at once.
+    session.change([{ Contrast: 10 }], 'Start');
+    expect(session.before).toBe(false);
+    session.change([{ Contrast: 20 }], 'End');
+    await settled(session);
+    expect(session.before).toBe(false);
+    expect(session.edit?.before).toBe(false);
+  });
+
+  it('undo turns it off, and a switch opens the next photo with its edit', async () => {
+    const { session } = await open();
+    session.change([{ Exposure: 1 }]);
+    await settled(session);
+    session.toggleBefore();
+    await settled(session);
+    session.undo();
+    expect(session.before).toBe(false);
+    await settled(session);
+    expect(session.edit?.before).toBe(false);
+    session.toggleBefore();
+    await settled(session);
+    await session.step('next');
+    expect(session.before).toBe(false);
+  });
+
+  it('does nothing for a photo that does not render', async () => {
+    const { engine, session } = await open();
+    const broken = session.strip.photos.find((p) => p.kind !== 'renders');
+    if (!broken) throw new Error('the demo folder has a photo that does not render');
+    await session.select(broken.id);
+    engine.sent.length = 0;
+    session.toggleBefore();
+    expect(session.before).toBe(false);
+    expect(engine.sent).toEqual([]);
+  });
+});

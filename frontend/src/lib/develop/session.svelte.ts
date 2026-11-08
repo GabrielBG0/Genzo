@@ -16,7 +16,10 @@ import type { Engine } from '../engine/types';
 import { tokenRgba, type Rgba8 } from './tokens';
 
 /** Commands that change the open photo's edit and answer with it. */
-type EditCommand = Extract<Command, { type: 'applyEditDelta' | 'resetParam' | 'pickWhiteBalance' | 'undo' | 'redo' }>;
+type EditCommand = Extract<
+  Command,
+  { type: 'applyEditDelta' | 'resetParam' | 'pickWhiteBalance' | 'undo' | 'redo' | 'showBefore' }
+>;
 /**
  * Every command that goes in order with the edits: the clipping preview
  * belongs to the gesture it is sent in, so it must not overtake its start.
@@ -78,6 +81,8 @@ export class DevelopSession {
   /** Which J overlays are on. */
   overlay = $state({ shadows: false, highlights: false });
   private optimistic: Edit | null = $state(null);
+  /** The before asked for, until every command sent has answered (WF-02). */
+  private wantBefore: boolean | null = $state(null);
 
   /** The edit the panel shows: the optimistic one during a gesture. */
   readonly shown: Edit | null = $derived(this.edit ? (this.optimistic ?? this.edit.edit) : null);
@@ -116,6 +121,11 @@ export class DevelopSession {
   /** Whether the open photo can be edited: it renders. */
   get editable(): boolean {
     return this.edit !== null && this.edit.photo === this.strip.current;
+  }
+
+  /** The viewport shows the photo's before, its defaults (WF-02). */
+  get before(): boolean {
+    return this.editable && (this.wantBefore ?? this.edit?.before ?? false);
   }
 
   get canUndo(): boolean {
@@ -196,6 +206,8 @@ export class DevelopSession {
     const photo = this.photo;
     if (photo === null || !this.editable) return;
     this.optimistic = changes.reduce((e, c) => applyChange(e, c, kindOf(e)), this.shown as Edit);
+    // A change shows the after (WF-02).
+    if (this.before) this.wantBefore = false;
     this.inGesture = phase !== 'End';
     this.gestureChanges = this.inGesture ? changes : null;
     // The engine ends the preview with the gesture.
@@ -217,15 +229,28 @@ export class DevelopSession {
   /** Resets one control, or the whole edit with `null` (APP-10: one step). */
   reset(param: Parameters<typeof resetCommand>[1]): void {
     if (this.photo === null || !this.editable) return;
+    if (this.before) this.wantBefore = false;
     this.send(resetCommand(this.photo, param));
   }
 
   undo(): void {
-    if (this.canUndo) this.send({ type: 'undo', photo: this.photo as number });
+    if (!this.canUndo) return;
+    if (this.before) this.wantBefore = false;
+    this.send({ type: 'undo', photo: this.photo as number });
   }
 
   redo(): void {
-    if (this.canRedo) this.send({ type: 'redo', photo: this.photo as number });
+    if (!this.canRedo) return;
+    if (this.before) this.wantBefore = false;
+    this.send({ type: 'redo', photo: this.photo as number });
+  }
+
+  /** \ and the quick action: the before or the after (WF-02). Nothing is recorded. */
+  toggleBefore(): void {
+    if (this.photo === null || !this.editable) return;
+    const before = !this.before;
+    this.wantBefore = before;
+    this.send({ type: 'showBefore', photo: this.photo, before });
   }
 
   togglePicker(): void {
@@ -324,6 +349,7 @@ export class DevelopSession {
 
   private opened(edit: PhotoEdit | null, reason: string | null) {
     this.reason = reason;
+    this.wantBefore = null;
     if (edit) this.accept(edit);
     else this.edit = null;
   }
@@ -364,6 +390,7 @@ export class DevelopSession {
       // Every command sent has answered: the engine's edit is the truth,
       // clamped as it clamps.
       if (!this.inGesture && this.frame === null) this.optimistic = null;
+      this.wantBefore = null;
       for (const resolve of this.idlers.splice(0)) resolve();
     }
   }

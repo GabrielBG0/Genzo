@@ -368,7 +368,8 @@ Spec template for each feature: **Behavior** (what it does, step by step), **Inp
 ### WF-02 · Before / After
 - Priority: P0 · Screens: W2
 - Scope: Y side by side, Alt Y top and bottom, Shift Y split, \ hold before. Copy after to before, before to after, swap. Choose what "before" is: import, a snapshot or a history step.
-- Spec: _to be written_
+- Decided: in M1, \ toggles the before, and the before is the photo's defaults (2026-11-07).
+- Spec: [WF-02.md](../specs/WF-02.md) (M1 part: the toggle)
 
 ### WF-03 · History
 - Priority: P0 · Screens: D1

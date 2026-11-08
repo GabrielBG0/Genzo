@@ -74,6 +74,11 @@
     () => session.editable,
   );
   registry.bind(
+    'develop.beforeAfter',
+    () => session.toggleBefore(),
+    () => session.editable,
+  );
+  registry.bind(
     'develop.picker',
     () => session.togglePicker(),
     () => session.editable,
@@ -187,6 +192,7 @@
     {module}
     catalog={current ? current.fileName : 'No folder open'}
     progress={{ 'module.export': exports.progress }}
+    on={{ 'develop.beforeAfter': session.before }}
     {onmodule}
   />
   <main>
@@ -201,6 +207,7 @@
         onpick={(x, y) => session.pick(x, y)}
         {onresize}
         empty={session.reason ?? 'No photo open'}
+        badge={session.before ? 'Before' : null}
       />
     </div>
     <aside class="right pane" aria-label="Right panel">

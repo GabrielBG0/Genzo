@@ -242,7 +242,7 @@ impl Engine {
             s.strip.direction = Direction::Next;
             if s.strip.photos.is_empty() {
                 s.end_gesture();
-                s.open = None;
+                s.set_open(None);
             }
             s.strip.photos.first().map(|(id, _)| *id)
         };
@@ -337,7 +337,7 @@ impl Engine {
             s.end_gesture();
             s.strip.direction = Direction::of(s.strip.current, index, s.strip.direction);
             s.strip.current = Some(index);
-            s.open = None;
+            s.set_open(None);
             let out = match s.view {
                 ViewSpec::Fit(out) | ViewSpec::Region { out, .. } => out,
             };
@@ -357,7 +357,7 @@ impl Engine {
         // once, its input decoded after, before any neighbor.
         if let Some(c) = level1 {
             gpu.open_level1(id, c.info.clone(), c.level1.clone())?;
-            self.session.lock().expect("session").open = Some(id);
+            self.session.lock().expect("session").set_open(Some(id));
             self.replan(Some((id, path)));
             return self.render(false, Phase::End);
         }
@@ -400,7 +400,7 @@ impl Engine {
         } else if kept.is_none() {
             self.show(id, None);
         }
-        self.session.lock().expect("session").open = Some(id);
+        self.session.lock().expect("session").set_open(Some(id));
         self.replan(None);
         self.render(false, Phase::End)
     }

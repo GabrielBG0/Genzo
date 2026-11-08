@@ -19,6 +19,8 @@
     quickActions?: QuickAction[][];
     /** A quick action's progress ring, 0 to 1, by command (OUT-01's export). */
     progress?: Record<string, number | null>;
+    /** Quick actions that are toggles, and whether each is on (APP-03). */
+    on?: Record<string, boolean>;
     onmodule?: (m: Module) => void;
     onmenu?: () => void;
     onsearch?: () => void;
@@ -42,6 +44,7 @@
     libraryEnabled = false,
     quickActions = DEVELOP_ACTIONS,
     progress = {},
+    on = {},
     onmodule,
     onmenu,
     onsearch,
@@ -80,7 +83,8 @@
         {@const cmd = registry.get(action.command)}
         {@const done = progress[action.command] ?? null}
         <button
-          class="qa"
+          class={['qa', on[action.command] && 'on']}
+          aria-pressed={action.command in on ? on[action.command] : undefined}
           aria-label={registry.title(action.command)}
           title={registry.title(action.command)}
           disabled={!cmd.enabled()}
@@ -216,6 +220,11 @@
 
   .qa:hover:not(:disabled) {
     background: var(--hover);
+  }
+
+  .qa.on {
+    color: var(--accent-soft);
+    background: var(--toggle-on-bg);
   }
 
   .qa:disabled {
