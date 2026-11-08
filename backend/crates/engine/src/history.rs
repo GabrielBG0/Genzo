@@ -117,6 +117,10 @@ impl PhotoEdits {
 
     /// How many deltas, undos and redos it took: a reply with a higher
     /// revision is newer.
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
     /// The photo's size in pixels in `edit`'s orientation, before its
     /// crop, and the size of the image it frames, in whole pixels as its
     /// frames name it (DEV-01, *Crop and rotation coordinates*).
@@ -125,10 +129,6 @@ impl PhotoEdits {
         let oriented = shown(self.size, g.orientation(self.file_orientation));
         let framed = Frame::of(&g, self.file_orientation).pixel_size(self.size);
         (oriented, framed)
-    }
-
-    pub fn revision(&self) -> u64 {
-        self.revision
     }
 
     pub fn steps(&self) -> &[Step] {

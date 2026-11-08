@@ -122,14 +122,16 @@ export class ZoomState {
 
   /** The view's size changes; at 1:1 its center stays on the same photo point. */
   resize(width: number, height: number): void {
-    this.view = { width, height };
+    if (width !== this.view.width || height !== this.view.height) this.view = { width, height };
     this.setCenter(this.center);
   }
 
   /** The shown image's size, from an edit reply; a new photo opens on its center. */
   setShown(width: number, height: number, newPhoto: boolean): void {
     const was = this.shown;
-    this.shown = { width, height };
+    // Assigned only on a change: every edit reply comes here, and a new
+    // object would send the same view again.
+    if (was.width !== width || was.height !== height) this.shown = { width, height };
     if (newPhoto || was.width <= 0 || was.height <= 0) {
       this.center = { x: width / 2, y: height / 2 };
     } else if (was.width !== width || was.height !== height) {
@@ -142,7 +144,8 @@ export class ZoomState {
   /** Clamps the center so the photo leaves no gap it could fill. */
   private setCenter(c: Point): void {
     const o = { x: axis(c.x, this.view.width, this.shown.width), y: axis(c.y, this.view.height, this.shown.height) };
-    this.center = { x: o.x + this.view.width / 2, y: o.y + this.view.height / 2 };
+    const next = { x: o.x + this.view.width / 2, y: o.y + this.view.height / 2 };
+    if (next.x !== this.center.x || next.y !== this.center.y) this.center = next;
   }
 }
 

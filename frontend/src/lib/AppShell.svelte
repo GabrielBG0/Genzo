@@ -228,6 +228,8 @@
   $effect(() => {
     const { width, height } = zoom.view;
     const request = zoom.request;
+    // Again once a switch has answered: the engine opens each photo at Fit.
+    void session.edit?.photo;
     if (width === 0 || height === 0) return;
     if (viewFrame !== null) cancelAnimationFrame(viewFrame);
     viewFrame = requestAnimationFrame(() => {
@@ -413,6 +415,7 @@
         empty={session.reason ?? 'No photo open'}
         badge={session.before ? 'Before' : null}
         view={zoom}
+        zoomable={session.editable}
       >
         {#if toolbarShown && session.editable}
           <PhotoToolbar

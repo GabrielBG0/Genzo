@@ -15,6 +15,8 @@
      * `zoom` places the frame (the spike).
      */
     view?: ZoomState | null;
+    /** A click toggles the zoom: false for a photo that does not render (it stays at Fit). */
+    zoomable?: boolean;
     zoom?: Zoom;
     /** Called after a generation's pixels reached the screen. */
     ondraw?: (generation: number, at: number) => void;
@@ -42,6 +44,7 @@
   let {
     engine = null,
     view = null,
+    zoomable = true,
     zoom = 'fit',
     ondraw,
     onerror,
@@ -125,7 +128,9 @@
   // The transform: Develop's zoom state, or the spike's zoom and pan.
   $effect(() => {
     if (view) {
-      viewport?.setTransform({ zoom: view.level === 'fit' ? 'fit' : 1, origin: view.origin, shown: view.shown });
+      // At Fit the held frame is centered as it comes: before an edit reply
+      // names the new photo's size, the old size would stretch it.
+      viewport?.setTransform(view.level === 'fit' ? { zoom: 'fit' } : { zoom: 1, origin: view.origin, shown: view.shown });
     } else {
       if (zoom === 'fit') pan = { x: 0, y: 0 };
       viewport?.setTransform({ zoom, panX: pan.x, panY: pan.y });
@@ -174,7 +179,7 @@
     if (picking) {
       const point = view ? at && view.normalizedAt(at) : at && viewport?.imagePoint(at.x / devicePixelRatio, at.y / devicePixelRatio);
       if (point) onpick?.(point[0], point[1]);
-    } else if (view && hasFrame) {
+    } else if (view && hasFrame && zoomable) {
       view.toggle(at);
     }
   }
@@ -193,7 +198,7 @@
 
 <!-- A click zooms or picks; Z, Space and W do the same from the keyboard. -->
 <div
-  class={['viewport', picking && 'picking', panning && 'pan', panning && press?.moved && 'grabbing', view && !picking && view.level === 'fit' && hasFrame && 'zoomable']}
+  class={['viewport', picking && 'picking', panning && 'pan', panning && press?.moved && 'grabbing', view && zoomable && !picking && view.level === 'fit' && hasFrame && 'zoomable']}
   bind:this={host}
   role="img"
   aria-label="Photo"

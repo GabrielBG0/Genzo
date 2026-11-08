@@ -38,6 +38,7 @@ Sources: the plan (M1 frontend item 8; *What M0 hands to M1*, items 3 to 6), DEV
 - At Fit: `{ type: 'fit' }` and the view's size in device pixels, as before.
 - At 1:1: `{ type: 'region', zoom: 1, x, y }`, the view's top left in shown-image pixels (negative on a side smaller than the view, which is centered).
 - During a pan, at most once per animation frame, and once more when the pan stops.
+- After a switch has answered, again: the engine opens each photo at Fit (`Develop::select`), so at 1:1 the new photo's region follows its first reply.
 - The shown image's size comes with every edit reply (`PhotoEdit.shown`, contract 0.6.3, additive), with the oriented size before the crop (`PhotoEdit.oriented`, for DEV-12). They follow the crop and the orientation, and the before's while the before shows.
 
 ### The photo toolbar
