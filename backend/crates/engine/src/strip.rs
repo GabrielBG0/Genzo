@@ -194,6 +194,10 @@ impl StripSession {
     /// its notes for the status bar.
     pub(crate) fn learn(&mut self, id: u64, decoded: &Result<(RawSource, u8), EngineError>) {
         if let Some(kind) = PhotoKind::of(decoded) {
+            // A file that no longer renders keeps no notes of an older decode.
+            if !matches!(kind, PhotoKind::Renders) {
+                self.notes.remove(&id);
+            }
             self.kinds.insert(id, kind);
         }
         if let Ok((src, _)) = decoded {

@@ -371,7 +371,9 @@ export class DevelopSession {
       this.shownState.set(e.photo, 'rendered');
       // Its notes are known once it decoded, which can come after the
       // switch's reply (a neighbor shown from its level 1): asked again.
-      if (first && e.photo === this.strip.current && this.edit) void this.refresh();
+      if (first && e.photo === this.strip.current && this.edit) {
+        this.refresh().catch((err: unknown) => this.say(err instanceof Error ? err.message : String(err)));
+      }
     }
   }
 
