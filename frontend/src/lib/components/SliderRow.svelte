@@ -57,7 +57,8 @@
      * sliders' clipping preview (DEV-03). The drag's end ends it on its own.
      */
     onalt?: ((held: boolean) => void) | undefined;
-    oncontextmenu?: (e: MouseEvent) => void;
+    /** A right-click, or the context-menu key: the slider's menu (APP-06), with the value as shown. */
+    oncontextmenu?: (e: MouseEvent, shown: string) => void;
   }
 
   let {
@@ -184,6 +185,14 @@
 
   function onkeydown(e: KeyboardEvent) {
     if (disabled || typing) return;
+    // The context-menu key and Shift F10 open the slider's menu (APP-06),
+    // at the slider: not every platform sends `contextmenu` for them.
+    if (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10')) {
+      e.preventDefault();
+      e.stopPropagation();
+      (e.currentTarget as HTMLElement).dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+      return;
+    }
     const big = e.shiftKey ? shiftStep : step;
     const delta =
       e.key === 'ArrowRight' || e.key === 'ArrowUp'
@@ -253,7 +262,7 @@
   oncontextmenu={(e) => {
     if (oncontextmenu) {
       e.preventDefault();
-      oncontextmenu(e);
+      if (!disabled && !dragging && !typing) oncontextmenu(e, shown);
     }
   }}
 >

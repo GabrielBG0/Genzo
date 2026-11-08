@@ -25,10 +25,40 @@
     items: MenuItem[];
     label?: string;
     width?: number;
+    /** A header naming the target and its value (APP-06's Decided style). */
+    header?: { name: string; value: string } | null;
+    /** Focus the first enabled item when shown, and move with ↑ ↓; Esc closes. */
+    autofocus?: boolean;
     onclose?: () => void;
   }
-  let { items, label = '', width = 260, onclose }: Props = $props();
+  let { items, label = '', width = 260, header = null, autofocus = false, onclose }: Props = $props();
   const registry = useRegistry();
+  let menuEl: HTMLDivElement | undefined = $state();
+
+  function enabledItems(): HTMLButtonElement[] {
+    return menuEl ? [...menuEl.querySelectorAll<HTMLButtonElement>('button.item:not(:disabled)')] : [];
+  }
+
+  $effect(() => {
+    if (autofocus) enabledItems()[0]?.focus();
+  });
+
+  function onkeydown(e: KeyboardEvent) {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      onclose?.();
+      return;
+    }
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+    e.preventDefault();
+    e.stopPropagation();
+    const all = enabledItems();
+    if (all.length === 0) return;
+    const at = all.indexOf(document.activeElement as HTMLButtonElement);
+    const next = e.key === 'ArrowDown' ? (at + 1) % all.length : (at - 1 + all.length) % all.length;
+    all[next]?.focus();
+  }
 
   function shortcutOf(item: Exclude<MenuItem, { separator: true }>): string {
     if (item.shortcut !== undefined) return item.shortcut;
@@ -43,7 +73,12 @@
   }
 </script>
 
-<div class="menu" role="menu" aria-label={label} style:width="{width}px">
+<div class="menu" role="menu" tabindex="-1" aria-label={label} style:width="{width}px" bind:this={menuEl} {onkeydown}>
+  {#if header}
+    <div class="header" role="presentation">
+      <span>{header.name}</span><span class="header-value mono">{header.value}</span>
+    </div>
+  {/if}
   {#each items as item, i (i)}
     {#if item.separator}
       <div class="sep" role="separator"></div>
@@ -130,6 +165,28 @@
     width: 10px;
     flex: none;
     color: var(--text-muted);
+  }
+
+  .header {
+    display: flex;
+    gap: 8px;
+    padding: 4px 10px 6px 30px;
+    font-size: var(--text-caption);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+  }
+
+  .header-value {
+    color: var(--accent-soft);
+    text-transform: none;
+  }
+
+  .item:focus-visible {
+    outline: none;
+    background: var(--lens-bg);
+    border-color: var(--lens-border-color);
+    color: var(--text-on-lens);
   }
 
   .sep {
