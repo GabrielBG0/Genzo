@@ -54,6 +54,46 @@ button {
   color: var(--text-on-lens);
 }
 
+/*
+ * The one indicator of a segmented group or tab bar (`slidingLens`): it
+ * slides to the chosen item and squeezes while an item is pressed. The
+ * items sit above it.
+ */
+.sliding-lens {
+  position: absolute;
+  z-index: 0;
+  pointer-events: none;
+  transition:
+    left var(--t-indicator) var(--ease-indicator),
+    top var(--t-indicator) var(--ease-indicator),
+    width var(--t-indicator) var(--ease-indicator),
+    height var(--t-indicator) var(--ease-indicator),
+    opacity var(--t-fast) ease-out,
+    transform var(--t-fast) ease-out;
+}
+
+.sliding-lens.menu-lens {
+  transition:
+    top 55ms ease-out,
+    height 55ms ease-out,
+    opacity 50ms ease-out;
+}
+
+.sliding-lens.pressed {
+  transform: scale(0.95, 0.9);
+}
+
+[data-segment] {
+  position: relative;
+  z-index: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sliding-lens {
+    transition: none;
+  }
+}
+
 .overlay {
   background: var(--overlay-bg);
   border: 1px solid var(--overlay-border-color);

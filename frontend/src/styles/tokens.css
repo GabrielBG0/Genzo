@@ -137,4 +137,7 @@
 
   /* Motion */
   --t-fast: 80ms;
+  /* Selection indicators slide over 180 ms, no bounce or overshoot (APP-01). */
+  --t-indicator: 180ms;
+  --ease-indicator: cubic-bezier(0.22, 1, 0.36, 1);
 }

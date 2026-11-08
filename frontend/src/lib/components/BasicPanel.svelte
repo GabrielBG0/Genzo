@@ -7,6 +7,7 @@
   import { EXPOSURE, PARAM_OF, RAW_TEMP, RAW_TINT, SLIDER, type ValueField } from '../engine/edit';
   import { useRegistry } from '../shortcuts/context';
   import Icon from './Icon.svelte';
+  import { slidingLens } from './indicator.svelte';
   import Menu, { type MenuItem } from './Menu.svelte';
   import PanelHeader from './PanelHeader.svelte';
   import SliderRow from './SliderRow.svelte';
@@ -180,18 +181,26 @@
         </select>
         <span class="chevron" aria-hidden="true">⌄</span>
       </span>
-      <div class="toggle" role="radiogroup" aria-label="Treatment" title={registry.title('develop.treatment')}>
+      <div
+        class="toggle"
+        role="radiogroup"
+        aria-label="Treatment"
+        title={registry.title('develop.treatment')}
+        {@attach slidingLens(() => (mono ? 1 : edit ? 0 : null))}
+      >
         <button
           role="radio"
           aria-checked={!mono}
-          class={[!mono && edit && 'lens']}
+          data-segment
+          class={[!mono && edit && 'on']}
           disabled={!edit}
           onclick={() => mono && session.change([{ Treatment: 'Color' }])}>Color</button
         >
         <button
           role="radio"
           aria-checked={mono}
-          class={[mono && 'lens']}
+          data-segment
+          class={[mono && 'on']}
           disabled={!edit}
           onclick={() => !mono && session.change([{ Treatment: 'Monochrome' }])}
           >B&amp;W <span class="key mono">{registry.shortcut('develop.treatment')}</span></button
@@ -402,6 +411,10 @@
     padding: 1px 8px;
     border-radius: var(--r-pill);
     border: 1px solid transparent;
+  }
+
+  .toggle button.on {
+    color: var(--text-on-lens);
   }
 
   .toggle button:disabled {

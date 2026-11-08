@@ -13,7 +13,7 @@ Spec template for each feature: **Behavior** (what it does, step by step), **Inp
 - Scope: Library, Develop, Map, Print and Export as pill tabs in the top bar, with one lens indicator that slides to the new tab. G goes to Library grid, D to Develop.
 - Decided: the indicator moves left and width over 180 ms, cubic-bezier(.22,1,.36,1), with no bounce or overshoot, and scales to (.95, .9) while pressed (2026-11-05). See the handoff's Design system.
 - Open questions: Should module state (zoom, open panels) be remembered per photo or per module?
-- Spec: _to be written_
+- Spec: [APP-01.md](../specs/APP-01.md) (M1 part)
 
 ### APP-02 · App menu behind the logo
 - Priority: P0 · Screens: M2
@@ -27,7 +27,7 @@ Spec template for each feature: **Behavior** (what it does, step by step), **Inp
 - Scope: One-click buttons next to the app menu, different per module. Default Library: Import, Export, Quick Collection, Undo, Redo. Default Develop: Undo, Redo, Copy settings, Paste settings, Before/After, Reset all, Export. Customizable and reorderable per module, suggestions based on usage, "Pin to top bar" from any right-click menu. The buttons are flat, not lens.
 - Decided: buttons are 28 px tall with radius 6, transparent or rgba(255,255,255,.07), and .11 on hover. A toggle that is on has accent-soft text on rgba(255,255,255,.13). Groups are flat containers with radius 8 (2026-11-05). See the handoff's Design system.
 - Open questions: Is usage tracking for suggestions local only and can it be turned off?
-- Spec: _to be written_
+- Spec: [APP-03.md](../specs/APP-03.md) (M1 part)
 
 ### APP-04 · Command search (Ctrl K)
 - Priority: P1 · Screens: W5

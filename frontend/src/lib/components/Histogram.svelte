@@ -3,6 +3,7 @@
   import { clippedChannels, clippedShare, plotScale } from '../develop/histogram';
   import { useRegistry } from '../shortcuts/context';
   import Icon from './Icon.svelte';
+  import { slidingLens } from './indicator.svelte';
   import type { IconName } from './icons';
 
   export type Tool = 'edit' | 'crop' | 'remove' | 'masking';
@@ -112,11 +113,12 @@
 </div>
 
 {#if !notools}
-  <div class="tools" role="toolbar" aria-label="Tools">
+  <div class="tools" role="toolbar" aria-label="Tools" {@attach slidingLens(() => tools.findIndex((t) => t.id === tool))}>
     {#each tools as t (t.id)}
       {@const title = t.command ? registry.title(t.command) : t.label}
       <button
-        class={['tool', t.id === tool && 'lens']}
+        data-segment
+        class={['tool', t.id === tool && 'on']}
         aria-label={title}
         {title}
         aria-pressed={t.id === tool}
@@ -233,6 +235,10 @@
     padding: 2px;
     border-radius: var(--r-pill);
     background: var(--trough-soft);
+  }
+
+  .tool.on {
+    color: var(--text-on-lens);
   }
 
   .tool {

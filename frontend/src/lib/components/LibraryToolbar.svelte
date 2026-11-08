@@ -1,5 +1,6 @@
 <script lang="ts">
   import { useRegistry } from '../shortcuts/context';
+  import { slidingLens } from './indicator.svelte';
 
   export type LibraryView = 'grid' | 'loupe' | 'compare' | 'survey';
 
@@ -26,9 +27,9 @@
 </script>
 
 <div class="toolbar" role="toolbar" aria-label="Library toolbar">
-  <span class="segments">
+  <span class="segments" {@attach slidingLens(() => views.findIndex((v) => v.id === view))}>
     {#each views as v (v.id)}
-      <button class={['seg', v.id === view && 'lens']} aria-pressed={v.id === view} onclick={() => onview?.(v.id)}>
+      <button data-segment class={['seg', v.id === view && 'on']} aria-pressed={v.id === view} onclick={() => onview?.(v.id)}>
         {v.label} <span class="key mono">{keyOf(v)}</span>
       </button>
     {/each}
@@ -57,6 +58,10 @@
     padding: 2px;
     border-radius: var(--r-pill);
     background: var(--trough-soft);
+  }
+
+  .seg.on {
+    color: var(--text-on-lens);
   }
 
   .seg {

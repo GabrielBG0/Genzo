@@ -599,3 +599,47 @@ test('The status bar: where you are, what shows, and why (APP-07)', async ({ pag
   await frames.nth(3).click();
   await expect(bar.getByText(note)).toBeHidden();
 });
+
+test('One indicator slides to the chosen tab or segment; the menu has one highlight (APP-01, APP-03)', async ({
+  page,
+}) => {
+  await develop(page);
+  const modules = page.getByRole('navigation', { name: 'Modules' });
+  const lensOver = async (
+    group: ReturnType<Page['locator']>,
+    name: string | RegExp,
+    role: 'button' | 'radio' | 'menuitem' = 'button',
+  ) => {
+    const lens = await group.locator('.sliding-lens').boundingBox();
+    const item = await group.getByRole(role, { name }).boundingBox();
+    if (!lens || !item) throw new Error('no box');
+    expect(Math.abs(lens.x - item.x)).toBeLessThan(1);
+    expect(Math.abs(lens.width - item.width)).toBeLessThan(1);
+  };
+  // One lens in the tab bar, on Develop; Library waits for M2, and D keeps Develop.
+  await expect(modules.locator('.sliding-lens')).toHaveCount(1);
+  await expect(modules.getByRole('button', { name: 'Library' })).toBeDisabled();
+  await page.keyboard.press('d');
+  await expect(modules.getByRole('button', { name: 'Develop' })).toHaveAttribute('aria-current', 'page');
+  await expect(async () => lensOver(modules, 'Develop')).toPass();
+
+  // Color / B&W: V moves the indicator, after its 180 ms slide.
+  const treatment = page.getByRole('radiogroup', { name: 'Treatment' });
+  await expect(async () => lensOver(treatment, 'Color', 'radio')).toPass();
+  await page.keyboard.press('v');
+  await expect(treatment.getByRole('radio', { name: /B&W/ })).toHaveAttribute('aria-checked', 'true');
+  await expect(async () => lensOver(treatment, /B&W/, 'radio')).toPass();
+
+  // The quick actions are flat buttons, with no lens (APP-03).
+  await expect(page.getByRole('toolbar', { name: 'Quick actions' }).locator('.lens')).toHaveCount(0);
+
+  // The app menu: one highlight, which follows the keyboard.
+  await page.getByRole('button', { name: /App menu/ }).click();
+  const menu = page.getByRole('menu', { name: 'App menu' });
+  await expect(menu.locator('.sliding-lens')).toHaveCount(1);
+  await expect(async () => lensOver(menu, /Open folder/, 'menuitem')).toPass();
+  await page.keyboard.press('ArrowDown');
+  await expect(async () => lensOver(menu, /Export/, 'menuitem')).toPass();
+  await page.keyboard.press('Escape');
+  await expect(menu).toBeHidden();
+});
