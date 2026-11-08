@@ -109,6 +109,16 @@
     d.started = true;
   }
 
+  /** Ends a drag that sent its start, so the gesture never stays open. */
+  function endDrag() {
+    const d = drag;
+    drag = null;
+    if (d?.started && tool.frame) tool.sendFrame(tool.frame, 'End');
+  }
+
+  // A drag cut short by the overlay going (Esc, Enter or R mid-drag) ends too.
+  $effect(() => () => endDrag());
+
   function onpointerup(e: PointerEvent) {
     const el = e.currentTarget as Element;
     if (line) {
@@ -119,9 +129,7 @@
       tool.straightening = false;
       return;
     }
-    const d = drag;
-    drag = null;
-    if (d?.started && frame) tool.sendFrame(frame, 'End');
+    endDrag();
   }
 
   const CURSORS: Record<Grip, string> = {
@@ -148,8 +156,8 @@
   {onpointermove}
   {onpointerup}
   onpointercancel={() => {
-    drag = null;
     line = null;
+    endDrag();
   }}
 >
   {#if frame && place}
