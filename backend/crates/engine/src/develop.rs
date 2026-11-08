@@ -55,6 +55,9 @@ pub(crate) struct Session {
     /// The open photo shows its before, its defaults (WF-02): until a
     /// change to its edit or a switch.
     pub(crate) before: bool,
+    /// The open photo shows whole and level, without its crop, for the crop
+    /// tool (DEV-12): until the tool closes or a switch.
+    pub(crate) uncropped: bool,
 }
 
 impl Default for Session {
@@ -70,6 +73,7 @@ impl Default for Session {
             provisional: None,
             overlay: Overlay::default(),
             before: false,
+            uncropped: false,
         }
     }
 }
@@ -93,6 +97,22 @@ impl Session {
     pub(crate) fn set_open(&mut self, id: Option<u64>) {
         self.open = id;
         self.before = false;
+        self.uncropped = false;
+    }
+
+    /// The edit photo `id` shows: its before (WF-02) or its edit, without
+    /// its crop while the crop tool shows it whole (DEV-12).
+    fn shown_edit(&self, id: u64, p: &PhotoEdits) -> Edit {
+        let open = self.open == Some(id);
+        let mut edit = if open && self.before {
+            p.defaults().clone()
+        } else {
+            p.current().clone()
+        };
+        if open && self.uncropped {
+            edit.crop = genzo_model::edit::Crop::default();
+        }
+        edit
     }
 
     /// Whether `photo` shows its before.
@@ -131,6 +151,8 @@ pub struct EditState {
     /// What the pipeline does not do as the file asks, for the status bar
     /// (APP-07): empty until the photo's input is decoded.
     pub notes: Vec<String>,
+    /// The photo shows whole and level for the crop tool (DEV-12).
+    pub uncropped: bool,
     /// The shown edit's oriented size, before its crop, and the size of
     /// the image it frames ([`PhotoEdits::sizes`]): the before's when it
     /// shows.
@@ -341,6 +363,23 @@ impl Engine {
         self.render(false, Phase::End)
     }
 
+    /// Shows photo `photo` whole and level, without its crop, for the crop
+    /// tool (DEV-12), or with its crop again, and renders it settled.
+    /// Nothing is recorded; a gesture in progress ends first. Changes to
+    /// the edit keep it; a switch ends it. For a photo not open, nothing
+    /// changes.
+    pub fn show_uncropped(&self, photo: u64, uncropped: bool) -> Result<Applied, EngineError> {
+        {
+            let mut s = self.session.lock().expect("session");
+            if s.open != Some(photo) {
+                return unchanged(&s, photo);
+            }
+            s.end_gesture();
+            s.uncropped = uncropped;
+        }
+        self.render(false, Phase::End)
+    }
+
     /// Undoes the open photo's last step and renders it settled. Nothing
     /// changes without a step to undo, or during a gesture.
     pub fn undo(&self) -> Result<Applied, EngineError> {
@@ -499,11 +538,10 @@ pub(crate) fn render_when(
             s.overlay.preview = Preview::None;
         }
         let p = &s.edits[&id];
-        let edit = if s.before { p.defaults() } else { p.current() };
         let request = DevelopRequest {
             generation,
             photo: id,
-            edit: edit.clone(),
+            edit: s.shown_edit(id, p),
             view: s.view,
             target: s.target,
             phase,
@@ -604,7 +642,7 @@ fn unchanged(s: &Session, photo: u64) -> Result<Applied, EngineError> {
 /// Photo `id`'s edit as the panels and the status bar show it.
 fn state(s: &Session, id: u64, p: &PhotoEdits) -> EditState {
     let before = s.shows_before(id);
-    let (oriented, shown) = p.sizes(if before { p.defaults() } else { p.current() });
+    let (oriented, shown) = p.sizes(&s.shown_edit(id, p));
     EditState {
         photo: id,
         edit: p.current().clone(),
@@ -614,6 +652,7 @@ fn state(s: &Session, id: u64, p: &PhotoEdits) -> EditState {
         revision: p.revision(),
         before,
         notes: s.strip.notes_of(id).to_vec(),
+        uncropped: s.uncropped && s.open == Some(id),
         oriented,
         shown,
     }

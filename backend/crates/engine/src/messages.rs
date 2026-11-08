@@ -116,6 +116,9 @@ impl Engine {
             Command::ShowBefore { photo, before } => {
                 self.edited(photo, self.show_before(photo, before))
             }
+            Command::ShowUncropped { photo, uncropped } => {
+                self.edited(photo, self.show_uncropped(photo, uncropped))
+            }
             Command::Undo { photo } => self.edited(photo, self.undo_of(photo)),
             Command::Redo { photo } => self.edited(photo, self.redo_of(photo)),
             Command::ExportJpeg {
@@ -217,6 +220,7 @@ pub(crate) fn photo_edit(s: EditState) -> PhotoEdit {
         redo: s.redo,
         revision: s.revision,
         before: s.before,
+        uncropped: s.uncropped,
         notes: s.notes,
         oriented: api::Size {
             width: s.oriented.0,

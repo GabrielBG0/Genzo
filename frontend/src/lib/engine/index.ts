@@ -29,6 +29,8 @@ export async function connectEngine(): Promise<Engine> {
     // `?exportStep=MS`: the fake's exports take ten steps of MS (e2e tests).
     const step = Number(params.get('exportStep'));
     if (step > 0) fake.exportStepMs = step;
+    // Tests read what the fake was sent (`counts`) through the page.
+    Object.assign(window, { __genzoFake: fake });
     engine = fake;
   }
   const result = await engine.handshake({ contractVersion: CONTRACT_VERSION });

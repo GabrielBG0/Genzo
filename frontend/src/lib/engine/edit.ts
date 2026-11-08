@@ -1,4 +1,5 @@
 import type { Change, Edit, Param, WhiteBalanceMode } from '$contract/genzo';
+import { flippedCrop, turnedCrop } from './geometry';
 
 /**
  * The edit's rules as the engine applies them, for the fake engine and the
@@ -155,10 +156,10 @@ export function deltaLabel(changes: Change[]): string {
 }
 
 /**
- * One change applied, then clamped: mirrors `PhotoEdits::change`. The fake
- * engine does not fit the crop to the image (it accepts any clamped crop)
- * and turns and flips without mapping the crop: the Basic panel needs
- * neither, and the crop tool (DEV-12) brings them.
+ * One change applied, then clamped: mirrors `PhotoEdits::change`. A turn or
+ * a flip moves the crop with the image (DEV-01). Fitting the crop needs the
+ * photo's size: the fake's history does it (`PhotoEdits`), and the app's
+ * optimistic values leave it to the engine's answer.
  */
 export function applyChange(e: Edit, c: Change, kind: EditKind): Edit {
   const d = defaults(kind);
@@ -166,8 +167,13 @@ export function applyChange(e: Edit, c: Change, kind: EditKind): Edit {
   if (c === 'ResetAll') return clamped(d, kind);
   if (c === 'Flip') {
     out.flip_horizontal = !out.flip_horizontal;
+    out.crop = flippedCrop(out.crop);
   } else if ('Turn' in c) {
-    out.quarter_turns = (out.quarter_turns + (c.Turn.clockwise ? 1 : 3)) % 4;
+    // Counterclockwise is three clockwise turns.
+    for (let i = 0; i < (c.Turn.clockwise ? 1 : 3); i++) {
+      out.crop = turnedCrop(out.crop, out.flip_horizontal);
+      out.quarter_turns = (out.quarter_turns + 1) % 4;
+    }
   } else if ('Reset' in c) {
     resetParam(out, d, c.Reset);
   } else if ('Profile' in c) {

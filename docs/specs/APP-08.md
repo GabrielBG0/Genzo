@@ -8,7 +8,9 @@ Sources: FEATURES.md (APP-08), the shortcut registry's View commands (`view.side
 - **Tab and Shift Tab act on the panels only when no control has focus.** With a slider, button, field or menu item focused, they move focus as usual, so keyboard navigation keeps working.
 - **"Hide all" hides the side panels and the filmstrip.** The top bar (app menu, quick actions, modules) and the status bar stay, so commands and the edited state stay in view.
 
-**Out of scope for M1:** T (the photo toolbar, which M1 does not have yet), resizable side panels and their widths (FEATURES.md's open question), screen modes and Lights Out (APP-09), remembering the layout across launches (it needs the settings store).
+T hides and shows the photo toolbar (`view.toolbar`, the viewport spec `DEV-01-viewport.md`), which came after this spec.
+
+**Out of scope for M1:** resizable side panels and their widths (FEATURES.md's open question), screen modes and Lights Out (APP-09), remembering the layout across launches (it needs the settings store).
 
 ## Behavior
 

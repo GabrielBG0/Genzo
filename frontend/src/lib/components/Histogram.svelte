@@ -122,6 +122,7 @@
         aria-label={title}
         {title}
         aria-pressed={t.id === tool}
+        disabled={t.command !== undefined && !registry.get(t.command).enabled() && t.id !== tool}
         onclick={() => ontool?.(t.id)}
       >
         <Icon name={t.icon} size={16} stroke={1.7} />

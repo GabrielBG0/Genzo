@@ -35,13 +35,25 @@
       ],
     },
     { label: 'Edit', items: () => [cmd('edit.undo'), cmd('edit.redo')] },
-    { label: 'Photo', items: () => [cmd('photo.previous'), cmd('photo.next')] },
+    {
+      label: 'Photo',
+      items: () => [
+        cmd('photo.previous'),
+        cmd('photo.next'),
+        sep,
+        cmd('photo.rotateLeft'),
+        cmd('photo.rotateRight'),
+        cmd('photo.flipHorizontal'),
+        cmd('photo.flipVertical'),
+      ],
+    },
     {
       label: 'Develop',
       items: () => [
         cmd('develop.beforeAfter'),
         cmd('develop.resetAll'),
         sep,
+        cmd('develop.crop', 'Crop and rotate'),
         cmd('develop.treatment'),
         cmd('develop.picker'),
         cmd('develop.clipping'),

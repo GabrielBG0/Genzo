@@ -199,8 +199,8 @@ export class ShortcutRegistry {
     if (e.key.startsWith('Arrow') && target?.closest('[role="slider"]')) return false;
     // Tab moves focus between controls; it hides panels only outside them (APP-08).
     if (e.key === 'Tab' && target && isControl(target)) return false;
-    // Space presses a focused button or control; it is a command only outside them.
-    if (e.code === 'Space' && target && isControl(target)) return false;
+    // Space and Enter press a focused button or control; they are commands only outside them.
+    if ((e.code === 'Space' || e.key === 'Enter') && target && isControl(target)) return false;
     const cmd = this.match(e, scope);
     if (!cmd || !cmd.enabled()) return false;
     e.preventDefault();
