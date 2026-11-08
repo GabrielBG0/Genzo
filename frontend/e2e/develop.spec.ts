@@ -326,3 +326,31 @@ test('Export in progress: the ring, and cancelling from the status bar (OUT-01)'
   await expect(ring).toBeHidden();
   await expect(page.getByRole('menu', { name: 'Export' })).toBeHidden();
 });
+
+test('Before / after: \\ and the quick action toggle the before; a drag shows the after (WF-02)', async ({ page }) => {
+  await develop(page);
+  const badge = page.getByRole('img', { name: 'Photo' }).getByRole('status');
+  const quick = page.getByRole('toolbar', { name: 'Quick actions' }).getByRole('button', { name: /^Before \/ after/ });
+  await expect(quick).toHaveAttribute('aria-pressed', 'false');
+  await expect(quick).toHaveAttribute('title', 'Before / after  \\');
+  await drag(page, 'Exposure', 0.5, 0.7);
+  await page.keyboard.press('\\');
+  await expect(badge).toHaveText('Before');
+  await expect(quick).toHaveAttribute('aria-pressed', 'true');
+  // Nothing recorded: the panel keeps the edit, and Undo still names it.
+  await expect(page.getByRole('slider', { name: 'Exposure' })).toHaveAttribute('aria-valuetext', '+2.00');
+  await expect(undo(page)).toHaveAttribute('title', 'Undo Exposure  Ctrl Z');
+  await quick.click();
+  await expect(badge).toBeHidden();
+  await expect(quick).toHaveAttribute('aria-pressed', 'false');
+  // A drag turns the before off.
+  await page.keyboard.press('\\');
+  await expect(badge).toBeVisible();
+  await drag(page, 'Contrast', 0.5, 0.6);
+  await expect(badge).toBeHidden();
+  // In a text field, \ is typed, not the command.
+  await page.getByRole('slider', { name: 'Contrast' }).getByText('+20').click();
+  await expect(page.getByRole('textbox', { name: 'Contrast value' })).toBeFocused();
+  await page.keyboard.press('\\');
+  await expect(badge).toBeHidden();
+});

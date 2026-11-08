@@ -113,6 +113,9 @@ impl Engine {
                 })?;
                 Ok(CommandResult::Done)
             }
+            Command::ShowBefore { photo, before } => {
+                self.edited(photo, self.show_before(photo, before))
+            }
             Command::Undo { photo } => self.edited(photo, self.undo_of(photo)),
             Command::Redo { photo } => self.edited(photo, self.redo_of(photo)),
             Command::ExportJpeg {
@@ -213,6 +216,7 @@ pub(crate) fn photo_edit(s: EditState) -> PhotoEdit {
         undo: s.undo,
         redo: s.redo,
         revision: s.revision,
+        before: s.before,
     }
 }
 

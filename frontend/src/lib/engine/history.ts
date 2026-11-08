@@ -93,6 +93,8 @@ export class PhotoEdits {
       undo: this.undoLabel(),
       redo: this.redoLabel(),
       revision: this.revision,
+      // The engine's session knows; the fake sets it (WF-02).
+      before: false,
     };
   }
 }

@@ -22,7 +22,7 @@ import {
   type TileHeader,
   type WhiteBalancePreset,
 } from '$contract/genzo';
-import type { EditKind } from './edit';
+import { defaults, type EditKind } from './edit';
 import { PhotoEdits } from './history';
 import { encodeTile } from './tiles';
 import type { Engine } from './types';
@@ -197,6 +197,8 @@ export class FakeEngine implements Engine {
   private overlay: { shadows: Rgba | null; highlights: Rgba | null } = { shadows: null, highlights: null };
   /** The Alt preview of the gesture in progress. */
   private preview: ClippingPreview = 'none';
+  /** The open photo shows its before, its defaults (WF-02). */
+  private before = false;
 
   constructor(private readonly contractVersion = CONTRACT_VERSION) {}
 
@@ -230,7 +232,7 @@ export class FakeEngine implements Engine {
       case 'listFolderPhotos':
         return { type: 'folderPhotos', strip: structuredClone(this.strip) };
       case 'getEdit':
-        return { type: 'edit', edit: this.edits.get(query.photo)?.state() ?? null };
+        return { type: 'edit', edit: this.stateOf(this.edits.get(query.photo)) };
       case 'getHistogram': {
         const h = this.histograms.get(query.photo);
         return { type: 'histogram', counted: h ? { photo: query.photo, ...structuredClone(h) } : null };
@@ -324,10 +326,21 @@ export class FakeEngine implements Engine {
       }
       case 'pickWhiteBalance':
         return this.pick(command.photo, command.x, command.y);
+      case 'showBefore': {
+        // As `Engine::show_before`: nothing recorded, a gesture ended first.
+        const p = this.edits.get(command.photo);
+        if (!p) throw new Error(`photo ${command.photo} was not opened this session`);
+        if (this.strip.current === command.photo) {
+          this.endGesture();
+          this.before = command.before;
+          this.renderPhoto();
+        }
+        return { type: 'edit', edit: this.stateOf(p) as PhotoEdit, recorded: false, refused: null };
+      }
       case 'undo':
-        return this.edited(command.photo, (p) => p.undo(), 'End');
+        return this.edited(command.photo, (p) => p.undo(), 'End', false);
       case 'redo':
-        return this.edited(command.photo, (p) => p.redo(), 'End');
+        return this.edited(command.photo, (p) => p.redo(), 'End', false);
       case 'exportJpeg': {
         // The fake writes no file: it remembers the path, refuses as the
         // engine does (an original, an existing file without replace), and
@@ -412,6 +425,7 @@ export class FakeEngine implements Engine {
     const previous = this.folder.findIndex((p) => p.photo.id === this.strip.current);
     if (previous >= 0 && index !== previous) this.strip.direction = index > previous ? 'next' : 'previous';
     this.strip.current = id;
+    this.before = false;
     if (!fake.kind) return { edit: null, reason: fake.photo.reason };
     let edits = this.edits.get(id);
     if (!edits) {
@@ -419,7 +433,7 @@ export class FakeEngine implements Engine {
       this.edits.set(id, edits);
     }
     this.renderPhoto();
-    return { edit: edits.state(), reason: null };
+    return { edit: this.stateOf(edits), reason: null };
   }
 
   /**
@@ -441,12 +455,15 @@ export class FakeEngine implements Engine {
    * does: a photo not open changes nothing, and one never opened is an
    * error.
    */
-  private edited(photo: number, act: (p: PhotoEdits) => boolean, phase: Phase): CommandResult {
+  private edited(photo: number, act: (p: PhotoEdits) => boolean, phase: Phase, always = true): CommandResult {
     const p = this.edits.get(photo);
     if (!p) throw new Error(`photo ${photo} was not opened this session`);
     const open = this.strip.current === photo;
     const recorded = open ? act(p) : false;
-    const state = p.state();
+    // A delta turns the before off; an undo or a redo when it did something
+    // (WF-02).
+    if (open && (always || recorded)) this.before = false;
+    const state = this.stateOf(p) as PhotoEdit;
     const entry = this.strip.photos.find((s) => s.id === photo);
     if (entry) entry.edited = state.edited;
     // The engine ends the Alt preview with the gesture.
@@ -462,11 +479,11 @@ export class FakeEngine implements Engine {
    */
   private pick(photo: number, x: number, y: number): CommandResult {
     const p = this.edits.get(photo);
-    if (!p || this.strip.current !== photo || p.inGesture()) return this.edited(photo, () => false, 'End');
+    if (!p || this.strip.current !== photo || p.inGesture()) return this.edited(photo, () => false, 'End', false);
     if (y < 0.1) {
       return {
         type: 'edit',
-        edit: p.state(),
+        edit: this.stateOf(p) as PhotoEdit,
         recorded: false,
         refused: "Can't set white balance here: the area is clipped",
       };
@@ -477,6 +494,12 @@ export class FakeEngine implements Engine {
       ? { WhiteBalance: { mode, temp: Math.round(3000 + 5000 * x), tint } }
       : { WhiteBalance: { mode, temp: Math.round(80 * x - 40), tint } };
     return this.edited(photo, (q) => q.apply([change], 'End', 'White balance: picked'), 'End');
+  }
+
+  /** A photo's edit as the engine answers it, with `before` for the open one. */
+  private stateOf(p: PhotoEdits | undefined): PhotoEdit | null {
+    if (!p) return null;
+    return { ...p.state(), before: this.before && p.photo === this.strip.current };
   }
 
   private openInGesture(): boolean {
@@ -499,7 +522,7 @@ export class FakeEngine implements Engine {
     const started = performance.now();
     const [width, height] = fit([fake.width, fake.height], [this.view.width, this.view.height]);
     const generation = ++this.generation;
-    const look = lookOf(edits.current(), fake.kind);
+    const look = lookOf(this.before ? defaults(fake.kind) : edits.current(), fake.kind);
     const histogram = emptyHistogram();
     const parts: Uint8Array[] = [];
     for (let y = 0; y < height; y += TILE_SIZE) {

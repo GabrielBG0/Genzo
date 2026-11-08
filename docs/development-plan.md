@@ -420,6 +420,7 @@ These come from `docs/m0-results.md` and decide how the steps below are built:
    - Handles drawn as an overlay, aspect presets and lock, angle slider and straighten tool.
    - O cycles the overlays, X swaps orientation, Ctrl [ ] rotates by 90°, plus flip and a pixel size readout.
 7. A simple before and after toggle (\\). The full WF-02 comes in M3.
+   - Done (2026-11-08): `docs/specs/WF-02.md`. `\` and the quick action toggle the before, the photo's defaults (owner, 2026-11-07), through `ShowBefore` (contract 0.6.1, additive: `PhotoEdit.before`). Nothing is recorded; any change to the edit and a switch show the after again; the histogram counts what shows; an export has the edit. A **Before** badge on the viewport and the quick action's *on* look follow it.
 8. **Viewport:**
    - Fit and 1:1 zoom, with Space for a temporary zoom.
    - Zoom and pan as a GPU transform over the tiles already held; pan reports the visible rectangle through `SetView`.

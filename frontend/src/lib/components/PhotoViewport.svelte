@@ -26,6 +26,8 @@
      * frame is drawn (the spike).
      */
     photo?: number | null;
+    /** A badge on the photo, top left, such as "Before" (WF-02). */
+    badge?: string | null;
   }
   let {
     engine = null,
@@ -37,6 +39,7 @@
     onpick,
     empty = 'No photo open',
     photo,
+    badge = null,
   }: Props = $props();
 
   let host: HTMLDivElement | undefined = $state();
@@ -144,6 +147,7 @@
   {:else if !hasFrame}
     <div class="placeholder">{empty}</div>
   {/if}
+  {#if badge && hasFrame}<span class="badge" role="status">{badge}</span>{/if}
 </div>
 
 <style>
@@ -170,6 +174,21 @@
     width: 100%;
     height: 100%;
     display: block;
+  }
+
+  /* The flat Overlay surface: no blur over the photo. */
+  .badge {
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    padding: 2px 9px;
+    border-radius: var(--r-pill);
+    background: var(--overlay-bg);
+    border: 1px solid var(--overlay-border-color);
+    color: var(--text-body);
+    font-size: var(--text-small);
+    font-weight: 500;
+    pointer-events: none;
   }
 
   .placeholder {

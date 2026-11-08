@@ -52,6 +52,9 @@ pub(crate) struct Session {
     pub(crate) provisional: Option<u64>,
     /// The J overlay and the Alt preview, sent with each render.
     pub(crate) overlay: Overlay,
+    /// The open photo shows its before, its defaults (WF-02): until a
+    /// change to its edit or a switch.
+    pub(crate) before: bool,
 }
 
 impl Default for Session {
@@ -66,6 +69,7 @@ impl Default for Session {
             issued: 0,
             provisional: None,
             overlay: Overlay::default(),
+            before: false,
         }
     }
 }
@@ -83,6 +87,17 @@ impl Session {
             // No change to apply, so nothing to refuse.
             let _ = p.apply(&[], Phase::End);
         }
+    }
+
+    /// Opens `id` in Develop, or none: the before goes (WF-02).
+    pub(crate) fn set_open(&mut self, id: Option<u64>) {
+        self.open = id;
+        self.before = false;
+    }
+
+    /// Whether `photo` shows its before.
+    fn shows_before(&self, photo: u64) -> bool {
+        self.before && self.open == Some(photo)
     }
 
     /// Whether the open photo's gesture is in progress.
@@ -111,6 +126,8 @@ pub struct EditState {
     pub redo: Option<String>,
     /// [`PhotoEdits::revision`]: orders replies that arrive out of order.
     pub revision: u64,
+    /// The viewport shows the photo's defaults instead (WF-02).
+    pub before: bool,
 }
 
 /// What a delta, an undo or a redo did.
@@ -162,7 +179,7 @@ impl Engine {
             id
         };
         gpu.open(id, Photo { src, orientation })?;
-        self.session.lock().expect("session").open = Some(id);
+        self.session.lock().expect("session").set_open(Some(id));
         Ok(id)
     }
 
@@ -180,14 +197,16 @@ impl Engine {
     pub fn edit_state(&self) -> Option<EditState> {
         let s = self.session.lock().expect("session");
         let id = s.open?;
-        Some(state(id, &s.edits[&id]))
+        Some(state(id, &s.edits[&id], s.before))
     }
 
     /// Photo `photo`'s edit, open or not, if it was opened this session
     /// (`GetEdit`).
     pub fn edit_of(&self, photo: u64) -> Option<EditState> {
         let s = self.session.lock().expect("session");
-        s.edits.get(&photo).map(|p| state(photo, p))
+        s.edits
+            .get(&photo)
+            .map(|p| state(photo, p, s.shows_before(photo)))
     }
 
     /// Sets the view and the target, and renders the open photo settled.
@@ -205,6 +224,8 @@ impl Engine {
         let recorded = {
             let mut s = self.session.lock().expect("session");
             let id = s.open.ok_or(EngineError::NoPhoto)?;
+            // Nothing changes out of sight (WF-02).
+            s.before = false;
             s.edits.get_mut(&id).expect("open").apply(changes, phase)?
         };
         self.render(recorded, phase)
@@ -224,6 +245,8 @@ impl Engine {
             if s.open != Some(photo) {
                 return unchanged(&s, photo);
             }
+            // Nothing changes out of sight (WF-02).
+            s.before = false;
             s.edits
                 .get_mut(&photo)
                 .expect("open")
@@ -285,6 +308,7 @@ impl Engine {
             if s.open != Some(photo) || s.in_gesture() {
                 return unchanged(&s, photo);
             }
+            s.before = false;
             s.edits.get_mut(&photo).expect("open").apply_labelled(
                 &[change],
                 Phase::End,
@@ -292,6 +316,21 @@ impl Engine {
             )?
         };
         self.render(recorded, Phase::End)
+    }
+
+    /// Shows photo `photo`'s before, its defaults, or its edit again
+    /// (WF-02), and renders it settled. Nothing is recorded; a gesture in
+    /// progress ends first. For a photo not open, nothing changes.
+    pub fn show_before(&self, photo: u64, before: bool) -> Result<Applied, EngineError> {
+        {
+            let mut s = self.session.lock().expect("session");
+            if s.open != Some(photo) {
+                return unchanged(&s, photo);
+            }
+            s.end_gesture();
+            s.before = before;
+        }
+        self.render(false, Phase::End)
     }
 
     /// Undoes the open photo's last step and renders it settled. Nothing
@@ -373,7 +412,12 @@ impl Engine {
                 return unchanged(&s, photo);
             }
             let id = s.open.ok_or(EngineError::NoPhoto)?;
-            f(s.edits.get_mut(&id).expect("open"))
+            let changed = f(s.edits.get_mut(&id).expect("open"));
+            // An undo or a redo shows what it did (WF-02).
+            if changed {
+                s.before = false;
+            }
+            changed
         };
         if !changed {
             let state = self.edit_state().ok_or(EngineError::NoPhoto)?;
@@ -447,16 +491,17 @@ pub(crate) fn render_when(
             s.overlay.preview = Preview::None;
         }
         let p = &s.edits[&id];
+        let edit = if s.before { p.defaults() } else { p.current() };
         let request = DevelopRequest {
             generation,
             photo: id,
-            edit: p.current().clone(),
+            edit: edit.clone(),
             view: s.view,
             target: s.target,
             phase,
             overlay: s.overlay,
         };
-        (state(id, p), request)
+        (state(id, p, s.before), request)
     };
     let generation = request.generation;
     let key = Key {
@@ -542,13 +587,13 @@ fn unchanged(s: &Session, photo: u64) -> Result<Applied, EngineError> {
         .ok_or(EngineError::UnknownPhoto(photo))?;
     Ok(Applied {
         recorded: false,
-        state: state(photo, p),
+        state: state(photo, p, s.shows_before(photo)),
         frame: None,
         tiles: None,
     })
 }
 
-fn state(id: u64, p: &PhotoEdits) -> EditState {
+fn state(id: u64, p: &PhotoEdits, before: bool) -> EditState {
     EditState {
         photo: id,
         edit: p.current().clone(),
@@ -556,5 +601,6 @@ fn state(id: u64, p: &PhotoEdits) -> EditState {
         undo: p.undo_label().map(String::from),
         redo: p.redo_label().map(String::from),
         revision: p.revision(),
+        before,
     }
 }

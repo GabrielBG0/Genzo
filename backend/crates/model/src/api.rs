@@ -252,6 +252,9 @@ pub struct PhotoEdit {
     /// Counts the photo's changes this session. Replies can arrive out of
     /// order; the one with the highest revision is the photo's edit now.
     pub revision: u64,
+    /// Develop shows the photo's before, its defaults, instead of its edit
+    /// (WF-02). Any change to the edit, and a switch, turn it off.
+    pub before: bool,
 }
 
 /// One side's clipping (DEV-03).
@@ -373,6 +376,9 @@ pub enum Command {
     /// The Alt preview of the gesture in progress (DEV-03); it ends with
     /// the gesture. Answers [`CommandResult::Done`].
     SetClippingPreview { preview: ClippingPreview },
+    /// Shows the photo's before, its defaults, or its edit again (WF-02),
+    /// recording nothing. Answers [`CommandResult::Edit`].
+    ShowBefore { photo: u64, before: bool },
     /// Undoes the photo's last step (APP-10). Answers
     /// [`CommandResult::Edit`].
     Undo { photo: u64 },
@@ -701,6 +707,7 @@ mod tests {
                 undo: Some("Exposure".into()),
                 redo: None,
                 revision: 4,
+                before: false,
             },
             recorded: true,
             refused: None,
