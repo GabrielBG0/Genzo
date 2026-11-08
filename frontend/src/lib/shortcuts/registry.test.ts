@@ -87,6 +87,29 @@ describe('ShortcutRegistry', () => {
     expect(run).not.toHaveBeenCalled();
   });
 
+  it('leaves Tab to focus in a control, and runs it elsewhere (APP-08)', () => {
+    const r = new ShortcutRegistry('other');
+    const run = vi.fn();
+    r.register({ id: 'sides', label: 'Hide side panels', keys: ['Tab'], run });
+    const fire = (el: HTMLElement) => {
+      let handled: boolean | undefined;
+      el.addEventListener('keydown', (ev) => (handled = r.handle(ev, 'develop')), { once: true });
+      el.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', code: 'Tab', bubbles: true }));
+      return handled;
+    };
+    const slider = document.createElement('div');
+    slider.setAttribute('role', 'slider');
+    const button = document.createElement('button');
+    document.body.append(slider, button);
+    expect(fire(slider)).toBe(false);
+    expect(fire(button)).toBe(false);
+    expect(run).not.toHaveBeenCalled();
+    expect(fire(document.body)).toBe(true);
+    expect(run).toHaveBeenCalledOnce();
+    slider.remove();
+    button.remove();
+  });
+
   it('leaves the arrows to a focused slider, even a disabled one (LIB-09)', () => {
     const r = createRegistry();
     const run = vi.fn();

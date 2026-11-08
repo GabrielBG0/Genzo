@@ -7,13 +7,18 @@
     /** Something in the panel differs from its default (DEV-13). */
     edited?: boolean;
     open?: boolean;
-    ontoggle?: () => void;
+    /** Its side is in solo mode (APP-08): the chevron shows it. */
+    solo?: boolean;
+    /** A click, with its modifiers: Alt for solo mode, Ctrl for all (APP-08). */
+    ontoggle?: (e: MouseEvent) => void;
   }
-  let { heading, meta = '', edited = false, open = true, ontoggle }: Props = $props();
+  let { heading, meta = '', edited = false, open = true, solo = false, ontoggle }: Props = $props();
 </script>
 
-<button class="header" aria-expanded={open} onclick={() => ontoggle?.()}>
-  <Icon name={open ? 'chevronDown' : 'chevronRight'} size={14} stroke={2} />
+<button class="header" aria-expanded={open} onclick={(e) => ontoggle?.(e)}>
+  <span class={['chevron', solo && 'solo']} title={solo ? 'Solo mode: one panel open at a time (Alt-click)' : undefined}>
+    <Icon name={open ? 'chevronDown' : 'chevronRight'} size={14} stroke={2} />
+  </span>
   <span class="heading">{heading}</span>
   {#if edited}<span class="dot" title="Edited" aria-label="Edited">●</span>{/if}
   <span class="spacer"></span>
@@ -34,6 +39,14 @@
     font-weight: 600;
     letter-spacing: var(--header-tracking);
     text-transform: uppercase;
+  }
+
+  .chevron {
+    display: flex;
+  }
+
+  .chevron.solo {
+    color: var(--accent-soft);
   }
 
   .dot {

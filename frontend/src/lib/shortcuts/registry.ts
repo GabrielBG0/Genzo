@@ -196,12 +196,22 @@ export class ShortcutRegistry {
     if (target?.closest('input, textarea, [contenteditable="true"]')) return false;
     // A focused slider moves with the arrows (DEV-02); they are not commands there.
     if (e.key.startsWith('Arrow') && target?.closest('[role="slider"]')) return false;
+    // Tab moves focus between controls; it hides panels only outside them (APP-08).
+    if (e.key === 'Tab' && target && isControl(target)) return false;
     const cmd = this.match(e, scope);
     if (!cmd || !cmd.enabled()) return false;
     e.preventDefault();
     cmd.run();
     return true;
   }
+}
+
+/** Whether `el` is in a control that takes keyboard focus (APP-08: Tab is focus there). */
+function isControl(el: HTMLElement): boolean {
+  return (
+    el.closest('button, select, a[href], [role="slider"], [role="menuitem"], [role="menuitemcheckbox"], [role="radio"]') !==
+    null
+  );
 }
 
 export function detectPlatform(): Platform {

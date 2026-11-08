@@ -56,7 +56,8 @@ Spec template for each feature: **Behavior** (what it does, step by step), **Inp
 - Priority: P1 · Screens: not mocked
 - Scope: Tab hides side panels, Shift Tab hides all, T toolbar, F6 filmstrip, F7 left, F8 right. Alt-click a panel header for solo mode, Ctrl-click to open or close all.
 - Open questions: Resizable side panels? Min and max widths?
-- Spec: _to be written_
+- Decided: Tab and Shift Tab act on the panels only when no control has focus; "hide all" hides the side panels and the filmstrip, not the top bar or status bar (2026-11-08).
+- Spec: [APP-08.md](../specs/APP-08.md)
 
 ### APP-09 · Screen modes and Lights Out
 - Priority: P2 · Screens: not mocked

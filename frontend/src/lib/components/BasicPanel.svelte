@@ -1,6 +1,8 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   import type { Change, ClippingPreview, Edit, Param, Profile, WhiteBalancePreset } from '$contract/genzo';
   import type { DevelopSession } from '../develop/session.svelte';
+  import { Layout } from '../layout.svelte';
   import { MIRED_SCALE, presetName } from '../develop/whiteBalance';
   import { EXPOSURE, PARAM_OF, RAW_TEMP, RAW_TINT, SLIDER, type ValueField } from '../engine/edit';
   import { useRegistry } from '../shortcuts/context';
@@ -13,11 +15,15 @@
     session: DevelopSession;
     /** The RAW presets, from the engine's info. */
     presets: WhiteBalancePreset[];
+    /** Which panels are open, and the right side's solo mode (APP-08). */
+    layout?: Layout;
   }
-  let { session, presets }: Props = $props();
+  let { session, presets, layout = new Layout() }: Props = $props();
   const registry = useRegistry();
 
-  let open = $state(true);
+  // The layout is the shell's for the session: registered once.
+  untrack(() => layout.register('basic', 'right'));
+  const open = $derived(layout.isOpen('basic'));
 
   /** The edit shown, or null with every control disabled and blank. */
   const edit: Edit | null = $derived(session.editable ? session.shown : null);
@@ -155,7 +161,7 @@
 </script>
 
 <section class="basic" aria-label="Basic">
-  <PanelHeader heading="Basic" {edited} {open} ontoggle={() => (open = !open)} />
+  <PanelHeader heading="Basic" {edited} {open} solo={layout.solo.right} ontoggle={(e) => layout.click('basic', e)} />
   {#if open}
     <div class="profile">
       <span class="choice pill">
