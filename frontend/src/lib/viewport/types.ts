@@ -11,10 +11,19 @@ export interface DecodedTile {
 export type Zoom = 'fit' | number;
 
 export interface ViewTransform {
+  /** Device pixels per shown-image pixel, or `fit`. */
   zoom: Zoom;
-  /** Pan offset in CSS pixels from the centered position. */
-  panX: number;
-  panY: number;
+  /** The view's top left in shown-image pixels; the image is centered without one. */
+  origin?: { x: number; y: number };
+  /**
+   * The shown image's size in pixels (`PhotoEdit.shown`); the held Fit
+   * frame's size without one. Frames are scaled to it, so a Fit frame and
+   * 1:1 tiles line up.
+   */
+  shown?: { width: number; height: number };
+  /** Pan offset in CSS pixels from the centered position (the spike). */
+  panX?: number;
+  panY?: number;
 }
 
 /**
@@ -33,6 +42,8 @@ export interface Viewport {
   /** Same as `putTiles`, for tiles the page has already decoded from JPEG. */
   putImages(tiles: DecodedTile[]): boolean;
   setTransform(t: ViewTransform): void;
+  /** Drops every frame held, until the next one (a photo switch). */
+  clear(): void;
   /** CSS size of the drawing area and the device pixel ratio. */
   resize(width: number, height: number, dpr: number): void;
   /** Draws now. Called on the next animation frame by the owner. */

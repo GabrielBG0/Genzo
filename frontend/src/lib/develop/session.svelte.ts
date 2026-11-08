@@ -11,6 +11,7 @@ import type {
   Phase,
   PhotoEdit,
   Strip,
+  View,
 } from '$contract/genzo';
 import { applyChange, type EditKind } from '../engine/edit';
 import type { Engine } from '../engine/types';
@@ -225,13 +226,13 @@ export class DevelopSession {
     }
   }
 
-  /** The viewport's size in device pixels, at Fit. */
-  setView(width: number, height: number): Promise<CommandResult> {
+  /** The viewport's size in device pixels, and what it shows: Fit, or a 1:1 region (DEV-01 viewport spec). */
+  setView(width: number, height: number, view: View = { type: 'fit' }): Promise<CommandResult> {
     return this.engine.execute({
       type: 'setView',
       width: Math.max(1, Math.round(width)),
       height: Math.max(1, Math.round(height)),
-      view: { type: 'fit' },
+      view,
       space: this.space,
     });
   }

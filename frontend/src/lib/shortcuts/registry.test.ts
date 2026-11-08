@@ -129,4 +129,24 @@ describe('ShortcutRegistry', () => {
     expect(run).toHaveBeenCalledOnce();
     slider.remove();
   });
+
+  it('leaves Space to a focused button, and holds the zoom elsewhere (DEV-01 viewport)', () => {
+    const r = createRegistry();
+    const run = vi.fn();
+    r.bind('view.zoomHold', run, () => true);
+    const button = document.createElement('button');
+    document.body.append(button);
+    const at = (target: HTMLElement) => {
+      let handled: boolean | undefined;
+      target.addEventListener('keydown', (ev) => (handled = r.handle(ev, 'develop')), { once: true });
+      target.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', code: 'Space', bubbles: true }));
+      return handled;
+    };
+    expect(at(button)).toBe(false);
+    expect(run).not.toHaveBeenCalled();
+    expect(at(document.body)).toBe(true);
+    expect(run).toHaveBeenCalledOnce();
+    expect(r.shortcut('view.zoomHold')).toBe('Space');
+    button.remove();
+  });
 });

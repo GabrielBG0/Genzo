@@ -218,6 +218,14 @@ pub(crate) fn photo_edit(s: EditState) -> PhotoEdit {
         revision: s.revision,
         before: s.before,
         notes: s.notes,
+        oriented: api::Size {
+            width: s.oriented.0,
+            height: s.oriented.1,
+        },
+        shown: api::Size {
+            width: s.shown.0,
+            height: s.shown.1,
+        },
     }
 }
 

@@ -1,4 +1,6 @@
 <script lang="ts">
+  import type { Snippet } from 'svelte';
+  import type { ZoomState } from '../develop/zoom.svelte';
   import type { Engine } from '../engine/types';
   import { putFrame } from '../viewport/frame';
   import type { Viewport, Zoom } from '../viewport/types';
@@ -7,6 +9,12 @@
   interface Props {
     /** Where frames come from. Without one, the empty placeholder shows. */
     engine?: Engine | null;
+    /**
+     * Develop's zoom and pan (DEV-01 viewport spec): a click zooms, a drag
+     * and the wheel pan at 1:1, and the transform follows it. Without one,
+     * `zoom` places the frame (the spike).
+     */
+    view?: ZoomState | null;
     zoom?: Zoom;
     /** Called after a generation's pixels reached the screen. */
     ondraw?: (generation: number, at: number) => void;
@@ -28,9 +36,12 @@
     photo?: number | null;
     /** A badge on the photo, top left, such as "Before" (WF-02). */
     badge?: string | null;
+    /** Over the photo, once it has a frame: the photo toolbar. */
+    children?: Snippet;
   }
   let {
     engine = null,
+    view = null,
     zoom = 'fit',
     ondraw,
     onerror,
@@ -40,7 +51,11 @@
     empty = 'No photo open',
     photo,
     badge = null,
+    children,
   }: Props = $props();
+
+  /** A press that moves less than this, in CSS pixels, is a click. */
+  const CLICK_SLOP = 3;
 
   let host: HTMLDivElement | undefined = $state();
   let canvas: HTMLCanvasElement | undefined = $state();
@@ -48,7 +63,8 @@
   let hasFrame = $state(false);
   let error = $state<string | null>(null);
   let pan = { x: 0, y: 0 };
-  let dragFrom: { x: number; y: number } | null = null;
+  /** A press on the photo: where it started, where it is, and whether it moved enough to pan. */
+  let press: { x: number; y: number; lastX: number; lastY: number; moved: boolean } | null = $state(null);
 
   function schedule(generation?: number) {
     requestAnimationFrame(() => {
@@ -103,46 +119,90 @@
   $effect(() => {
     void photo;
     hasFrame = false;
+    viewport?.clear();
   });
 
+  // The transform: Develop's zoom state, or the spike's zoom and pan.
   $effect(() => {
-    if (zoom === 'fit') pan = { x: 0, y: 0 };
-    viewport?.setTransform({ zoom, panX: pan.x, panY: pan.y });
+    if (view) {
+      viewport?.setTransform({ zoom: view.level === 'fit' ? 'fit' : 1, origin: view.origin, shown: view.shown });
+    } else {
+      if (zoom === 'fit') pan = { x: 0, y: 0 };
+      viewport?.setTransform({ zoom, panX: pan.x, panY: pan.y });
+    }
     schedule();
   });
 
-  function onclick(e: MouseEvent) {
-    if (!picking || !host) return;
+  /** `e`'s position in device pixels from the view's top left. */
+  function devicePoint(e: MouseEvent): { x: number; y: number } | null {
+    if (!host) return null;
     const r = host.getBoundingClientRect();
-    const point = viewport?.imagePoint(e.clientX - r.left, e.clientY - r.top);
-    if (point) onpick?.(point[0], point[1]);
+    return { x: (e.clientX - r.left) * devicePixelRatio, y: (e.clientY - r.top) * devicePixelRatio };
   }
 
   function onpointerdown(e: PointerEvent) {
-    if (zoom === 'fit' || picking) return;
-    dragFrom = { x: e.clientX - pan.x, y: e.clientY - pan.y };
+    // The toolbar's buttons over the photo keep their clicks.
+    if (e.button !== 0 || (e.target instanceof Element && e.target.closest('button, [role="toolbar"]'))) return;
+    press = { x: e.clientX, y: e.clientY, lastX: e.clientX, lastY: e.clientY, moved: false };
+    if (!view && zoom !== 'fit' && !picking) pan = { x: pan.x - e.clientX, y: pan.y - e.clientY };
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
   }
 
   function onpointermove(e: PointerEvent) {
-    if (!dragFrom) return;
-    pan = { x: e.clientX - dragFrom.x, y: e.clientY - dragFrom.y };
-    viewport?.setTransform({ zoom, panX: pan.x, panY: pan.y });
-    schedule();
+    if (view) view.pointer = devicePoint(e);
+    if (!press) return;
+    if (!press.moved && Math.hypot(e.clientX - press.x, e.clientY - press.y) > CLICK_SLOP) press.moved = true;
+    if (!press.moved) return;
+    if (view) {
+      view.pan((e.clientX - press.lastX) * devicePixelRatio, (e.clientY - press.lastY) * devicePixelRatio);
+    } else if (zoom !== 'fit' && !picking) {
+      viewport?.setTransform({ zoom, panX: pan.x + e.clientX, panY: pan.y + e.clientY });
+      schedule();
+    }
+    press.lastX = e.clientX;
+    press.lastY = e.clientY;
   }
+
+  function onpointerup(e: PointerEvent) {
+    const p = press;
+    press = null;
+    if (!p) return;
+    if (!view && zoom !== 'fit' && !picking) pan = { x: pan.x + e.clientX, y: pan.y + e.clientY };
+    if (p.moved) return;
+    // A click: the picker picks; otherwise Develop's zoom toggles at the point.
+    const at = devicePoint(e);
+    if (picking) {
+      const point = view ? at && view.normalizedAt(at) : at && viewport?.imagePoint(at.x / devicePixelRatio, at.y / devicePixelRatio);
+      if (point) onpick?.(point[0], point[1]);
+    } else if (view && hasFrame) {
+      view.toggle(at);
+    }
+  }
+
+  function onwheel(e: WheelEvent) {
+    if (!view || view.level !== '1:1') return;
+    e.preventDefault();
+    // Lines and pages as pixels; Shift turns a plain wheel sideways.
+    const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1;
+    const [dx, dy] = e.shiftKey && e.deltaX === 0 ? [e.deltaY, 0] : [e.deltaX, e.deltaY];
+    view.pan(-dx * unit * devicePixelRatio, -dy * unit * devicePixelRatio);
+  }
+
+  const panning = $derived(view?.level === '1:1' && !picking);
 </script>
 
-<!-- The picker's click is pointer-only; W and Esc work from the keyboard. -->
-<!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_noninteractive_element_interactions -->
+<!-- A click zooms or picks; Z, Space and W do the same from the keyboard. -->
 <div
-  class={['viewport', picking && 'picking']}
+  class={['viewport', picking && 'picking', panning && 'pan', panning && press?.moved && 'grabbing', view && !picking && view.level === 'fit' && hasFrame && 'zoomable']}
   bind:this={host}
   role="img"
   aria-label="Photo"
-  {onclick}
   {onpointerdown}
   {onpointermove}
-  onpointerup={() => (dragFrom = null)}
+  {onpointerup}
+  onpointercancel={() => (press = null)}
+  onpointerleave={() => view && (view.pointer = null)}
+  {onwheel}
 >
   <canvas bind:this={canvas} class={[!hasFrame && 'hidden']}></canvas>
   {#if error}
@@ -151,6 +211,7 @@
     <div class="placeholder">{empty}</div>
   {/if}
   {#if badge && hasFrame}<span class="badge" role="status">{badge}</span>{/if}
+  {#if hasFrame}{@render children?.()}{/if}
 </div>
 
 <style>
@@ -161,9 +222,22 @@
     overflow: hidden;
     border-radius: var(--r-photo);
     background: var(--photo-backdrop);
+    touch-action: none;
   }
 
-.picking {
+  .zoomable {
+    cursor: zoom-in;
+  }
+
+  .pan {
+    cursor: grab;
+  }
+
+  .grabbing {
+    cursor: grabbing;
+  }
+
+  .picking {
     cursor: crosshair;
   }
 

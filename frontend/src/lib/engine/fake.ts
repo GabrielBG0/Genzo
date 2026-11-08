@@ -20,9 +20,11 @@ import {
   type Strip,
   type StripPhoto,
   type TileHeader,
+  type View,
   type WhiteBalancePreset,
 } from '$contract/genzo';
 import { defaults, type EditKind } from './edit';
+import { sizes } from './geometry';
 import { PhotoEdits } from './history';
 import { encodeTile } from './tiles';
 import type { Engine } from './types';
@@ -200,7 +202,7 @@ export class FakeEngine implements Engine {
   private folder: FakePhoto[] = [];
   private strip: Strip = { photos: [], current: null, direction: 'next' };
   private edits = new Map<number, PhotoEdits>();
-  private view = { width: 0, height: 0 };
+  private view: { width: number; height: number; view: View } = { width: 0, height: 0, view: { type: 'fit' } };
   private histograms = new Map<number, { generation: number; histogram: Histogram }>();
   /** The J overlays' colors, each when on: the session's, kept across switches. */
   private overlay: { shadows: Rgba | null; highlights: Rgba | null } = { shadows: null, highlights: null };
@@ -307,7 +309,7 @@ export class FakeEngine implements Engine {
         };
       }
       case 'setView':
-        this.view = { width: command.width, height: command.height };
+        this.view = { width: command.width, height: command.height, view: command.view };
         this.renderPhoto();
         return DONE;
       case 'setClippingOverlay':
@@ -543,8 +545,16 @@ export class FakeEngine implements Engine {
   /** A photo's edit as the engine answers it, with `before` for the open one. */
   private stateOf(p: PhotoEdits | undefined): PhotoEdit | null {
     if (!p) return null;
-    const notes = this.folder.find((f) => f.photo.id === p.photo)?.notes ?? [];
-    return { ...p.state(), before: this.before && p.photo === this.strip.current, notes: [...notes] };
+    const fake = this.folder.find((f) => f.photo.id === p.photo);
+    const before = this.before && p.photo === this.strip.current;
+    // The shown edit's sizes: the before's while it shows.
+    const shownEdit = before && fake?.kind ? defaults(fake.kind) : p.current();
+    return {
+      ...p.state(),
+      before,
+      notes: [...(fake?.notes ?? [])],
+      ...sizes(shownEdit, [fake?.width ?? 0, fake?.height ?? 0]),
+    };
   }
 
   private openInGesture(): boolean {
@@ -565,14 +575,20 @@ export class FakeEngine implements Engine {
     const edits = id === null ? undefined : this.edits.get(id);
     if (id === null || !fake?.kind || !edits || this.view.width === 0) return;
     const started = performance.now();
-    const [width, height] = fit([fake.width, fake.height], [this.view.width, this.view.height]);
+    const shownEdit = this.before ? defaults(fake.kind) : edits.current();
+    const { shown } = sizes(shownEdit, [fake.width, fake.height]);
+    const [width, height] = fit([shown.width, shown.height], [this.view.width, this.view.height]);
     const generation = ++this.generation;
-    const look = lookOf(this.before ? defaults(fake.kind) : edits.current(), fake.kind);
+    const look = lookOf(shownEdit, fake.kind);
     const histogram = emptyHistogram();
     const parts: Uint8Array[] = [];
+    const region = this.view.view.type === 'region' ? this.view.view : null;
     for (let y = 0; y < height; y += TILE_SIZE) {
       for (let x = 0; x < width; x += TILE_SIZE) {
         const rect = { x, y, width: Math.min(TILE_SIZE, width - x), height: Math.min(TILE_SIZE, height - y) };
+        const pixels = sceneTile(width, height, rect, look);
+        count(histogram, pixels);
+        if (region) continue;
         const header: TileHeader = {
           generation,
           rect,
@@ -581,10 +597,32 @@ export class FakeEngine implements Engine {
           imageWidth: width,
           imageHeight: height,
         };
-        const pixels = sceneTile(width, height, rect, look);
-        count(histogram, pixels);
         paintClipping(pixels, this.overlay, this.preview);
         parts.push(encodeTile(header, pixels));
+      }
+    }
+    // At 1:1, the visible 256 px tiles of the shown image, clipped to the
+    // view and the image, placed by their rect in it (DEV-01, *Readback*).
+    if (region) {
+      const [vx, vy] = [Math.round(region.x), Math.round(region.y)];
+      const [x0, y0] = [Math.max(0, vx), Math.max(0, vy)];
+      const [x1, y1] = [Math.min(shown.width, vx + this.view.width), Math.min(shown.height, vy + this.view.height)];
+      for (let ty = Math.floor(y0 / TILE_SIZE) * TILE_SIZE; ty < y1; ty += TILE_SIZE) {
+        for (let tx = Math.floor(x0 / TILE_SIZE) * TILE_SIZE; tx < x1; tx += TILE_SIZE) {
+          const [rx, ry] = [Math.max(tx, x0), Math.max(ty, y0)];
+          const rect = { x: rx, y: ry, width: Math.min(tx + TILE_SIZE, x1) - rx, height: Math.min(ty + TILE_SIZE, y1) - ry };
+          const header: TileHeader = {
+            generation,
+            rect,
+            mipLevel: 0,
+            format: 'rgba8Srgb',
+            imageWidth: shown.width,
+            imageHeight: shown.height,
+          };
+          const pixels = sceneTile(shown.width, shown.height, rect, look, true);
+          paintClipping(pixels, this.overlay, this.preview);
+          parts.push(encodeTile(header, pixels));
+        }
       }
     }
     this.keepFrame(generation, parts);
@@ -769,11 +807,17 @@ function thumbnail(fake: FakePhoto, index: number): ArrayBuffer {
 }
 
 /** A sky over ground with a gray card, under the photo's look. */
+/**
+ * The fake's scene over a `width` × `height` image. `fine` adds what only
+ * 1:1 shows: a one-pixel white grid every 64 pixels, which a Fit frame,
+ * scaled down, would blur away.
+ */
 function sceneTile(
   width: number,
   height: number,
   rect: { x: number; y: number; width: number; height: number },
   look: Look,
+  fine = false,
 ): Uint8Array {
   const out = new Uint8Array(rect.width * rect.height * 4);
   let i = 0;
@@ -782,7 +826,10 @@ function sceneTile(
     for (let x = rect.x; x < rect.x + rect.width; x++) {
       const u = x / Math.max(1, width);
       const card = Math.abs(u - 0.5) < 0.12 && Math.abs(v - 0.62) < 0.1;
-      const [r0, g0, b0] = card
+      const grid = fine && (x % 64 === 0 || y % 64 === 0);
+      const [r0, g0, b0] = grid
+        ? [0.95, 0.95, 0.95]
+        : card
         ? [0.45, 0.45, 0.45]
         : v < 0.55
           ? [0.35 + 0.3 * u, 0.5 + 0.2 * v, 0.8]

@@ -643,3 +643,83 @@ test('One indicator slides to the chosen tab or segment; the menu has one highli
   await page.keyboard.press('Escape');
   await expect(menu).toBeHidden();
 });
+
+/** The share of a screenshot's pixels that are near white: the fake draws a white grid only at 1:1. */
+async function whiteShare(page: Page): Promise<number> {
+  const png = await page.getByRole('img', { name: 'Photo' }).screenshot();
+  return page.evaluate(async (data) => {
+    const img = new Image();
+    img.src = `data:image/png;base64,${data}`;
+    await img.decode();
+    const canvas = document.createElement('canvas');
+    [canvas.width, canvas.height] = [img.width, img.height];
+    const ctx = canvas.getContext('2d');
+    if (!ctx) throw new Error('no 2d context');
+    ctx.drawImage(img, 0, 0);
+    const px = ctx.getImageData(0, 0, img.width, img.height).data;
+    let white = 0;
+    for (let i = 0; i < px.length; i += 4) if ((px[i] ?? 0) > 235 && (px[i + 1] ?? 0) > 235 && (px[i + 2] ?? 0) > 235) white++;
+    return white / (px.length / 4);
+  }, png.toString('base64'));
+}
+
+test('Zoom: Z, the toolbar, a click and Space go to 1:1 and back; a drag pans; T hides the toolbar (DEV-01 viewport)', async ({
+  page,
+}) => {
+  await develop(page);
+  const photo = page.getByRole('img', { name: 'Photo' });
+  const toolbar = page.getByRole('toolbar', { name: 'Photo toolbar' });
+  const readout = toolbar.locator('.readout');
+  await expect(readout).toHaveText(/^Fit \d+%$/);
+  await expect.poll(() => whiteShare(page)).toBeLessThan(0.001);
+
+  // Z: 1:1, where the fake's one-pixel grid shows; Z again: Fit.
+  await page.keyboard.press('z');
+  await expect(readout).toHaveText('1:1');
+  await expect(toolbar.getByRole('radio', { name: '1:1' })).toHaveAttribute('aria-checked', 'true');
+  await expect.poll(() => whiteShare(page)).toBeGreaterThan(0.01);
+  await page.keyboard.press('z');
+  await expect(readout).toHaveText(/^Fit/);
+  await expect.poll(() => whiteShare(page)).toBeLessThan(0.001);
+
+  // The toolbar's 1:1 and Fit.
+  await toolbar.getByRole('radio', { name: '1:1' }).click();
+  await expect(readout).toHaveText('1:1');
+  await toolbar.getByRole('radio', { name: 'Fit' }).click();
+  await expect(readout).toHaveText(/^Fit/);
+
+  // A click zooms to 1:1 there; a drag pans; a click goes back to Fit.
+  const box = await photo.boundingBox();
+  if (!box) throw new Error('no photo');
+  await page.mouse.click(box.x + box.width * 0.3, box.y + box.height * 0.4);
+  await expect(readout).toHaveText('1:1');
+  await expect.poll(() => whiteShare(page)).toBeGreaterThan(0.01);
+  const still = await photo.screenshot();
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  for (let i = 1; i <= 5; i++) await page.mouse.move(box.x + box.width / 2 - 4 * i, box.y + box.height / 2 - 3 * i);
+  await page.mouse.up();
+  await expect(readout).toHaveText('1:1');
+  await expect.poll(async () => (await photo.screenshot()).equals(still)).toBe(false);
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  await expect(readout).toHaveText(/^Fit/);
+
+  // Space held: 1:1 until it goes up.
+  await page.mouse.move(box.x + box.width * 0.6, box.y + box.height * 0.5);
+  await page.keyboard.down('Space');
+  await expect(readout).toHaveText('1:1');
+  await page.keyboard.up('Space');
+  await expect(readout).toHaveText(/^Fit/);
+
+  // T hides the toolbar and shows it again.
+  await page.keyboard.press('t');
+  await expect(toolbar).toBeHidden();
+  await page.keyboard.press('t');
+  await expect(toolbar).toBeVisible();
+
+  // The zoom stays across photos.
+  await page.keyboard.press('z');
+  await page.keyboard.press('ArrowRight');
+  await expect(readout).toHaveText('1:1');
+  await expect.poll(() => whiteShare(page)).toBeGreaterThan(0.01);
+});

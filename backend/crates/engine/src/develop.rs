@@ -131,6 +131,11 @@ pub struct EditState {
     /// What the pipeline does not do as the file asks, for the status bar
     /// (APP-07): empty until the photo's input is decoded.
     pub notes: Vec<String>,
+    /// The shown edit's oriented size, before its crop, and the size of
+    /// the image it frames ([`PhotoEdits::sizes`]): the before's when it
+    /// shows.
+    pub oriented: (u32, u32),
+    pub shown: (u32, u32),
 }
 
 /// What a delta, an undo or a redo did.
@@ -599,6 +604,7 @@ fn unchanged(s: &Session, photo: u64) -> Result<Applied, EngineError> {
 /// Photo `id`'s edit as the panels and the status bar show it.
 fn state(s: &Session, id: u64, p: &PhotoEdits) -> EditState {
     let before = s.shows_before(id);
+    let (oriented, shown) = p.sizes(if before { p.defaults() } else { p.current() });
     EditState {
         photo: id,
         edit: p.current().clone(),
@@ -608,5 +614,7 @@ fn state(s: &Session, id: u64, p: &PhotoEdits) -> EditState {
         revision: p.revision(),
         before,
         notes: s.strip.notes_of(id).to_vec(),
+        oriented,
+        shown,
     }
 }
