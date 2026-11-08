@@ -723,3 +723,73 @@ test('Zoom: Z, the toolbar, a click and Space go to 1:1 and back; a drag pans; T
   await expect(readout).toHaveText('1:1');
   await expect.poll(() => whiteShare(page)).toBeGreaterThan(0.01);
 });
+
+test('Crop and rotate: R, a corner drag, the aspect, turns, flips, the angle, O and Enter (DEV-12)', async ({ page }) => {
+  await develop(page);
+  await page.keyboard.press('r');
+  const panel = page.getByRole('region', { name: 'Crop and rotate' });
+  await expect(panel).toBeVisible();
+  await expect(page.getByRole('region', { name: 'Basic' })).toBeHidden();
+  const size = panel.getByLabel('Crop size');
+  // The fake's first photo is 6048 × 4032, uncropped.
+  await expect(size).toContainText('W 6048');
+  await expect(size).toContainText('H 4032');
+  const frame = page.getByRole('application', { name: 'Crop frame' });
+  await expect(frame.locator('.handle')).toHaveCount(8);
+
+  // A corner drag, free: one "Crop" step, a smaller crop.
+  await panel.getByRole('button', { name: 'Lock the aspect' }).click();
+  await expect(panel.getByRole('combobox', { name: 'Aspect' })).toHaveValue('Free');
+  const corner = frame.locator('[data-grip="se"]');
+  const box = await corner.boundingBox();
+  if (!box) throw new Error('no handle');
+  await page.mouse.move(box.x + 4, box.y + 4);
+  await page.mouse.down();
+  for (let i = 1; i <= 6; i++) await page.mouse.move(box.x + 4 - 20 * i, box.y + 4 - 10 * i);
+  await page.mouse.up();
+  await expect(undo(page)).toHaveAttribute('title', 'Undo Crop  Ctrl Z');
+  await expect(size).not.toContainText('W 6048');
+  await expect(size).not.toContainText('H 4032');
+
+  // 1:1 fits a square about the center and locks.
+  await panel.getByRole('combobox', { name: 'Aspect' }).selectOption('1:1');
+  await expect(panel.getByRole('combobox', { name: 'Aspect' })).toHaveValue('1:1');
+  await expect(panel.getByRole('button', { name: 'Lock the aspect' })).toHaveAttribute('aria-pressed', 'true');
+  const square = (await size.textContent()) ?? '';
+  const [w, h] = [/W (\d+)/.exec(square)?.[1], /H (\d+)/.exec(square)?.[1]];
+  expect(w).toBe(h);
+
+  // Ctrl Z, then a turn: the size swaps sides.
+  await page.keyboard.press('Control+z');
+  await page.keyboard.press('Control+z');
+  await expect(size).toContainText('W 6048');
+  await page.keyboard.press('Control+]');
+  await expect(size).toContainText('W 4032');
+  await expect(size).toContainText('H 6048');
+  await expect(undo(page)).toHaveAttribute('title', 'Undo Rotate  Ctrl Z');
+  await panel.getByRole('button', { name: 'Flip H' }).click();
+  await expect(undo(page)).toHaveAttribute('title', 'Undo Rotate  Ctrl Z');
+
+  // The angle slider: the engine shrinks the crop to stay inside.
+  const angle = panel.getByRole('slider', { name: 'Angle' });
+  await angle.focus();
+  for (let i = 0; i < 10; i++) await page.keyboard.press('Shift+ArrowRight');
+  await expect(angle).toHaveAttribute('aria-valuetext', '+10.0°');
+  await expect(size).not.toContainText('W 4032');
+
+  // O cycles the overlay; Enter closes, and the photo shows cropped.
+  await page.locator('body').click({ position: { x: 5, y: 5 } });
+  await expect(panel).toContainText('Overlay: Thirds');
+  await page.keyboard.press('o');
+  await expect(panel).toContainText('Overlay: Golden');
+  await page.keyboard.press('Enter');
+  await expect(panel).toBeHidden();
+  await expect(page.getByRole('region', { name: 'Basic' })).toBeVisible();
+  await expect(frame).toBeHidden();
+  // Reset in the panel brings the whole photo back.
+  await page.keyboard.press('r');
+  await panel.getByRole('button', { name: 'Reset' }).click();
+  await expect(size).toContainText('W 6048');
+  await page.keyboard.press('Escape');
+  await expect(panel).toBeHidden();
+});

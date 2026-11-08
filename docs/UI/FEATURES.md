@@ -300,7 +300,8 @@ Spec template for each feature: **Behavior** (what it does, step by step), **Inp
 ### DEV-12 · Crop and rotate (R)
 - Priority: P0 · Screens: D9
 - Scope: Crop frame with handles, aspect presets and lock, angle slider and straighten tool, constrain to image, overlays (O cycles: thirds, golden, grid), X swaps orientation, rotate 90° (Ctrl [ ]), flip, pixel size readout.
-- Spec: _to be written_
+- Decided: while the tool is open the photo shows whole and level, and the crop frame tilts over it (owner, 2026-11-08).
+- Spec: [DEV-12.md](../specs/DEV-12.md) (M1 part)
 
 ### DEV-13 · Panel states
 - Priority: P1 · Screens: D1

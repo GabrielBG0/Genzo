@@ -260,6 +260,9 @@ pub struct PhotoEdit {
     /// missing as-shot white, an unreadable tone curve. Empty until the
     /// photo is decoded.
     pub notes: Vec<String>,
+    /// Develop shows the photo whole and level, without its crop, for the
+    /// crop tool (DEV-12): `shown` is then the oriented size.
+    pub uncropped: bool,
     /// The photo's size in pixels as the shown edit orients it, before its
     /// crop: what the crop's normalized values are fractions of (DEV-12).
     pub oriented: Size,
@@ -398,6 +401,10 @@ pub enum Command {
     /// Shows the photo's before, its defaults, or its edit again (WF-02),
     /// recording nothing. Answers [`CommandResult::Edit`].
     ShowBefore { photo: u64, before: bool },
+    /// Shows the photo whole and level, without its crop, for the crop
+    /// tool (DEV-12), or with its crop again; recording nothing. Changes to
+    /// the edit keep it; a switch ends it. Answers [`CommandResult::Edit`].
+    ShowUncropped { photo: u64, uncropped: bool },
     /// Undoes the photo's last step (APP-10). Answers
     /// [`CommandResult::Edit`].
     Undo { photo: u64 },
@@ -728,6 +735,7 @@ mod tests {
                 revision: 4,
                 before: false,
                 notes: vec![],
+                uncropped: false,
                 oriented: Size {
                     width: 600,
                     height: 400,

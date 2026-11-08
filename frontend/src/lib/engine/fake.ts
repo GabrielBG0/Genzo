@@ -24,8 +24,8 @@ import {
   type WhiteBalancePreset,
 } from '$contract/genzo';
 import { defaults, type EditKind } from './edit';
-import { sizes } from './geometry';
-import { PhotoEdits } from './history';
+import { FULL_CROP, sizes, storedPoint } from './geometry';
+import { PhotoEdits, Refused } from './history';
 import { encodeTile } from './tiles';
 import type { Engine } from './types';
 
@@ -210,6 +210,8 @@ export class FakeEngine implements Engine {
   private preview: ClippingPreview = 'none';
   /** The open photo shows its before, its defaults (WF-02). */
   private before = false;
+  /** The open photo shows whole and level, for the crop tool (DEV-12). */
+  private uncropped = false;
 
   constructor(private readonly contractVersion = CONTRACT_VERSION) {}
 
@@ -337,6 +339,17 @@ export class FakeEngine implements Engine {
       }
       case 'pickWhiteBalance':
         return this.pick(command.photo, command.x, command.y);
+      case 'showUncropped': {
+        // As `Engine::show_uncropped`: nothing recorded, a gesture ended first.
+        const p = this.edits.get(command.photo);
+        if (!p) throw new Error(`photo ${command.photo} was not opened this session`);
+        if (this.strip.current === command.photo) {
+          this.endGesture();
+          this.uncropped = command.uncropped;
+          this.renderPhoto();
+        }
+        return { type: 'edit', edit: this.stateOf(p) as PhotoEdit, recorded: false, refused: null };
+      }
       case 'showBefore': {
         // As `Engine::show_before`: nothing recorded, a gesture ended first.
         const p = this.edits.get(command.photo);
@@ -437,11 +450,12 @@ export class FakeEngine implements Engine {
     if (previous >= 0 && index !== previous) this.strip.direction = index > previous ? 'next' : 'previous';
     this.strip.current = id;
     this.before = false;
+    this.uncropped = false;
     this.showPreview(fake);
     if (!fake.kind) return { edit: null, reason: fake.photo.reason };
     let edits = this.edits.get(id);
     if (!edits) {
-      edits = new PhotoEdits(id, fake.kind);
+      edits = new PhotoEdits(id, fake.kind, [fake.width, fake.height]);
       this.edits.set(id, edits);
     }
     this.renderPhoto();
@@ -471,7 +485,14 @@ export class FakeEngine implements Engine {
     const p = this.edits.get(photo);
     if (!p) throw new Error(`photo ${photo} was not opened this session`);
     const open = this.strip.current === photo;
-    const recorded = open ? act(p) : false;
+    let recorded: boolean;
+    try {
+      recorded = open ? act(p) : false;
+    } catch (e) {
+      // A refused delta: the edit as it is, with the reason (`Engine::edited`).
+      if (!(e instanceof Refused)) throw e;
+      return { type: 'edit', edit: this.stateOf(p) as PhotoEdit, recorded: false, refused: e.message };
+    }
     // A delta turns the before off; an undo or a redo when it did something
     // (WF-02).
     if (open && (always || recorded)) this.before = false;
@@ -546,15 +567,22 @@ export class FakeEngine implements Engine {
   private stateOf(p: PhotoEdits | undefined): PhotoEdit | null {
     if (!p) return null;
     const fake = this.folder.find((f) => f.photo.id === p.photo);
-    const before = this.before && p.photo === this.strip.current;
-    // The shown edit's sizes: the before's while it shows.
-    const shownEdit = before && fake?.kind ? defaults(fake.kind) : p.current();
+    const open = p.photo === this.strip.current;
+    // The shown edit's sizes: the before's while it shows, the whole photo's while uncropped.
+    const shownEdit = open && fake?.kind ? this.shownEdit(fake.kind, p) : p.current();
     return {
       ...p.state(),
-      before,
+      before: this.before && open,
+      uncropped: this.uncropped && open,
       notes: [...(fake?.notes ?? [])],
       ...sizes(shownEdit, [fake?.width ?? 0, fake?.height ?? 0]),
     };
+  }
+
+  /** The edit the open photo shows: its before (WF-02), and without its crop while the crop tool is open (DEV-12). */
+  private shownEdit(kind: EditKind, p: PhotoEdits): Edit {
+    const e = this.before ? defaults(kind) : p.current();
+    return this.uncropped ? { ...e, crop: { ...FULL_CROP } } : e;
   }
 
   private openInGesture(): boolean {
@@ -575,8 +603,9 @@ export class FakeEngine implements Engine {
     const edits = id === null ? undefined : this.edits.get(id);
     if (id === null || !fake?.kind || !edits || this.view.width === 0) return;
     const started = performance.now();
-    const shownEdit = this.before ? defaults(fake.kind) : edits.current();
-    const { shown } = sizes(shownEdit, [fake.width, fake.height]);
+    const shownEdit = this.shownEdit(fake.kind, edits);
+    const stored: [number, number] = [fake.width, fake.height];
+    const { shown } = sizes(shownEdit, stored);
     const [width, height] = fit([shown.width, shown.height], [this.view.width, this.view.height]);
     const generation = ++this.generation;
     const look = lookOf(shownEdit, fake.kind);
@@ -586,7 +615,7 @@ export class FakeEngine implements Engine {
     for (let y = 0; y < height; y += TILE_SIZE) {
       for (let x = 0; x < width; x += TILE_SIZE) {
         const rect = { x, y, width: Math.min(TILE_SIZE, width - x), height: Math.min(TILE_SIZE, height - y) };
-        const pixels = sceneTile(width, height, rect, look);
+        const pixels = sceneTile((x, y) => storedPoint(shownEdit, stored, [width, height], x, y), rect, look);
         count(histogram, pixels);
         if (region) continue;
         const header: TileHeader = {
@@ -619,7 +648,7 @@ export class FakeEngine implements Engine {
             imageWidth: shown.width,
             imageHeight: shown.height,
           };
-          const pixels = sceneTile(shown.width, shown.height, rect, look, true);
+          const pixels = sceneTile((x, y) => storedPoint(shownEdit, stored, [shown.width, shown.height], x, y), rect, look, true);
           paintClipping(pixels, this.overlay, this.preview);
           parts.push(encodeTile(header, pixels));
         }
@@ -803,7 +832,7 @@ function thumbnail(fake: FakePhoto, index: number): ArrayBuffer {
     imageWidth: width,
     imageHeight: height,
   };
-  return concat([encodeTile(header, sceneTile(width, height, rect, look))]);
+  return concat([encodeTile(header, sceneTile((x, y) => [x / width, y / height], rect, look))]);
 }
 
 /** A sky over ground with a gray card, under the photo's look. */
@@ -813,8 +842,7 @@ function thumbnail(fake: FakePhoto, index: number): ArrayBuffer {
  * scaled down, would blur away.
  */
 function sceneTile(
-  width: number,
-  height: number,
+  at: (x: number, y: number) => [number, number] | null,
   rect: { x: number; y: number; width: number; height: number },
   look: Look,
   fine = false,
@@ -822,14 +850,24 @@ function sceneTile(
   const out = new Uint8Array(rect.width * rect.height * 4);
   let i = 0;
   for (let y = rect.y; y < rect.y + rect.height; y++) {
-    const v = y / Math.max(1, height);
     for (let x = rect.x; x < rect.x + rect.width; x++) {
-      const u = x / Math.max(1, width);
+      const uv = at(x, y);
+      if (!uv) {
+        // Outside the photo (a straightened crop's corner): the backdrop.
+        out.set([16, 16, 18, 255], i);
+        i += 4;
+        continue;
+      }
+      const [u, v] = uv;
       const card = Math.abs(u - 0.5) < 0.12 && Math.abs(v - 0.62) < 0.1;
+      // A mark in the photo's top left corner, so turns and flips show.
+      const mark = u < 0.08 && v < 0.12;
       const grid = fine && (x % 64 === 0 || y % 64 === 0);
       const [r0, g0, b0] = grid
         ? [0.95, 0.95, 0.95]
-        : card
+        : mark
+          ? [0.8, 0.25, 0.2]
+          : card
         ? [0.45, 0.45, 0.45]
         : v < 0.55
           ? [0.35 + 0.3 * u, 0.5 + 0.2 * v, 0.8]

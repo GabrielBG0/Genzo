@@ -14,6 +14,10 @@ export const ICONS = {
   chevronRight: 'M9 6l6 6-6 6',
   edit: 'M4 7h10M18 7h2M4 17h4M12 17h8M16 5v4M10 15v4',
   crop: 'M7 3v14h14M3 7h14v14',
+  // The crop tool's (DEV-12): a padlock closed and open, and a level line.
+  lock: 'M6 11h12v9H6zM9 11V8a3 3 0 0 1 6 0v3',
+  unlock: 'M6 11h12v9H6zM9 11V8a3 3 0 0 1 5.8-1',
+  straighten: 'M3 15L21 9M3 19h18',
   remove: 'M5 15l10-10 4 4-10 10zM10 10l4 4',
   masking: 'M12 4a8 8 0 1 0 0 16a8 8 0 1 0 0-16zM12 4v16',
   star: 'M12 4l2.4 5 5.4.6-4 3.7 1.1 5.3L12 16l-4.9 2.6 1.1-5.3-4-3.7 5.4-.6z',

@@ -1,5 +1,9 @@
 import type { Change, Edit, Phase, PhotoEdit } from '$contract/genzo';
 import { applyChange, defaults, deltaLabel, isEdited, sameEdit, type EditKind } from './edit';
+import { fitCrop, orientedSize } from './geometry';
+
+/** A delta the engine refuses (`history::Refused`): the edit keeps its last valid state. */
+export class Refused extends Error {}
 
 interface Step {
   label: string;
@@ -25,6 +29,8 @@ export class PhotoEdits {
   constructor(
     readonly photo: number,
     readonly kind: EditKind,
+    /** The stored photo's size, to fit crops to it; without one, crops are taken as sent. */
+    private readonly stored: [number, number] | null = null,
   ) {
     this.base = defaults(kind);
   }
@@ -54,7 +60,14 @@ export class PhotoEdits {
   /** Applies `changes` in `phase`; returns whether a step was recorded. */
   apply(changes: Change[], phase: Phase, label?: string): boolean {
     let edit = this.current();
-    for (const c of changes) edit = applyChange(edit, c, this.kind);
+    for (const c of changes) {
+      edit = applyChange(edit, c, this.kind);
+      if (this.stored && typeof c === 'object' && 'Crop' in c) {
+        const fitted = fitCrop(edit.crop, orientedSize(edit, this.stored));
+        if (!fitted) throw new Refused('the crop does not fit the image about its center');
+        edit.crop = fitted;
+      }
+    }
     const stepLabel = this.gesture?.label ?? label ?? deltaLabel(changes);
     this.revision += 1;
     if (phase !== 'End') {
@@ -95,6 +108,8 @@ export class PhotoEdits {
       revision: this.revision,
       // The engine's session knows; the fake sets it (WF-02).
       before: false,
+      // The fake's session knows (DEV-12).
+      uncropped: false,
       // The photo's, not the edit's: the fake sets them (APP-07).
       notes: [],
       // The photo's size is the fake's to know: it sets them (DEV-01 viewport).

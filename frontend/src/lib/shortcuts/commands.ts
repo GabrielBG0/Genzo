@@ -37,7 +37,17 @@ export const DEFAULT_COMMANDS: CommandSpec[] = [
   { id: 'develop.picker', label: 'White balance picker', keys: ['W'], scope: 'develop', group: 'Develop' },
   { id: 'photo.previous', label: 'Previous photo', keys: ['ArrowLeft'], scope: 'develop', group: 'Photo' },
   { id: 'photo.next', label: 'Next photo', keys: ['ArrowRight'], scope: 'develop', group: 'Photo' },
-  { id: 'develop.pickerCancel', label: 'Cancel the picker', keys: ['Escape'], scope: 'develop', group: 'Develop' },
+  // Rotate and flip, and the crop tool's keys (DEV-12)
+  { id: 'photo.rotateLeft', label: 'Rotate left', keys: ['Mod+['], scope: 'develop', group: 'Photo' },
+  { id: 'photo.rotateRight', label: 'Rotate right', keys: ['Mod+]'], scope: 'develop', group: 'Photo' },
+  { id: 'photo.flipHorizontal', label: 'Flip horizontal', scope: 'develop', group: 'Photo' },
+  { id: 'photo.flipVertical', label: 'Flip vertical', scope: 'develop', group: 'Photo' },
+  { id: 'crop.overlay', label: 'Next crop overlay', keys: ['O'], scope: 'develop', group: 'Develop' },
+  { id: 'crop.swap', label: 'Swap the aspect', keys: ['X'], scope: 'develop', group: 'Develop' },
+  { id: 'crop.straighten', label: 'Straighten tool', scope: 'develop', group: 'Develop' },
+  { id: 'crop.done', label: 'Close', keys: ['Enter'], scope: 'develop', group: 'Develop' },
+  // Esc: the picker, the straighten tool, or the crop tool (DEV-02, DEV-12).
+  { id: 'develop.pickerCancel', label: 'Cancel', keys: ['Escape'], scope: 'develop', group: 'Develop' },
   // View (APP-08)
   { id: 'view.sidePanels', label: 'Hide side panels', keys: ['Tab'], group: 'View' },
   { id: 'view.allPanels', label: 'Hide all panels', keys: ['Shift+Tab'], group: 'View' },

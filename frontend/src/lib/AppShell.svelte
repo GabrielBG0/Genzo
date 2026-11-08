@@ -4,6 +4,8 @@
   import AboutDialog from './components/AboutDialog.svelte';
   import AppMenu from './components/AppMenu.svelte';
   import BasicPanel from './components/BasicPanel.svelte';
+  import CropOverlay from './components/CropOverlay.svelte';
+  import CropPanel from './components/CropPanel.svelte';
   import ExportDialog from './components/ExportDialog.svelte';
   import Filmstrip from './components/Filmstrip.svelte';
   import Histogram from './components/Histogram.svelte';
@@ -12,6 +14,7 @@
   import PhotoViewport from './components/PhotoViewport.svelte';
   import StatusBar from './components/StatusBar.svelte';
   import TopBar, { type Module } from './components/TopBar.svelte';
+  import { CropTool } from './develop/cropTool.svelte';
   import { exifRow } from './develop/exif';
   import { Exports } from './develop/export.svelte';
   import { chooseNotice } from './develop/status';
@@ -37,6 +40,8 @@
   const layout = new Layout(registry.platform === 'mac');
   /** The viewport's zoom and pan (DEV-01 viewport spec), for the session. */
   const zoom = new ZoomState();
+  /** The crop tool (DEV-12): open or not, its lock, overlay and straighten tool. */
+  const crop = untrack(() => new CropTool(session));
   /** The photo toolbar shows (T), for the session. */
   let toolbarShown = $state(true);
   /** Space is down: its key repeats are not new presses. */
@@ -126,12 +131,12 @@
   registry.bind(
     'develop.beforeAfter',
     () => session.toggleBefore(),
-    () => session.editable,
+    () => session.editable && !crop.open,
   );
   registry.bind(
     'develop.picker',
     () => session.togglePicker(),
-    () => session.editable,
+    () => session.editable && !crop.open,
   );
   registry.bind(
     'develop.clipping',
@@ -159,11 +164,11 @@
     () => void session.step('next'),
     () => at >= 0 && at < session.strip.photos.length - 1,
   );
-  // The viewport (DEV-01 viewport spec): Z, Space held, T.
+  // The viewport (DEV-01 viewport spec): Z, Space held, T. The crop tool is at Fit.
   registry.bind(
     'view.zoom',
     () => zoom.toggle(zoom.pointer),
-    () => session.editable && !inDialog,
+    () => session.editable && !inDialog && !crop.open,
     () => (zoom.level === 'fit' ? 'Zoom to 1:1' : 'Zoom to Fit'),
   );
   registry.bind(
@@ -173,8 +178,39 @@
       spaceDown = true;
       zoom.hold(zoom.pointer);
     },
+    () => session.editable && !inDialog && !crop.open,
+  );
+
+  // The crop tool (DEV-12), and rotate and flip, which work outside it too.
+  registry.bind(
+    'develop.crop',
+    () => crop.toggle(),
     () => session.editable && !inDialog,
   );
+  const cropping = () => crop.open && !inDialog;
+  registry.bind('crop.overlay', () => crop.cycleOverlay(), cropping);
+  registry.bind('crop.swap', () => crop.swap(), () => cropping() && session.editable);
+  registry.bind('crop.straighten', () => (crop.straightening = !crop.straightening), () => cropping() && session.editable);
+  registry.bind('crop.done', () => crop.close(), cropping);
+  const geometry = () => session.editable && !inDialog;
+  registry.bind('photo.rotateLeft', () => crop.turn(false), geometry);
+  registry.bind('photo.rotateRight', () => crop.turn(true), geometry);
+  registry.bind('photo.flipHorizontal', () => crop.flipHorizontal(), geometry);
+  registry.bind('photo.flipVertical', () => crop.flipVertical(), geometry);
+
+  // Opening the tool: Fit, no picker, the after; the photo shows whole while it is open.
+  $effect(() => {
+    if (!crop.open) return;
+    untrack(() => {
+      zoom.fit();
+      session.picking = false;
+      if (session.before) session.toggleBefore();
+    });
+  });
+  $effect(() => {
+    const want = crop.open && session.editable;
+    if (session.editable && session.uncropped !== want) untrack(() => session.showUncropped(want));
+  });
   registry.bind(
     'view.toolbar',
     () => (toolbarShown = !toolbarShown),
@@ -186,10 +222,16 @@
     zoom.release();
   }
 
+  // Esc: the picker off, else the straighten tool off, else the crop tool closed.
   registry.bind(
     'develop.pickerCancel',
-    () => (session.picking = false),
-    () => session.picking,
+    () => {
+      if (session.picking) session.picking = false;
+      else if (crop.straightening) crop.straightening = false;
+      else crop.close();
+    },
+    () => session.picking || crop.open,
+    () => (session.picking ? 'Cancel the picker' : crop.straightening ? 'Cancel the straighten tool' : 'Close the crop tool'),
   );
 
   $effect(() => {
@@ -248,9 +290,14 @@
       sizedPhoto = e.photo;
     });
   });
-  // A photo that does not render shows at Fit (its embedded preview); one opening keeps the zoom.
+  // A photo that does not render shows at Fit (its embedded preview), and closes the crop tool;
+  // one opening keeps the zoom.
   $effect(() => {
-    if (session.reason !== null) untrack(() => zoom.fit());
+    if (session.reason !== null)
+      untrack(() => {
+        zoom.fit();
+        crop.close();
+      });
   });
 
   const current = $derived(session.strip.photos.find((p) => p.id === session.strip.current) ?? null);
@@ -359,6 +406,7 @@
     'view.leftPanel': layout.left,
     'view.rightPanel': layout.right,
     'view.toolbar': toolbarShown,
+    'develop.crop': crop.open,
     'develop.beforeAfter': session.before,
     'develop.picker': session.picking,
     'develop.clipping':
@@ -415,9 +463,11 @@
         empty={session.reason ?? 'No photo open'}
         badge={session.before ? 'Before' : null}
         view={zoom}
-        zoomable={session.editable}
+        zoomable={session.editable && !crop.open}
       >
-        {#if toolbarShown && session.editable}
+        {#if crop.open && session.editable}
+          <CropOverlay tool={crop} {zoom} />
+        {:else if toolbarShown && session.editable}
           <PhotoToolbar
             {zoom}
             on={{
@@ -435,8 +485,17 @@
         overlay={session.overlay}
         canOverlay={session.editable}
         onoverlay={(side) => session.toggleClipping(side)}
+        tool={crop.open ? 'crop' : 'edit'}
+        ontool={(t) => {
+          if (t === 'crop' && !crop.open) registry.get('develop.crop').run();
+          else if (t === 'edit') crop.close();
+        }}
       />
-      <BasicPanel {session} presets={info.whiteBalancePresets} {layout} />
+      {#if crop.open}
+        <CropPanel {session} tool={crop} />
+      {:else}
+        <BasicPanel {session} presets={info.whiteBalancePresets} {layout} />
+      {/if}
     </aside>
   </main>
   <div class="strip" hidden={!layout.filmstrip}>

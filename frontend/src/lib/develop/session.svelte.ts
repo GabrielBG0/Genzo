@@ -20,7 +20,7 @@ import { tokenRgba, type Rgba8 } from './tokens';
 /** Commands that change the open photo's edit and answer with it. */
 type EditCommand = Extract<
   Command,
-  { type: 'applyEditDelta' | 'resetParam' | 'pickWhiteBalance' | 'undo' | 'redo' | 'showBefore' }
+  { type: 'applyEditDelta' | 'resetParam' | 'pickWhiteBalance' | 'undo' | 'redo' | 'showBefore' | 'showUncropped' }
 >;
 /**
  * Every command that goes in order with the edits: the clipping preview
@@ -91,6 +91,8 @@ export class DevelopSession {
   private optimistic: Edit | null = $state(null);
   /** The before asked for, until every command sent has answered (WF-02). */
   private wantBefore: boolean | null = $state(null);
+  /** The crop tool's uncropped view asked for, until the engine answers (DEV-12). */
+  private wantUncropped: boolean | null = $state(null);
 
   /** The edit the panel shows: the optimistic one during a gesture. */
   readonly shown: Edit | null = $derived(this.edit ? (this.optimistic ?? this.edit.edit) : null);
@@ -163,6 +165,18 @@ export class DevelopSession {
   /** The viewport shows the photo's before, its defaults (WF-02). */
   get before(): boolean {
     return this.editable && (this.wantBefore ?? this.edit?.before ?? false);
+  }
+
+  /** The photo shows whole and level, for the crop tool (DEV-12). */
+  get uncropped(): boolean {
+    return this.editable && (this.wantUncropped ?? this.edit?.uncropped ?? false);
+  }
+
+  /** The crop tool opens or closes: the photo shows without its crop, or with it again. Nothing is recorded. */
+  showUncropped(uncropped: boolean): void {
+    if (this.photo === null || !this.editable || this.uncropped === uncropped) return;
+    this.wantUncropped = uncropped;
+    this.send({ type: 'showUncropped', photo: this.photo, uncropped });
   }
 
   get canUndo(): boolean {
@@ -401,6 +415,7 @@ export class DevelopSession {
   private opened(edit: PhotoEdit | null, reason: string | null) {
     this.reason = reason;
     this.wantBefore = null;
+    this.wantUncropped = null;
     if (edit) this.accept(edit);
     else this.edit = null;
   }
@@ -441,6 +456,7 @@ export class DevelopSession {
       // clamped as it clamps.
       if (!this.inGesture && this.frame === null) this.optimistic = null;
       this.wantBefore = null;
+      this.wantUncropped = null;
       for (const resolve of this.idlers.splice(0)) resolve();
     }
   }
