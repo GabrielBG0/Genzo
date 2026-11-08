@@ -29,9 +29,32 @@
     header?: { name: string; value: string } | null;
     /** Focus the first enabled item when shown, and move with ↑ ↓; Esc closes. */
     autofocus?: boolean;
+    /** Esc, or an item chosen when `onchosen` is not given. */
     onclose?: () => void;
+    /** After an item ran (the app menu closes as a whole; APP-02). */
+    onchosen?: () => void;
+    /**
+     * A submenu item is opened: clicked, pointed at, or → or Enter on it
+     * (`byKey`). `anchor` is its button, to place the submenu beside.
+     */
+    onsubmenu?: (index: number, anchor: HTMLElement, byKey: boolean) => void;
+    /** The pointer is on an item that is not a submenu. */
+    onpoint?: (index: number) => void;
+    /** ← in the menu: a submenu goes back to its parent. */
+    onleft?: () => void;
   }
-  let { items, label = '', width = 260, header = null, autofocus = false, onclose }: Props = $props();
+  let {
+    items,
+    label = '',
+    width = 260,
+    header = null,
+    autofocus = false,
+    onclose,
+    onchosen,
+    onsubmenu,
+    onpoint,
+    onleft,
+  }: Props = $props();
   const registry = useRegistry();
   let menuEl: HTMLDivElement | undefined = $state();
 
@@ -50,6 +73,22 @@
       onclose?.();
       return;
     }
+    if (e.key === 'ArrowLeft' && onleft) {
+      e.preventDefault();
+      e.stopPropagation();
+      onleft();
+      return;
+    }
+    if (e.key === 'ArrowRight' || e.key === 'Enter') {
+      const at = Number((document.activeElement as HTMLElement | null)?.dataset.index);
+      const item = items[at];
+      if (item && !item.separator && item.submenu && !item.disabled) {
+        e.preventDefault();
+        e.stopPropagation();
+        onsubmenu?.(at, document.activeElement as HTMLElement, true);
+      }
+      return;
+    }
     if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
     e.preventDefault();
     e.stopPropagation();
@@ -65,11 +104,16 @@
     return item.command && registry.has(item.command) ? registry.shortcut(item.command) : '';
   }
 
-  function select(item: Exclude<MenuItem, { separator: true }>) {
-    if (item.disabled || item.submenu) return;
+  function select(item: Exclude<MenuItem, { separator: true }>, i: number, el: HTMLElement) {
+    if (item.disabled) return;
+    if (item.submenu) {
+      onsubmenu?.(i, el, false);
+      return;
+    }
+    // Closed first: a command may open a dialog that takes focus.
+    (onchosen ?? onclose)?.();
     if (item.onselect) item.onselect();
     else if (item.command) registry.get(item.command).run();
-    onclose?.();
   }
 </script>
 
@@ -88,8 +132,11 @@
         role={item.check === undefined ? 'menuitem' : 'menuitemcheckbox'}
         aria-checked={item.check === undefined ? undefined : item.check === 'mixed' ? 'mixed' : item.check}
         aria-haspopup={item.submenu ? 'menu' : undefined}
+        aria-expanded={item.submenu ? (item.hot ?? false) : undefined}
         disabled={item.disabled}
-        onclick={() => select(item)}
+        data-index={i}
+        onclick={(e) => select(item, i, e.currentTarget)}
+        onpointerenter={(e) => (item.submenu ? onsubmenu?.(i, e.currentTarget, false) : onpoint?.(i))}
       >
         <span class="check">{item.check === true ? '✓' : item.check === 'mixed' ? '–' : ''}</span>
         <span class="label">{item.label}</span>

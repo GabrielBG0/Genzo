@@ -20,7 +20,7 @@ Spec template for each feature: **Behavior** (what it does, step by step), **Inp
 - Scope: Compact menu instead of a classic menu bar. Import, Export and recent catalogs on top, then File, Edit, Library, Photo, Develop, View, Window, Help, then Preferences, Catalog settings, Keyboard shortcuts, Customize quick actions, Quit. Opens with Alt. It uses the shared menu style, with concentric corners, a top rim, and one highlight lens that slides between items.
 - Decided: the menu has radius 12 and padding 5, and its items have radius 7. It opens from its anchor in 140 ms and closes with a 90 ms fade. Shortcuts show modifiers in text-dim and the key in text-muted. Separators are inset to the labels (2026-11-05). See the handoff's Design system.
 - Open questions: On macOS, mirror the same structure in the system menu bar?
-- Spec: _to be written_
+- Spec: [APP-02.md](../specs/APP-02.md) (M1 part)
 
 ### APP-03 · Quick actions in the top bar
 - Priority: P1 · Screens: M5, all

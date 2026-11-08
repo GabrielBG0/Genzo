@@ -49,4 +49,6 @@ export interface Engine {
    * `allow` resolves true. Returns the unsubscribe function.
    */
   onCloseRequested(allow: () => Promise<boolean>): () => void;
+  /** Closes the window as its close button does, `onCloseRequested` first (Quit, APP-02). */
+  closeWindow(): void;
 }

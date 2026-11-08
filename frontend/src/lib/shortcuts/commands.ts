@@ -10,6 +10,8 @@ export const DEFAULT_COMMANDS: CommandSpec[] = [
   { id: 'app.menu', label: 'App menu', keys: ['Alt'], group: 'App' },
   { id: 'app.search', label: 'Search photos, presets and commands', keys: ['Mod+K'], group: 'App' },
   { id: 'app.shortcuts', label: 'Keyboard shortcuts', keys: ['Mod+/'], group: 'App' },
+  { id: 'app.quit', label: 'Quit', keys: ['Mod+Q'], group: 'App' },
+  { id: 'help.about', label: 'About Genzo', group: 'Help' },
   { id: 'file.openFolder', label: 'Open folder', keys: ['Mod+O'], group: 'File' },
   { id: 'module.library', label: 'Library', keys: ['G'], group: 'Modules' },
   { id: 'module.develop', label: 'Develop', keys: ['D'], group: 'Modules' },
