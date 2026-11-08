@@ -482,3 +482,90 @@ test('Panels: Tab, Shift Tab, F6, F7 and F8 hide and show them (APP-08)', async 
   await expect(strip).toBeVisible();
   await expect(right).toBeVisible();
 });
+
+test('The app menu: the logo and Alt alone open it; submenus, keys, View checks, About (APP-02)', async ({ page }) => {
+  await develop(page);
+  const menu = page.getByRole('menu', { name: 'App menu' });
+  // The logo opens it, with focus on the first item; Esc closes.
+  await page.getByRole('button', { name: /^App menu/ }).click();
+  await expect(menu).toBeVisible();
+  await expect(menu.getByRole('menuitem', { name: /Open folder/ })).toBeFocused();
+  await expect(menu.getByRole('menuitem', { name: /Export/ })).toContainText('Ctrl Shift E');
+  await page.keyboard.press('Escape');
+  await expect(menu).toBeHidden();
+
+  // Alt alone opens and closes it; Alt during a drag does not.
+  await page.keyboard.press('Alt');
+  await expect(menu).toBeVisible();
+  await page.keyboard.press('Alt');
+  await expect(menu).toBeHidden();
+  const track = page.getByRole('slider', { name: 'Shadows' }).locator('.track');
+  const box = await track.boundingBox();
+  if (!box) throw new Error('no track');
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.keyboard.down('Alt');
+  await page.mouse.move(box.x + box.width * 0.6, box.y + box.height / 2);
+  await page.keyboard.up('Alt');
+  await page.mouse.up();
+  await expect(menu).toBeHidden();
+
+  // Keys: ↓ to Export…, ↓↓ to File, → opens it, ← comes back.
+  await page.keyboard.press('Alt');
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('ArrowDown');
+  const file = menu.getByRole('menuitem', { name: 'File' });
+  await expect(file).toBeFocused();
+  await page.keyboard.press('ArrowRight');
+  const fileMenu = page.getByRole('menu', { name: 'File' });
+  await expect(fileMenu.getByRole('menuitem', { name: /Open folder/ })).toBeFocused();
+  await page.keyboard.press('ArrowLeft');
+  await expect(fileMenu).toBeHidden();
+  await expect(file).toBeFocused();
+
+  // Edit › Undo names the step and undoes it.
+  await page.keyboard.press('Escape');
+  await drag(page, 'Exposure', 0.5, 0.7);
+  await page.getByRole('button', { name: /^App menu/ }).click();
+  await menu.getByRole('menuitem', { name: 'Edit' }).hover();
+  const edit = page.getByRole('menu', { name: 'Edit' });
+  await expect(edit.getByRole('menuitem', { name: /Undo Exposure/ })).toContainText('Ctrl Z');
+  await expect(edit.getByRole('menuitem', { name: /^Redo/ })).toBeDisabled();
+  await edit.getByRole('menuitem', { name: /Undo Exposure/ }).click();
+  await expect(menu).toBeHidden();
+  await expect(page.getByRole('slider', { name: 'Exposure' })).toHaveAttribute('aria-valuetext', '0.00');
+
+  // View: checks follow the layout; Filmstrip hides it.
+  await page.getByRole('button', { name: /^App menu/ }).click();
+  await menu.getByRole('menuitem', { name: 'View' }).hover();
+  const view = page.getByRole('menu', { name: 'View' });
+  const filmstrip = view.getByRole('menuitemcheckbox', { name: /Filmstrip/ });
+  await expect(filmstrip).toHaveAttribute('aria-checked', 'true');
+  await filmstrip.click();
+  await expect(page.getByRole('region', { name: 'Filmstrip' })).toBeHidden();
+  await page.getByRole('button', { name: /^App menu/ }).click();
+  await menu.getByRole('menuitem', { name: 'View' }).hover();
+  await expect(view.getByRole('menuitemcheckbox', { name: /Filmstrip/ })).toHaveAttribute('aria-checked', 'false');
+  await page.keyboard.press('Escape');
+  await page.keyboard.press('F6');
+
+  // Develop › Reset all; Help › About Genzo.
+  await page.getByRole('button', { name: /^App menu/ }).click();
+  await menu.getByRole('menuitem', { name: 'Help' }).hover();
+  await page.getByRole('menu', { name: 'Help' }).getByRole('menuitem', { name: 'About Genzo' }).click();
+  const about = page.getByRole('dialog', { name: 'Genzo' });
+  await expect(about).toContainText('Engine contract');
+  await expect(about).toContainText('GNU GPL v3');
+  await page.keyboard.press('Escape');
+  await expect(about).toBeHidden();
+});
+
+test('Quit (Ctrl Q) closes the window, cancelling an export first (APP-02, OUT-01)', async ({ page }) => {
+  await page.goto('/?engine=fake&exportStep=400');
+  await expect(page.getByText('No photo open')).toBeHidden();
+  await page.keyboard.press('Control+Shift+E');
+  await page.getByRole('dialog', { name: 'Export' }).getByRole('button', { name: 'Export', exact: true }).click();
+  await expect(page.locator('footer').getByRole('button', { name: /^Exporting/ })).toBeVisible();
+  await page.keyboard.press('Control+q');
+  await expect(page.locator('footer').getByText('Export cancelled')).toBeVisible();
+});

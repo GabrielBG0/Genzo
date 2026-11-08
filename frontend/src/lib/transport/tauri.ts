@@ -82,6 +82,11 @@ export class TauriEngine implements Engine {
     return () => void stop.then((f) => f());
   }
 
+  closeWindow(): void {
+    // The window's close: `onCloseRequested` asks first (core:window:allow-close).
+    void getCurrentWindow().close();
+  }
+
   async fetchThumbnail(photo: number): Promise<ArrayBuffer> {
     const res = await fetch(convertFileSrc(String(photo), THUMB_SCHEME));
     if (!res.ok) throw new Error(`thumbnail ${photo}: HTTP ${res.status}`);

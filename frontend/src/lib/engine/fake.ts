@@ -625,6 +625,10 @@ export class FakeEngine implements Engine {
     };
   }
 
+  closeWindow(): void {
+    void this.requestClose();
+  }
+
   /** The user closes the window, for tests: closed unless a handler says no. */
   async requestClose(): Promise<boolean> {
     for (const allow of this.closeHandlers) {

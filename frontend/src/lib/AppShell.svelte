@@ -1,6 +1,8 @@
 <script lang="ts">
   import { untrack } from 'svelte';
   import type { EngineInfo } from '$contract/genzo';
+  import AboutDialog from './components/AboutDialog.svelte';
+  import AppMenu from './components/AppMenu.svelte';
   import BasicPanel from './components/BasicPanel.svelte';
   import ExportDialog from './components/ExportDialog.svelte';
   import Filmstrip from './components/Filmstrip.svelte';
@@ -30,9 +32,28 @@
   const exports = untrack(() => new Exports(engine));
   /** Which panels show (APP-08), for the session. */
   const layout = new Layout(registry.platform === 'mac');
-  bindLayout(registry, layout, () => !exportOpen);
   /** The export dialog (OUT-01) is open. */
   let exportOpen = $state(false);
+  /** About Genzo (APP-02) is open. */
+  let aboutOpen = $state(false);
+  /** The app menu (APP-02) is open, its top left here. */
+  let menuAt: { x: number; y: number } | null = $state(null);
+  /** A dialog takes the keys: no command runs under it. */
+  const inDialog = $derived(exportOpen || aboutOpen);
+  bindLayout(registry, layout, () => !inDialog);
+
+  /** Opens the app menu below the logo, or closes it. */
+  function toggleMenu() {
+    if (menuAt) {
+      menuAt = null;
+      return;
+    }
+    const logo = document.querySelector('.app-menu')?.getBoundingClientRect();
+    menuAt = { x: logo?.left ?? 8, y: (logo?.bottom ?? 40) + 4 };
+  }
+  registry.bind('app.menu', toggleMenu, () => !inDialog);
+  registry.bind('app.quit', () => engine.closeWindow(), () => true);
+  registry.bind('help.about', () => (aboutOpen = true), () => !inDialog);
 
   /** File › Open folder (LIB-09): the system's folder dialog. */
   async function openFolder() {
@@ -43,7 +64,7 @@
   registry.bind(
     'file.openFolder',
     () => void openFolder(),
-    () => !exportOpen,
+    () => !inDialog,
   );
   registry.bind(
     'module.export',
@@ -68,6 +89,11 @@
     () => session.redo(),
     () => session.canRedo,
     () => (session.canRedo && session.edit?.redo ? `Redo ${session.edit.redo}` : 'Redo'),
+  );
+  registry.bind(
+    'develop.resetAll',
+    () => session.reset(null),
+    () => session.editable,
   );
   registry.bind(
     'develop.treatment',
@@ -182,20 +208,77 @@
   );
   const adapterNotice = $derived(info.adapter.kind === 'hardware' ? null : info.adapter.fallbackReason);
 
+  /**
+   * Alt opens the app menu only on its own (APP-02): pressed and released
+   * with no other key or click between, so Alt-drag and Alt-click keep
+   * their meaning.
+   */
+  let altAlone = false;
+  /** A pointer button is down: Alt now belongs to a drag or a click. */
+  let pressing = false;
+
   function onkeydown(e: KeyboardEvent) {
-    // The dialog takes its own keys; no command runs under it.
-    if (exportOpen) return;
+    if (e.key === 'Alt') {
+      // In a text field Alt is the field's (Alt codes on Windows).
+      const typing = e.target instanceof Element && e.target.closest('input, textarea, [contenteditable="true"]');
+      altAlone = !typing && !pressing && (!e.repeat || altAlone);
+      if (altAlone) e.preventDefault();
+      return;
+    }
+    altAlone = false;
+    // A dialog, or the app menu, takes its own keys; no command runs under it.
+    if (inDialog || menuAt) return;
     registry.handle(e, module === 'develop' ? 'develop' : 'library');
   }
+
+  function onkeyup(e: KeyboardEvent) {
+    if (e.key !== 'Alt') return;
+    const alone = altAlone;
+    altAlone = false;
+    if (!alone) return;
+    e.preventDefault();
+    const cmd = registry.get('app.menu');
+    if (cmd.enabled()) cmd.run();
+  }
+
+  const menuChecks = $derived({
+    'view.sidePanels': layout.left && layout.right,
+    'view.allPanels': layout.left && layout.right && layout.filmstrip,
+    'view.filmstrip': layout.filmstrip,
+    'view.leftPanel': layout.left,
+    'view.rightPanel': layout.right,
+    'develop.beforeAfter': session.before,
+    'develop.picker': session.picking,
+    'develop.clipping':
+      session.overlay.shadows && session.overlay.highlights
+        ? true
+        : session.overlay.shadows || session.overlay.highlights
+          ? ('mixed' as const)
+          : false,
+  });
 </script>
 
-<svelte:window {onkeydown} />
+<svelte:window
+  {onkeydown}
+  {onkeyup}
+  onpointerdown={() => {
+    altAlone = false;
+    pressing = true;
+  }}
+  onpointerup={() => (pressing = false)}
+  onpointercancel={() => (pressing = false)}
+  onblur={() => {
+    altAlone = false;
+    pressing = false;
+  }}
+/>
 
 <div
   class="shell"
   style:grid-template-rows="var(--topbar-h) minmax(0, 1fr){layout.filmstrip ? ' var(--filmstrip-h)' : ''} var(--statusbar-h)"
 >
   <TopBar
+    onmenu={toggleMenu}
     {module}
     catalog={current ? current.fileName : 'No folder open'}
     progress={{ 'module.export': exports.progress }}
@@ -248,6 +331,12 @@
     notice={exports.status ?? session.notice ?? session.reason ?? adapterNotice}
     noticeMenu={exports.busy ? [{ label: 'Cancel export', command: 'export.cancel' }] : null}
   />
+  {#if menuAt}
+    <AppMenu folder={folderName} at={menuAt} checks={menuChecks} onclose={() => (menuAt = null)} />
+  {/if}
+  {#if aboutOpen}
+    <AboutDialog {info} onclose={() => (aboutOpen = false)} />
+  {/if}
   {#if exportOpen && current && session.editable}
     <ExportDialog
       {engine}
