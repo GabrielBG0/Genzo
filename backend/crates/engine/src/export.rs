@@ -259,6 +259,13 @@ impl Engine {
         Ok(())
     }
 
+    /// Cancels every export and waits until each has ended, its temporary
+    /// file deleted: the app is quitting (OUT-01). The shell calls it, as
+    /// the process ends without dropping the engine.
+    pub fn stop_exports(&self) {
+        self.exports.stop();
+    }
+
     /// Waits until every export has ended: for the tests and the cli.
     #[doc(hidden)]
     pub fn wait_exports_idle(&self) {

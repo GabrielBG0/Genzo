@@ -3,7 +3,8 @@
 
 import { convertFileSrc, invoke, isTauri as tauriPresent } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
-import { open, save } from '@tauri-apps/plugin-dialog';
+import { getCurrentWindow } from '@tauri-apps/api/window';
+import { ask, open, save } from '@tauri-apps/plugin-dialog';
 import type {
   Command,
   CommandResult,
@@ -59,6 +60,26 @@ export class TauriEngine implements Engine {
 
   chooseSavePath(suggested: string): Promise<string | null> {
     return save({ defaultPath: suggested, filters: [{ name: 'JPEG', extensions: ['jpg', 'jpeg'] }] });
+  }
+
+  ask(message: string, ok: string, cancel: string): Promise<boolean> {
+    return ask(message, { title: 'Genzo', kind: 'warning', okLabel: ok, cancelLabel: cancel });
+  }
+
+  onCloseRequested(allow: () => Promise<boolean>): () => void {
+    // Not prevented, the window is destroyed (core:window:allow-destroy).
+    const stop = getCurrentWindow().onCloseRequested(async (e) => {
+      // A handler that throws (a missing permission, say) must not leave a
+      // window that cannot close: an error lets it close.
+      let ok = true;
+      try {
+        ok = await allow();
+      } catch (err) {
+        console.error('close handler failed', err);
+      }
+      if (!ok) e.preventDefault();
+    });
+    return () => void stop.then((f) => f());
   }
 
   async fetchThumbnail(photo: number): Promise<ArrayBuffer> {

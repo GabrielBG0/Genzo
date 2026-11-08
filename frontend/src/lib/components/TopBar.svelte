@@ -17,6 +17,8 @@
     libraryEnabled?: boolean;
     /** Groups of quick actions, separated by dividers (APP-03). */
     quickActions?: QuickAction[][];
+    /** A quick action's progress ring, 0 to 1, by command (OUT-01's export). */
+    progress?: Record<string, number | null>;
     onmodule?: (m: Module) => void;
     onmenu?: () => void;
     onsearch?: () => void;
@@ -39,6 +41,7 @@
     catalog = 'No folder open',
     libraryEnabled = false,
     quickActions = DEVELOP_ACTIONS,
+    progress = {},
     onmodule,
     onmenu,
     onsearch,
@@ -75,6 +78,7 @@
       {#if g > 0}<span class="sep"></span>{/if}
       {#each group as action (action.command)}
         {@const cmd = registry.get(action.command)}
+        {@const done = progress[action.command] ?? null}
         <button
           class="qa"
           aria-label={registry.title(action.command)}
@@ -83,6 +87,13 @@
           onclick={() => run(action.command)}
         >
           <Icon name={action.icon} />
+          {#if done !== null}
+            <svg class="ring" viewBox="0 0 24 24" role="progressbar" aria-label="Export progress"
+              aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(done * 100)}>
+              <circle class="trough" cx="12" cy="12" r="10.5" pathLength="100" />
+              <circle class="done" cx="12" cy="12" r="10.5" pathLength="100" stroke-dasharray="{done * 100} 100" />
+            </svg>
+          {/if}
         </button>
       {/each}
     {/each}
@@ -175,6 +186,32 @@
     border-radius: var(--r-pill);
     border: 1px solid transparent;
     color: var(--text-body);
+  }
+
+  .qa {
+    position: relative;
+  }
+
+  .ring {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 24px;
+    height: 24px;
+    transform: translate(-50%, -50%) rotate(-90deg);
+    pointer-events: none;
+    fill: none;
+    stroke-width: 1.6;
+  }
+
+  .ring .trough {
+    stroke: var(--separator);
+  }
+
+  .ring .done {
+    stroke: var(--accent);
+    stroke-linecap: round;
+    transition: stroke-dasharray 120ms linear;
   }
 
   .qa:hover:not(:disabled) {

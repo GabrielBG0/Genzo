@@ -95,6 +95,8 @@ describe('Thumbnails', () => {
       fetchFrame: () => Promise.reject(new Error('unused')),
       chooseFolder: () => Promise.resolve(null),
       chooseSavePath: () => Promise.resolve(null),
+      ask: () => Promise.resolve(false),
+      onCloseRequested: () => () => {},
       fetchThumbnail: () => Promise.resolve(message.slice().buffer),
     };
     const bitmap = { width: 320, height: 240 } as ImageBitmap;
@@ -183,6 +185,8 @@ describe('Thumbnails, bounded', () => {
       fetchFrame: () => Promise.reject(new Error('unused')),
       chooseFolder: () => Promise.resolve(null),
       chooseSavePath: () => Promise.resolve(null),
+      ask: () => Promise.resolve(false),
+      onCloseRequested: () => () => {},
       fetchThumbnail: () => Promise.resolve(tile.slice().buffer),
     };
     const bitmaps: { close: ReturnType<typeof vi.fn> }[] = [];

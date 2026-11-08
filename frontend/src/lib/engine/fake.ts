@@ -162,6 +162,21 @@ export class FakeEngine implements Engine {
   folderChoice: () => Promise<string | null> = () => Promise.resolve('demo');
   /** What the fake's save dialog answers: the suggested path by default. */
   saveChoice: (suggested: string) => Promise<string | null> = (suggested) => Promise.resolve(suggested);
+  /** What the fake's question dialog answers: ok by default. */
+  askChoice: (message: string) => Promise<boolean> = () => Promise.resolve(true);
+  /** Each question asked, oldest first, for tests. */
+  readonly asked: string[] = [];
+  /**
+   * Milliseconds between an export's tenths; null (the default) reports
+   * it in one step. Set, an export runs long enough to cancel or to quit
+   * during.
+   */
+  exportStepMs: number | null = null;
+  /** Whether the window was closed (`requestClose`). */
+  closed = false;
+  private closeHandlers: (() => Promise<boolean>)[] = [];
+  /** Each paced export's cancel, by job. */
+  private runningExports = new Map<number, () => void>();
   /** Files the fake's exports wrote, by path. */
   readonly written = new Set<string>();
   /** Waits before each thumbnail is made: none by default. */
@@ -336,11 +351,39 @@ export class FakeEngine implements Engine {
           this.emit({ type: 'exportProgress', job, photo: command.photo, path: command.path, rowsDone, rowsTotal, state });
         progress(0, { type: 'queued' });
         progress(0, { type: 'running' });
-        progress(rowsTotal, { type: 'finished', notes: [] });
+        const step = this.exportStepMs;
+        if (step === null) {
+          progress(rowsTotal, { type: 'finished', notes: [] });
+        } else {
+          // One export at a time is not modelled: each runs on its own.
+          let tenth = 0;
+          let timer: ReturnType<typeof setTimeout>;
+          const next = () => {
+            tenth += 1;
+            if (tenth < 10) {
+              progress(Math.round((rowsTotal * tenth) / 10), { type: 'running' });
+              timer = setTimeout(next, step);
+            } else {
+              this.runningExports.delete(job);
+              progress(rowsTotal, { type: 'finished', notes: [] });
+            }
+          };
+          timer = setTimeout(next, step);
+          this.runningExports.set(job, () => {
+            clearTimeout(timer);
+            // The engine deletes a cancelled export's file.
+            this.written.delete(command.path);
+            progress(Math.round((rowsTotal * tenth) / 10), { type: 'cancelled' });
+          });
+        }
         return { type: 'export', job };
       }
-      case 'cancelExport':
+      case 'cancelExport': {
+        const cancel = this.runningExports.get(command.job);
+        this.runningExports.delete(command.job);
+        cancel?.();
         return DONE;
+      }
       case 'requestThumbnails': {
         this.thumbnailRequests.push([...command.photos]);
         const listed = new Set(this.folder.map((p) => p.photo.id));
@@ -545,6 +588,27 @@ export class FakeEngine implements Engine {
 
   chooseSavePath(suggested: string): Promise<string | null> {
     return this.saveChoice(suggested);
+  }
+
+  ask(message: string): Promise<boolean> {
+    this.asked.push(message);
+    return this.askChoice(message);
+  }
+
+  onCloseRequested(allow: () => Promise<boolean>): () => void {
+    this.closeHandlers.push(allow);
+    return () => {
+      this.closeHandlers = this.closeHandlers.filter((h) => h !== allow);
+    };
+  }
+
+  /** The user closes the window, for tests: closed unless a handler says no. */
+  async requestClose(): Promise<boolean> {
+    for (const allow of this.closeHandlers) {
+      if (!(await allow())) return false;
+    }
+    this.closed = true;
+    return true;
   }
 
   async fetchThumbnail(photo: number): Promise<ArrayBuffer> {

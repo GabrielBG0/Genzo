@@ -303,3 +303,26 @@ test('Export: Ctrl Shift E, the file, replace, Esc, the quick action and the tab
     'true',
   );
 });
+
+test('Export in progress: the ring, and cancelling from the status bar (OUT-01)', async ({ page }) => {
+  await page.goto('/?engine=fake&exportStep=400');
+  await expect(page.getByText('No photo open')).toBeHidden();
+  const status = page.locator('footer');
+  const ring = page.getByRole('toolbar', { name: 'Quick actions' }).getByRole('progressbar', { name: 'Export progress' });
+  await expect(ring).toBeHidden();
+  await page.keyboard.press('Control+Shift+E');
+  await page.getByRole('dialog', { name: 'Export' }).getByRole('button', { name: 'Export', exact: true }).click();
+  await expect(ring).toBeVisible();
+  await expect(ring).not.toHaveAttribute('aria-valuenow', '0');
+  const progress = status.getByRole('button', { name: /^Exporting DSC_0412\.jpg, \d+ %$/ });
+  await progress.click();
+  // Esc closes the menu; clicking again opens it.
+  await expect(page.getByRole('menu', { name: 'Export' })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(page.getByRole('menu', { name: 'Export' })).toBeHidden();
+  await progress.click();
+  await page.getByRole('menuitem', { name: 'Cancel export' }).click();
+  await expect(status.getByText('Export cancelled')).toBeVisible();
+  await expect(ring).toBeHidden();
+  await expect(page.getByRole('menu', { name: 'Export' })).toBeHidden();
+});

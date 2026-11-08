@@ -1,3 +1,4 @@
+import { SvelteSet } from 'svelte/reactivity';
 import type { Event, ExportState } from '$contract/genzo';
 import type { Engine } from '../engine/types';
 
@@ -25,6 +26,12 @@ export type Started = { ok: true } | { ok: false; exists: boolean; reason: strin
 
 /** How long "Exported NAME" stays in the status bar. */
 export const DONE_FOR_MS = 4000;
+
+/** How long quitting waits for the cancelled exports to delete their temporary files. */
+export const QUIT_WAIT_MS = 3000;
+
+/** What quitting during an export asks (OUT-01). */
+export const QUIT_QUESTION = 'An export is in progress. Quit anyway?';
 
 /** The smallest long edge the engine takes (DEV-01's smallest crop). */
 export const MIN_LONG_EDGE = 32;
@@ -74,6 +81,11 @@ export class Exports {
   /** Each job's destination. Not state: nothing renders from it. */
   // eslint-disable-next-line svelte/prefer-svelte-reactivity
   private paths = new Map<number, string>();
+  /** Jobs queued or running, the one the status bar follows or not. */
+  private active = new SvelteSet<number>();
+  /** Jobs that ended: an answer arriving after their last event adds none. */
+  // eslint-disable-next-line svelte/prefer-svelte-reactivity
+  private ended = new Set<number>();
   private clear: ReturnType<typeof setTimeout> | null = null;
   private readonly unsubscribe: () => void;
 
@@ -90,6 +102,21 @@ export class Exports {
   get busy(): boolean {
     const s = this.current?.state.type;
     return s === 'queued' || s === 'running';
+  }
+
+  /** Whether any export is queued or running: quitting asks first (OUT-01). */
+  get running(): boolean {
+    return this.active.size > 0;
+  }
+
+  /**
+   * How far the followed export is, 0 to 1, while it is queued or running;
+   * null otherwise. The Export quick action's ring (OUT-01).
+   */
+  get progress(): number | null {
+    const c = this.current;
+    if (!c || !this.busy) return null;
+    return c.state.type === 'running' && c.rowsTotal > 0 ? Math.min(1, c.rowsDone / c.rowsTotal) : 0;
   }
 
   /**
@@ -118,6 +145,7 @@ export class Exports {
       if (r.type !== 'export') throw new Error(`exportJpeg answered ${r.type}`);
       this.settings.folder = folderOf(path) || this.settings.folder;
       this.paths.set(r.job, path);
+      if (!this.ended.has(r.job)) this.active.add(r.job);
       // Its events may have come before the answer.
       if (this.current?.job !== r.job) {
         this.follow({ job: r.job, name: nameOf(path), rowsDone: 0, rowsTotal: 0, state: { type: 'queued' } });
@@ -133,6 +161,30 @@ export class Exports {
   async cancel(): Promise<void> {
     if (!this.current || !this.busy) return;
     await this.engine.execute({ type: 'cancelExport', job: this.current.job });
+  }
+
+  /**
+   * Cancels every export, then waits until they have ended (each deletes
+   * its temporary file), at most `waitMs`: quitting (OUT-01).
+   */
+  async cancelAll(waitMs = QUIT_WAIT_MS): Promise<void> {
+    const jobs = [...this.active];
+    await Promise.allSettled(jobs.map((job) => this.engine.execute({ type: 'cancelExport', job })));
+    const deadline = Date.now() + waitMs;
+    while (this.active.size > 0 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+  }
+
+  /**
+   * Whether the window may close: yes with no export; during one, if the
+   * user says so, after cancelling it (OUT-01).
+   */
+  async allowQuit(): Promise<boolean> {
+    if (!this.running) return true;
+    if (!(await this.engine.ask(QUIT_QUESTION, 'Quit', 'Keep exporting'))) return false;
+    await this.cancelAll();
+    return true;
   }
 
   /** The status bar's text for the export it follows, if any (APP-07). */
@@ -170,8 +222,16 @@ export class Exports {
 
   private onEvent(e: Event) {
     if (e.type !== 'exportProgress') return;
-    // A newer export takes the status bar; an older one's end does not.
-    if (this.current && e.job < this.current.job) return;
+    const live = e.state.type === 'queued' || e.state.type === 'running';
+    if (live && !this.ended.has(e.job)) {
+      this.active.add(e.job);
+    } else if (!live) {
+      this.ended.add(e.job);
+      this.active.delete(e.job);
+    }
+    // A newer export takes the status bar; an older one takes it back only
+    // while it runs and the newer has ended (cancelled while queued, say).
+    if (this.current && e.job < this.current.job && (this.busy || !live)) return;
     this.follow({
       job: e.job,
       name: nameOf(this.paths.get(e.job) ?? e.path),

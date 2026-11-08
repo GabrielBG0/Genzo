@@ -16,11 +16,21 @@ export class IncompatibleEngineError extends Error {
 
 /**
  * Picks the real engine inside Tauri and the fake one in a plain browser
- * (`?engine=fake` forces the fake), then runs the contract handshake.
+ * (`?engine=fake` forces the fake; `?exportStep=MS` paces its exports), then runs the contract handshake.
  */
 export async function connectEngine(): Promise<Engine> {
-  const forceFake = new URLSearchParams(location.search).get('engine') === 'fake';
-  const engine: Engine = !forceFake && isTauri() ? new TauriEngine() : new FakeEngine();
+  const params = new URLSearchParams(location.search);
+  const forceFake = params.get('engine') === 'fake';
+  let engine: Engine;
+  if (!forceFake && isTauri()) {
+    engine = new TauriEngine();
+  } else {
+    const fake = new FakeEngine();
+    // `?exportStep=MS`: the fake's exports take ten steps of MS (e2e tests).
+    const step = Number(params.get('exportStep'));
+    if (step > 0) fake.exportStepMs = step;
+    engine = fake;
+  }
   const result = await engine.handshake({ contractVersion: CONTRACT_VERSION });
   if (!result.compatible) {
     throw new IncompatibleEngineError(CONTRACT_VERSION, result.engineContractVersion);

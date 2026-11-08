@@ -1,4 +1,6 @@
 <script lang="ts">
+  import Menu, { type MenuItem } from './Menu.svelte';
+
   interface Props {
     /** The mode pill, e.g. the active module. */
     mode: string;
@@ -8,9 +10,44 @@
     facts?: string[];
     /** Software-adapter or other warning (APP-07). */
     notice?: string | null;
+    /**
+     * Set, the notice is a button offering these (an export's progress
+     * offers "Cancel export", OUT-01).
+     */
+    noticeMenu?: MenuItem[] | null;
   }
-  let { mode, info = [], facts = [], notice = null }: Props = $props();
+  let { mode, info = [], facts = [], notice = null, noticeMenu = null }: Props = $props();
+
+  /** Where the open menu's bottom right corner is, in the window. */
+  let menuAt: { right: number; bottom: number } | null = $state(null);
+  // The menu goes with its notice.
+  $effect(() => {
+    if (!noticeMenu) menuAt = null;
+  });
+
+  function toggle(e: MouseEvent) {
+    if (menuAt) {
+      menuAt = null;
+      return;
+    }
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    menuAt = { right: window.innerWidth - r.right, bottom: window.innerHeight - r.top + 4 };
+  }
+
+  function onwindowkey(e: KeyboardEvent) {
+    if (menuAt && e.key === 'Escape') {
+      e.stopPropagation();
+      menuAt = null;
+    }
+  }
+
+  function onwindowdown(e: PointerEvent) {
+    if (menuAt && !(e.target instanceof Element && e.target.closest('.notice-menu, .notice'))) menuAt = null;
+  }
 </script>
+
+<svelte:window onkeydowncapture={onwindowkey} onpointerdown={onwindowdown} />
+
 
 <footer class="status">
   <span class="pill lens">{mode}</span>
@@ -18,11 +55,20 @@
     <span class={[i === info.length - 1 && i > 0 && 'bright']}>{item}</span>
   {/each}
   <span class="spacer"></span>
-  {#if notice}<span class="notice" role="status">{notice}</span>{/if}
+  {#if notice && noticeMenu}
+    <span role="status">
+      <button class="notice" aria-haspopup="menu" aria-expanded={menuAt !== null} onclick={toggle}>{notice}</button>
+    </span>
+  {:else if notice}<span class="notice" role="status">{notice}</span>{/if}
   {#each facts as fact, i (i)}
     <span>{fact}</span>
   {/each}
 </footer>
+{#if menuAt && noticeMenu}
+  <div class="notice-menu" style:right="{menuAt.right}px" style:bottom="{menuAt.bottom}px">
+    <Menu items={noticeMenu} label="Export" width={200} onclose={() => (menuAt = null)} />
+  </div>
+{/if}
 
 <style>
   .status {
@@ -54,6 +100,23 @@
 
   .notice {
     color: var(--rating);
+  }
+
+  button.notice {
+    height: 18px;
+    padding: 0 6px;
+    border-radius: var(--r-pill);
+    border: 1px solid transparent;
+    font: inherit;
+  }
+
+  button.notice:hover {
+    background: var(--hover);
+  }
+
+  .notice-menu {
+    position: fixed;
+    z-index: 20;
   }
 
   .spacer {

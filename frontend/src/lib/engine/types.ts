@@ -39,4 +39,14 @@ export interface Engine {
    * OUT-01); null when cancelled. The dialog asks before replacing a file.
    */
   chooseSavePath(suggested: string): Promise<string | null>;
+  /**
+   * The system's question dialog: true for `ok`, false for `cancel` or
+   * closing it (quitting during an export, OUT-01).
+   */
+  ask(message: string, ok: string, cancel: string): Promise<boolean>;
+  /**
+   * Calls `allow` when the user closes the window; it closes only if
+   * `allow` resolves true. Returns the unsubscribe function.
+   */
+  onCloseRequested(allow: () => Promise<boolean>): () => void;
 }

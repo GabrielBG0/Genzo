@@ -14,6 +14,7 @@ export const DEFAULT_COMMANDS: CommandSpec[] = [
   { id: 'module.library', label: 'Library', keys: ['G'], group: 'Modules' },
   { id: 'module.develop', label: 'Develop', keys: ['D'], group: 'Modules' },
   { id: 'module.export', label: 'Export', keys: ['Mod+Shift+E'], group: 'Modules' },
+  { id: 'export.cancel', label: 'Cancel export', group: 'File' },
   // Edit
   { id: 'edit.undo', label: 'Undo', keys: ['Mod+Z'], group: 'Edit' },
   { id: 'edit.redo', label: 'Redo', keys: ['Mod+Shift+Z'], group: 'Edit' },
