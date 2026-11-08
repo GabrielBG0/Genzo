@@ -73,6 +73,17 @@
     () => session.editable,
   );
 
+  // D goes to Develop; Library waits for M2 (APP-01).
+  registry.bind(
+    'module.develop',
+    () => onmodule('develop'),
+    () => !inDialog,
+  );
+  registry.bind(
+    'module.library',
+    () => onmodule('library'),
+    () => false,
+  );
   registry.bind(
     'export.cancel',
     () => void exports.cancel(),

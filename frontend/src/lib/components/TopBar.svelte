@@ -1,6 +1,7 @@
 <script lang="ts">
   import { useRegistry } from '../shortcuts/context';
   import Icon from './Icon.svelte';
+  import { slidingLens } from './indicator.svelte';
   import type { IconName } from './icons';
 
   export type Module = 'library' | 'develop' | 'export';
@@ -111,10 +112,11 @@
   </button>
   <span class="spacer"></span>
 
-  <nav aria-label="Modules">
+  <nav aria-label="Modules" {@attach slidingLens(() => modules.findIndex((m) => m.id === module))}>
     {#each modules as m (m.id)}
       <button
-        class={['tab', m.id === module && 'lens']}
+        data-segment
+        class={['tab', m.id === module && 'on']}
         aria-current={m.id === module ? 'page' : undefined}
         title={registry.title(m.command)}
         disabled={m.id === 'library' && !libraryEnabled}
@@ -282,6 +284,10 @@
     border-radius: var(--r-pill);
     border: 1px solid transparent;
     color: var(--text-muted);
+  }
+
+  .tab.on {
+    color: var(--text-on-lens);
   }
 
   .tab:disabled {

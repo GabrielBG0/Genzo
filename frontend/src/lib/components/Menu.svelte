@@ -20,6 +20,8 @@
 
 <script lang="ts">
   import { useRegistry } from '../shortcuts/context';
+  import { fadeOut } from './fadeOut';
+  import { slidingLens } from './indicator.svelte';
 
   interface Props {
     items: MenuItem[];
@@ -58,12 +60,40 @@
   const registry = useRegistry();
   let menuEl: HTMLDivElement | undefined = $state();
 
+  /** Items under the pointer and with focus, by index in `items`. */
+  let pointed: number | null = $state(null);
+  let focused: number | null = $state(null);
+  /**
+   * The lit item, where the one highlight sits: the one pointed at, else an
+   * open submenu's item, else the focused one.
+   */
+  const lit = $derived.by(() => {
+    const hot = items.findIndex((it) => !it.separator && it.hot);
+    const at = pointed ?? (hot >= 0 ? hot : null) ?? focused;
+    if (at === null) return null;
+    const item = items[at];
+    return item && !item.separator && !item.disabled ? at : null;
+  });
+  /** The lit item's place among the buttons, for the highlight. */
+  const litButton = $derived(lit === null ? null : items.slice(0, lit).filter((it) => !it.separator).length);
+
+  function indexOf(e: Event): number | null {
+    const el = e.target instanceof Element ? e.target.closest<HTMLElement>('button.item') : null;
+    return el ? Number(el.dataset.index) : null;
+  }
+
   function enabledItems(): HTMLButtonElement[] {
     return menuEl ? [...menuEl.querySelectorAll<HTMLButtonElement>('button.item:not(:disabled)')] : [];
   }
 
   $effect(() => {
     if (autofocus) enabledItems()[0]?.focus();
+  });
+
+  // Closes with a 90 ms fade, of a copy (`fadeOut`).
+  $effect(() => {
+    const el = menuEl;
+    return () => fadeOut(el);
   });
 
   function onkeydown(e: KeyboardEvent) {
@@ -117,7 +147,19 @@
   }
 </script>
 
-<div class="menu" role="menu" tabindex="-1" aria-label={label} style:width="{width}px" bind:this={menuEl} {onkeydown}>
+<div
+  class="menu"
+  role="menu"
+  tabindex="-1"
+  aria-label={label}
+  style:width="{width}px"
+  bind:this={menuEl}
+  {onkeydown}
+  onpointerleave={() => (pointed = null)}
+  onfocusin={(e) => (focused = indexOf(e))}
+  onfocusout={() => (focused = null)}
+  {@attach slidingLens(() => litButton, 'menu')}
+>
   {#if header}
     <div class="header" role="presentation">
       <span>{header.name}</span><span class="header-value mono">{header.value}</span>
@@ -128,7 +170,8 @@
       <div class="sep" role="separator"></div>
     {:else}
       <button
-        class={['item', item.hot && 'lens', item.danger && 'danger']}
+        data-segment
+        class={['item', i === lit && 'lit', item.danger && 'danger']}
         role={item.check === undefined ? 'menuitem' : 'menuitemcheckbox'}
         aria-checked={item.check === undefined ? undefined : item.check === 'mixed' ? 'mixed' : item.check}
         aria-haspopup={item.submenu ? 'menu' : undefined}
@@ -136,7 +179,11 @@
         disabled={item.disabled}
         data-index={i}
         onclick={(e) => select(item, i, e.currentTarget)}
-        onpointerenter={(e) => (item.submenu ? onsubmenu?.(i, e.currentTarget, false) : onpoint?.(i))}
+        onpointerenter={(e) => {
+          pointed = item.disabled ? null : i;
+          if (item.submenu) onsubmenu?.(i, e.currentTarget, false);
+          else onpoint?.(i);
+        }}
       >
         <span class="check">{item.check === true ? '✓' : item.check === 'mixed' ? '–' : ''}</span>
         <span class="label">{item.label}</span>
@@ -148,7 +195,10 @@
 </div>
 
 <style>
+  /* Opens from its anchor (the top left corner) in 140 ms. */
   .menu {
+    transform-origin: top left;
+    animation: menu-open 140ms ease-out;
     max-width: calc(100vw - 48px);
     padding: 5px;
     border-radius: var(--r-menu);
@@ -171,10 +221,12 @@
     text-align: left;
   }
 
-  .item:hover:not(:disabled, .lens) {
-    background: var(--lens-bg);
-    border-color: var(--lens-border-color);
-    box-shadow: var(--lens-shadow);
+  /* The highlight is the menu's one sliding lens; the lit item's text follows it. */
+  .item {
+    transition: color 50ms ease-out;
+  }
+
+  .item.lit {
     color: var(--text-on-lens);
   }
 
@@ -231,9 +283,19 @@
 
   .item:focus-visible {
     outline: none;
-    background: var(--lens-bg);
-    border-color: var(--lens-border-color);
-    color: var(--text-on-lens);
+  }
+
+  @keyframes menu-open {
+    from {
+      opacity: 0;
+      transform: translateY(-4px) scale(0.96);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .menu {
+      animation: none;
+    }
   }
 
   .sep {

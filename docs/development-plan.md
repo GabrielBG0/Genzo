@@ -405,9 +405,11 @@ These come from `docs/m0-results.md` and decide how the steps below are built:
 
 ### Frontend (screens D1, D9; components Top bar, Left panel · Develop, Histogram + tool strip, Slider row, Panel header, Filmstrip, Status bar, Menu)
 1. **APP-01 Module switcher**: pill tabs. Develop is active (D). Library is disabled until M2. The Export tab opens the basic export view. Map and Print tabs appear only when those modules ship (Later).
+   - Done (2026-11-08): `docs/specs/APP-01.md`. D is bound; G waits for Library. One lens indicator slides between the tabs (180 ms, cubic-bezier(.22, 1, .36, 1), scale (.95, .9) while pressed; `components/indicator.svelte.ts`), and the same indicator serves Color / B&W, the histogram's tools and the Library toolbar. The menus' highlight became one sliding lens too (55 ms), and menus open from their anchor in 140 ms and close with a 90 ms fade, as APP-02's Decided style says.
 2. **APP-02 App menu** behind the logo, also opened with Alt. Start with the File, Edit, Photo, Develop, View and Help items that exist in M1. It grows every milestone.
    - Done (2026-11-08): `docs/specs/APP-02.md`. `AppMenu` (the logo, or Alt pressed and released alone): Open folder…, Export…, the File, Edit, Photo, Develop, View and Help submenus, Quit (Ctrl Q, new `app.quit`: closes the window, so it asks during an export). Every item is a registered command; View shows checks. Help › About Genzo (version, contract, adapter). Reset all (Ctrl Shift R) is bound, so its quick action works.
 3. **APP-03 Quick actions** with fixed Develop defaults: Undo, Redo, Before/After, Reset all and Export. Customization comes later.
+   - Done (2026-11-08): `docs/specs/APP-03.md`. Undo, Redo · Before/After, Reset all · Export, flat, each a registered command with its shortcut in the tooltip; Export's progress ring (OUT-01).
 4. **D1 Basic panel (DEV-02, core):**
    - Profile (Genzo Standard, Genzo Linear), the Color/B&W toggle (V), white balance presets, and the picker (W).
    - Temp and Tint on color-gradient tracks.
