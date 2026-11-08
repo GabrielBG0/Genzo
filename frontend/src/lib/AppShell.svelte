@@ -32,7 +32,6 @@
   const exports = untrack(() => new Exports(engine));
   /** Which panels show (APP-08), for the session. */
   const layout = new Layout(registry.platform === 'mac');
-  bindLayout(registry, layout, () => !inDialog);
   /** The export dialog (OUT-01) is open. */
   let exportOpen = $state(false);
   /** About Genzo (APP-02) is open. */
@@ -41,6 +40,7 @@
   let menuAt: { x: number; y: number } | null = $state(null);
   /** A dialog takes the keys: no command runs under it. */
   const inDialog = $derived(exportOpen || aboutOpen);
+  bindLayout(registry, layout, () => !inDialog);
 
   /** Opens the app menu below the logo, or closes it. */
   function toggleMenu() {
@@ -219,8 +219,10 @@
 
   function onkeydown(e: KeyboardEvent) {
     if (e.key === 'Alt') {
-      altAlone = !pressing && (!e.repeat || altAlone);
-      e.preventDefault();
+      // In a text field Alt is the field's (Alt codes on Windows).
+      const typing = e.target instanceof Element && e.target.closest('input, textarea, [contenteditable="true"]');
+      altAlone = !typing && !pressing && (!e.repeat || altAlone);
+      if (altAlone) e.preventDefault();
       return;
     }
     altAlone = false;
