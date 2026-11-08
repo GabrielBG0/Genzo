@@ -142,7 +142,12 @@ describe('Exports, in progress (OUT-01)', () => {
     expect(exports.busy).toBe(false);
     expect(exports.progress).toBeNull();
     expect(exports.running).toBe(true);
-    await vi.advanceTimersByTimeAsync(600);
+    // The older one's next progress takes the status bar back.
+    await vi.advanceTimersByTimeAsync(100);
+    expect(exports.status).toBe('Exporting a.jpg, 50 %');
+    expect(exports.progress).toBeCloseTo(0.5);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(exports.status).toBe('Exported a.jpg');
     expect(exports.running).toBe(false);
     expect(engine.written.has('/out/a.jpg')).toBe(true);
     expect(engine.written.has('/out/b.jpg')).toBe(false);

@@ -81,7 +81,15 @@ export class TauriEngine implements Engine {
   onCloseRequested(allow: () => Promise<boolean>): () => void {
     // Not prevented, the window is destroyed (core:window:allow-destroy).
     const stop = getCurrentWindow().onCloseRequested(async (e) => {
-      if (!(await allow())) e.preventDefault();
+      // A handler that throws (a missing permission, say) must not leave a
+      // window that cannot close: an error lets it close.
+      let ok = true;
+      try {
+        ok = await allow();
+      } catch (err) {
+        console.error('close handler failed', err);
+      }
+      if (!ok) e.preventDefault();
     });
     return () => void stop.then((f) => f());
   }

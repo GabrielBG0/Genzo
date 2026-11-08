@@ -250,8 +250,9 @@ export class Exports {
       this.ended.add(e.job);
       this.active.delete(e.job);
     }
-    // A newer export takes the status bar; an older one's end does not.
-    if (this.current && e.job < this.current.job) return;
+    // A newer export takes the status bar; an older one takes it back only
+    // while it runs and the newer has ended (cancelled while queued, say).
+    if (this.current && e.job < this.current.job && (this.busy || !live)) return;
     this.follow({
       job: e.job,
       name: nameOf(this.paths.get(e.job) ?? e.path),
