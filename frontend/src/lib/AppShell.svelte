@@ -291,13 +291,21 @@
   /** The autobench's hook on each draw. */
   let benchDraw: ((generation: number, at: number) => void) | null = null;
 
+  /**
+   * The photo the engine has answered for. Derived, so it changes only with
+   * the photo: reading `session.edit` itself would send the view again
+   * after every edit reply, and each `SetView` renders settled, which put
+   * a full lossless frame after every drag step.
+   */
+  const answeredPhoto = $derived(session.edit?.photo ?? null);
+
   /** What the viewport shows goes to the engine once per animation frame at most, the last one always. */
   let viewFrame: number | null = null;
   $effect(() => {
     const { width, height } = zoom.view;
     const request = zoom.request;
     // Again once a switch has answered: the engine opens each photo at Fit.
-    void session.edit?.photo;
+    void answeredPhoto;
     if (width === 0 || height === 0) return;
     if (viewFrame !== null) cancelAnimationFrame(viewFrame);
     viewFrame = requestAnimationFrame(() => {

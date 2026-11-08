@@ -120,29 +120,57 @@ export function maxError(a: number[][], b: number[][]): number {
   return Number.isNaN(max) ? Infinity : max;
 }
 
+/** How long a probe render may take to show its frame. */
+const FRAME_WAIT_MS = 10_000;
+
+/**
+ * The first frame of `photo` in `format` from now on, as its bytes. In the
+ * app a command's reply and its `RenderFinished` travel apart, so frames
+ * are watched rather than assumed to have come with the reply.
+ */
+function nextFrame(engine: Engine, photo: number, format: PixelFormat): { bytes: Promise<ArrayBuffer>; stop: () => void } {
+  let stop = () => {};
+  const bytes = new Promise<ArrayBuffer>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`no ${format} frame`)), FRAME_WAIT_MS);
+    const off = engine.onEvent((e: Event) => {
+      if (e.type !== 'renderFinished' || e.photo !== photo) return;
+      void engine.fetchFrame(e.generation).then((b) => {
+        if (decodeFrame(b)[0]?.header.format !== format) return;
+        clearTimeout(timer);
+        off();
+        resolve(b);
+      });
+    });
+    stop = () => {
+      clearTimeout(timer);
+      off();
+    };
+  });
+  return { bytes, stop };
+}
+
 /**
  * One render of the open photo through Develop's commands, and its frame:
  * a view of the scene's size in `space` gives the settled lossless tiles;
  * a gesture's start gives the drag preview, half size, as JPEG bands.
  */
 async function renderFrame(engine: Engine, photo: number, space: ColorSpace, preview: boolean): Promise<ArrayBuffer> {
-  let generation: number | null = null;
-  const off = engine.onEvent((e: Event) => {
-    if (e.type === 'renderFinished') generation = e.generation;
-  });
+  const format: PixelFormat = preview
+    ? space === 'srgb'
+      ? 'jpegSrgb'
+      : 'jpegDisplayP3'
+    : space === 'srgb'
+      ? 'rgba8Srgb'
+      : 'rgba8DisplayP3';
+  const watch = nextFrame(engine, photo, format);
   try {
     await engine.execute({ type: 'setView', width: SCENE[0], height: SCENE[1], view: { type: 'fit' }, space });
-    if (preview) {
-      generation = null;
-      await engine.execute({ type: 'applyEditDelta', photo, changes: [{ Exposure: 0 }], phase: 'Start' });
-    }
+    if (preview) await engine.execute({ type: 'applyEditDelta', photo, changes: [{ Exposure: 0 }], phase: 'Start' });
+    return await watch.bytes;
   } finally {
-    off();
+    watch.stop();
+    if (preview) await engine.execute({ type: 'applyEditDelta', photo, changes: [{ Exposure: 0 }], phase: 'End' });
   }
-  const got = generation;
-  if (preview) await engine.execute({ type: 'applyEditDelta', photo, changes: [{ Exposure: 0 }], phase: 'End' });
-  if (got === null) throw new Error(`no frame for ${space}${preview ? ' preview' : ''}`);
-  return engine.fetchFrame(got);
 }
 
 /** Opens the scene, renders it four ways and reads each back. */

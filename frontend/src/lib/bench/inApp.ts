@@ -119,8 +119,11 @@ export function startAutobench(host: BenchHost, diag: Diagnostics): { ondraw: (g
         host.status(`Autobench running, case ${Math.min(done + 1, total)} of ${total}. Do not touch or cover this window.`);
       });
       // After the cases, so it cannot change their numbers. It opens its own small scene.
-      host.status('Autobench: checking colors.');
-      report.color = await runColorProbe(engine);
+      // The fake sends no JPEG previews and has no colors to check: only a real webview does.
+      if (engine.kind !== 'fake') {
+        host.status('Autobench: checking colors.');
+        report.color = await runColorProbe(engine);
+      }
       await engine.execute({ type: 'saveAutobenchReport', report: JSON.stringify(report, null, 2) });
       const ran = report.cases.filter((c) => c.n > 0).length;
       host.status(`Autobench done: ${ran} of ${report.cases.length} cases. The report is saved; the script closes the app.`);

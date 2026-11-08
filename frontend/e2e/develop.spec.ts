@@ -793,3 +793,16 @@ test('Crop and rotate: R, a corner drag, the aspect, turns, flips, the angle, O 
   await page.keyboard.press('Escape');
   await expect(panel).toBeHidden();
 });
+
+test('A drag sends edit deltas only, never the view again (each SetView renders settled)', async ({ page }) => {
+  await develop(page);
+  const setViews = () =>
+    page.evaluate(() => (window as unknown as { __genzoFake: { counts: Map<string, number> } }).__genzoFake.counts.get('setView') ?? 0);
+  // Let the first renders and their replies settle.
+  await page.waitForTimeout(500);
+  const before = await setViews();
+  await drag(page, 'Exposure', 0.5, 0.8);
+  await expect(page.getByRole('slider', { name: 'Exposure' })).not.toHaveAttribute('aria-valuetext', '0.00');
+  await page.waitForTimeout(300);
+  expect(await setViews()).toBe(before);
+});

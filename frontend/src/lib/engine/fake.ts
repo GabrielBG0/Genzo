@@ -264,7 +264,11 @@ export class FakeEngine implements Engine {
     else if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
   }
 
+  /** How many of each command came, for tests (a drag must send no `setView`). */
+  readonly counts = new Map<string, number>();
+
   private run(command: Command): CommandResult {
+    this.counts.set(command.type, (this.counts.get(command.type) ?? 0) + 1);
     switch (command.type) {
       case 'saveAutobenchReport': {
         if (!this.autobench) throw new Error('not in autobench mode');

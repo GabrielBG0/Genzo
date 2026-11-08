@@ -32,6 +32,8 @@ export async function connectEngine(): Promise<Engine> {
     if (step > 0) fake.exportStepMs = step;
     // `?autobench`: the fake reports autobench mode, so the app runs it (e2e tests).
     fake.autobench = params.has('autobench');
+    // Tests read what the fake was sent (`counts`) through the page.
+    Object.assign(window, { __genzoFake: fake });
     engine = fake;
   }
   const result = await engine.handshake({ contractVersion: CONTRACT_VERSION });
