@@ -125,7 +125,11 @@
   function copy(t: SliderTarget, text: string) {
     copied = { key: t.key, value: t.current };
     // Best effort: the value stays kept for Paste value either way.
-    void navigator.clipboard?.writeText(text).catch(() => {});
+    try {
+      void navigator.clipboard?.writeText(text).catch(() => {});
+    } catch {
+      // Some webviews throw at once; the value is kept anyway.
+    }
   }
 
   const menuItems = (t: SliderTarget, text: string): MenuItem[] => [
@@ -140,7 +144,8 @@
     },
   ];
 
-  function onwindowdown(e: PointerEvent) {
+  /** A press or a wheel outside the menu closes it. */
+  function outside(e: Event) {
     if (menu && !(e.target instanceof Element && e.target.closest('.slider-menu'))) menu = null;
   }
 
@@ -308,7 +313,7 @@
   {/if}
 </section>
 
-<svelte:window onpointerdown={onwindowdown} onwheel={() => (menu = null)} />
+<svelte:window onpointerdown={outside} onwheel={outside} />
 {#if menu}
   {@const t = menu.target}
   <div class="slider-menu" style:left="{menu.x}px" style:top="{menu.y}px">
