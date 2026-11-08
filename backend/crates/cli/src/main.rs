@@ -12,7 +12,7 @@ use std::sync::mpsc::{Receiver, channel};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use genzo_engine::api::{Command, Event, PixelFormat, Query};
+use genzo_engine::api::{Command, Event, Query};
 use genzo_engine::develop::{Applied, Target, ViewSpec};
 use genzo_engine::preview::Shown;
 use genzo_engine::{Engine, contract, files};
@@ -31,7 +31,6 @@ commands:
                                key; print each result, error and event as a JSON
                                line keyed result, error or event. At the end it
                                waits for the events still to come
-  bench test-pattern [W H N]   render N test-pattern frames of W×H, print p50/p95
   bench decode FILE [T N]      decode FILE N times with T threads, print p50/p95
   bench gpu [W H N]            open a W×H synthetic raw in Develop at Fit in a
                                2560 px viewport, N slider steps per case (drags
@@ -121,7 +120,6 @@ fn main() -> ExitCode {
             })
             .map_err(|e| e.to_string()),
         ["run", file] => run(file),
-        ["bench", "test-pattern", rest @ ..] => bench_test_pattern(rest, &mut metrics),
         ["bench", "decode", file, rest @ ..] => bench_decode(file, rest, &mut metrics),
         ["bench", "gpu", rest @ ..] => bench_gpu(rest, exporting, &mut metrics),
         ["bench", "open", folder, rest @ ..] => {
@@ -263,40 +261,6 @@ fn bench_decode(file: &str, args: &[&str], metrics: &mut Metrics) -> Result<(), 
     let (p50, p95) = percentiles(times);
     metrics.add(format!("decode/{threads} threads"), p50, p95);
     println!("decode {file}, {threads} threads, {n} runs: p50 {p50:.2} ms, p95 {p95:.2} ms");
-    Ok(())
-}
-
-/// Engine-side cost of one frame: render plus tile encoding. The end-to-end
-/// latency (IPC, upload, screen) is measured in the app, see 0.E.
-fn bench_test_pattern(args: &[&str], metrics: &mut Metrics) -> Result<(), String> {
-    let num = |i: usize, default: u32| -> Result<u32, String> {
-        args.get(i).map_or(Ok(default), |s| {
-            s.parse().map_err(|_| format!("not a number: {s}"))
-        })
-    };
-    let (width, height, n) = (num(0, 2560)?, num(1, 1440)?, num(2, 30)?.max(1));
-    let (engine, events) = recorded(Engine::headless());
-    let mut times = Vec::with_capacity(n as usize);
-    for i in 0..n {
-        let started = Instant::now();
-        engine
-            .execute(Command::RenderTestPattern {
-                width,
-                height,
-                phase: i as f32 / n as f32,
-                format: PixelFormat::Rgba8Srgb,
-            })
-            .map_err(|e| e.to_string())?;
-        let Ok(Event::RenderFinished { generation, .. }) = events.try_recv() else {
-            return Err("render produced no frame".into());
-        };
-        let bytes = engine.frame(generation).ok_or("frame missing")?;
-        std::hint::black_box(bytes);
-        times.push(started.elapsed().as_secs_f64() * 1000.0);
-    }
-    let (p50, p95) = percentiles(times);
-    metrics.add(format!("test-pattern/{width}x{height}"), p50, p95);
-    println!("test-pattern {width}x{height}, {n} frames: p50 {p50:.2} ms, p95 {p95:.2} ms");
     Ok(())
 }
 

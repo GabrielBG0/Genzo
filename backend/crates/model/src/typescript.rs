@@ -8,8 +8,8 @@ use ts_rs::{Config, TS};
 use crate::api::{
     AdapterInfo, AdapterKind, CaptureTime, Clipping, ClippingPreview, ColorSpace, Command,
     CommandResult, Counted, Direction, EngineInfo, Event, ExportState, Handshake, HandshakeResult,
-    Histogram, PhotoEdit, PhotoKind, Query, QueryResult, Rational, Shooting, Size, SpikeSource,
-    Strip, StripPhoto, View, WhiteBalancePreset,
+    Histogram, PhotoEdit, PhotoKind, Query, QueryResult, Rational, Shooting, Size, Strip,
+    StripPhoto, View, WhiteBalancePreset,
 };
 use crate::contract::{CONTRACT_VERSION, ContractVersion};
 use crate::edit::{
@@ -37,7 +37,6 @@ pub fn generate() -> String {
         decl::<PixelFormat>(&cfg),
         decl::<Rect>(&cfg),
         decl::<TileHeader>(&cfg),
-        decl::<SpikeSource>(&cfg),
         decl::<Profile>(&cfg),
         decl::<Treatment>(&cfg),
         decl::<WhiteBalanceMode>(&cfg),

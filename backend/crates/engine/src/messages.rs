@@ -38,6 +38,35 @@ impl Engine {
                     reason,
                 })
             }
+            Command::OpenSynthetic { width, height } => {
+                if !self.info().autobench {
+                    return Err(EngineError::Invalid(
+                        "a synthetic photo opens only in autobench mode (GENZO_AUTOBENCH)".into(),
+                    ));
+                }
+                let id = self.open_synthetic(width, height)?;
+                let edit = self.edit_of(id).map(photo_edit);
+                let size = edit
+                    .as_ref()
+                    .map_or((width, height), |e| (e.shown.width, e.shown.height));
+                Ok(CommandResult::Folder {
+                    strip: api::Strip {
+                        photos: vec![api::StripPhoto {
+                            id,
+                            file_name: format!("Synthetic {} × {}", size.0, size.1),
+                            capture_time: None,
+                            shooting: api::Shooting::default(),
+                            kind: api::PhotoKind::Renders,
+                            reason: None,
+                            edited: false,
+                        }],
+                        current: Some(id),
+                        direction: api::Direction::Next,
+                    },
+                    edit,
+                    reason: None,
+                })
+            }
             Command::SelectPhoto { photo } => {
                 let (edit, reason) = selected(self.select_photo(photo))?;
                 Ok(CommandResult::Selected {
@@ -145,11 +174,8 @@ impl Engine {
                 self.request_thumbnails(&photos);
                 Ok(CommandResult::Done)
             }
-            Command::RenderTestPattern { .. }
-            | Command::LoadSpikeImage { .. }
-            | Command::RenderSpike { .. }
-            | Command::SaveAutobenchReport { .. } => {
-                unreachable!("the spike's commands run in Engine::execute")
+            Command::SaveAutobenchReport { .. } => {
+                unreachable!("the autobench's report is written in Engine::execute")
             }
         }
     }

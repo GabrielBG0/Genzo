@@ -16,6 +16,8 @@
   import TopBar, { type Module } from './components/TopBar.svelte';
   import { CropTool } from './develop/cropTool.svelte';
   import { exifRow } from './develop/exif';
+  import { timedEngine } from './bench/autobench';
+  import { newDiagnostics, startAutobench } from './bench/inApp';
   import { Exports } from './develop/export.svelte';
   import { chooseNotice } from './develop/status';
   import { DevelopSession } from './develop/session.svelte';
@@ -29,7 +31,10 @@
     engine: Engine;
     info: EngineInfo;
   }
-  let { engine, info }: Props = $props();
+  let { engine: given, info }: Props = $props();
+  /** The autobench's timings (GENZO_AUTOBENCH); its engine times the transport. */
+  const diag = newDiagnostics();
+  const engine = untrack(() => (info.autobench ? timedEngine(given, diag) : given));
 
   const registry = provideRegistry();
   let module: Module = $state('develop');
@@ -236,9 +241,24 @@
 
   $effect(() => {
     untrack(() => {
-      // The fake opens its demo folder; the real engine waits for a folder
-      // to be chosen (wired with the real engine).
-      if (engine.kind === 'fake') void session.openFolder('demo');
+      // In autobench mode the app benchmarks itself (the bench kit); otherwise
+      // the fake opens its demo folder, and the real engine waits for one.
+      if (info.autobench) {
+        benchDraw = startAutobench(
+          {
+            engine,
+            info,
+            session,
+            zoom,
+            pinView: ([w, h]) => {
+              pinned = true;
+              zoom.resize(w, h);
+            },
+            status: (text) => (benchStatus = text),
+          },
+          diag,
+        ).ondraw;
+      } else if (engine.kind === 'fake') void session.openFolder('demo');
     });
     // Quitting during an export asks first, and cancels it (OUT-01).
     const stopClose = engine.onCloseRequested(() => exports.allowQuit());
@@ -261,9 +281,15 @@
     module = m;
   }
 
+  /** The autobench pins the view's size, whatever the window's. */
+  let pinned = false;
   function onresize(width: number, height: number) {
-    zoom.resize(width, height);
+    if (!pinned) zoom.resize(width, height);
   }
+  /** The autobench's status, shown over the app while it runs. */
+  let benchStatus: string | null = $state(null);
+  /** The autobench's hook on each draw. */
+  let benchDraw: ((generation: number, at: number) => void) | null = null;
 
   /** What the viewport shows goes to the engine once per animation frame at most, the last one always. */
   let viewFrame: number | null = null;
@@ -464,6 +490,8 @@
         badge={session.before ? 'Before' : null}
         view={zoom}
         zoomable={session.editable && !crop.open}
+        ondraw={(generation, at) => benchDraw?.(generation, at)}
+        onerror={(message) => (diag.viewportError = message)}
       >
         {#if crop.open && session.editable}
           <CropOverlay tool={crop} {zoom} />
@@ -533,8 +561,25 @@
     />
   {/if}
 </div>
+{#if benchStatus}
+  <!-- The autobench (GENZO_AUTOBENCH): the bench kit reads the report; this tells whoever watches. -->
+  <p class="bench-status overlay" role="status">{benchStatus}</p>
+{/if}
 
 <style>
+  .bench-status {
+    position: fixed;
+    left: 50%;
+    top: 56px;
+    transform: translateX(-50%);
+    margin: 0;
+    padding: 6px 14px;
+    border-radius: var(--r-pill);
+    color: var(--text-body);
+    font-size: var(--text-small);
+    z-index: 20;
+  }
+
   .shell {
     height: 100%;
     min-height: 600px;

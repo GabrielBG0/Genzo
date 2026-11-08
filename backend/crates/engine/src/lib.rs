@@ -10,18 +10,16 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
 
 use genzo_color::white_balance::Preset;
 use genzo_jobs::Generations;
 use genzo_model::api::{
     AdapterInfo, AdapterKind, Command, CommandResult, EngineInfo, Event, Handshake,
-    HandshakeResult, Query, QueryResult, SpikeSource, WhiteBalancePreset,
+    HandshakeResult, Query, QueryResult, WhiteBalancePreset,
 };
 use genzo_model::contract::ContractVersion;
 use genzo_model::frame::PixelFormat;
-use genzo_model::frame::{Rect, TILE_SIZE, TileHeader};
-use genzo_pipeline::gpu::spike::{DisplaySpace, SpikeParams};
+use genzo_model::frame::{Rect, TileHeader};
 use genzo_pipeline::gpu::thread::RenderThread;
 use genzo_pipeline::gpu::{AdapterChoice, GpuError};
 
@@ -402,109 +400,6 @@ impl Engine {
     /// histogram, the prefetch's sharper render.
     pub fn execute(&self, command: Command) -> Result<CommandResult, EngineError> {
         let events = match command {
-            Command::RenderTestPattern {
-                width,
-                height,
-                phase,
-                format,
-            } => {
-                check_size(width, height)?;
-                check_format(format)?;
-                let started = Instant::now();
-                let generation = self.generations.next();
-                let Some(tile_count) =
-                    self.store_frame(generation, width, height, format, |rect| {
-                        genzo_pipeline::test_pattern::render_tile(width, height, rect, phase)
-                    })
-                else {
-                    return Ok(CommandResult::Done);
-                };
-                vec![Event::RenderFinished {
-                    photo: None,
-                    generation,
-                    tile_count,
-                    render_ms: started.elapsed().as_secs_f64() * 1000.0,
-                    gpu_ms: None,
-                }]
-            }
-            Command::LoadSpikeImage {
-                source: SpikeSource::Synthetic { width, height },
-            } => {
-                check_size(width, height)?;
-                // The CFA pattern repeats every two pixels; keep it whole.
-                let image = genzo_pipeline::gpu::synthetic::scene_mosaic(width & !1, height & !1);
-                let (width, height) = (image.width, image.height);
-                self.gpu()?.set_image(Arc::new(image))?;
-                vec![Event::SpikeImageLoaded { width, height }]
-            }
-            Command::RenderSpike {
-                width,
-                height,
-                exposure_ev,
-                wb,
-                format,
-                interactive,
-                proxy,
-            } => {
-                check_size(width, height)?;
-                check_format(format)?;
-                let started = Instant::now();
-                let generation = self.generations.next();
-                // The preview only makes sense during a drag.
-                let proxy = proxy && interactive;
-                let params = SpikeParams {
-                    wb,
-                    exposure_ev,
-                    space: match format {
-                        PixelFormat::Rgba8Srgb | PixelFormat::JpegSrgb => DisplaySpace::Srgb,
-                        PixelFormat::Rgba8DisplayP3 | PixelFormat::JpegDisplayP3 => {
-                            DisplaySpace::DisplayP3
-                        }
-                    },
-                    interactive,
-                    proxy,
-                };
-                // None: a newer render replaced this one on the render thread.
-                let Some(frame) = self.gpu()?.render(params, (width, height))? else {
-                    return Ok(CommandResult::Done);
-                };
-                if proxy {
-                    let Some(band_count) = self.store_jpeg_bands(generation, &frame, format) else {
-                        return Ok(CommandResult::Done);
-                    };
-                    self.emit(Event::RenderFinished {
-                        photo: None,
-                        generation,
-                        tile_count: band_count,
-                        render_ms: started.elapsed().as_secs_f64() * 1000.0,
-                        gpu_ms: frame.gpu_ms,
-                    });
-                    return Ok(CommandResult::Done);
-                }
-                let row = frame.width as usize * 4;
-                let Some(tile_count) =
-                    self.store_frame(generation, frame.width, frame.height, format, |rect| {
-                        let mut out =
-                            Vec::with_capacity(rect.width as usize * rect.height as usize * 4);
-                        for y in rect.y..rect.y + rect.height {
-                            let start = y as usize * row + rect.x as usize * 4;
-                            out.extend_from_slice(
-                                &frame.rgba[start..start + rect.width as usize * 4],
-                            );
-                        }
-                        out
-                    })
-                else {
-                    return Ok(CommandResult::Done);
-                };
-                vec![Event::RenderFinished {
-                    photo: None,
-                    generation,
-                    tile_count,
-                    render_ms: started.elapsed().as_secs_f64() * 1000.0,
-                    gpu_ms: frame.gpu_ms,
-                }]
-            }
             Command::SaveAutobenchReport { report } => {
                 let path = self.autobench.as_ref().ok_or_else(|| {
                     EngineError::Io("not in autobench mode (GENZO_AUTOBENCH is unset)".into())
@@ -519,80 +414,6 @@ impl Engine {
             self.emit(event);
         }
         Ok(CommandResult::Done)
-    }
-
-    /// Splits a `width` × `height` frame into tiles, encodes them and keeps
-    /// the result for [`Engine::frame`]. Returns the tile count, or `None`
-    /// when a newer generation made this one stale (latest wins).
-    fn store_frame(
-        &self,
-        generation: u64,
-        width: u32,
-        height: u32,
-        format: PixelFormat,
-        mut tile_pixels: impl FnMut(Rect) -> Vec<u8>,
-    ) -> Option<u32> {
-        let tiles = genzo_pipeline::tiles::grid(width, height, TILE_SIZE);
-        let mut frame = Vec::with_capacity(
-            width as usize * height as usize * format.bytes_per_pixel().unwrap_or(0)
-                + tiles.len() * genzo_model::frame::TILE_HEADER_LEN,
-        );
-        for rect in &tiles {
-            if self.generations.is_stale(generation) {
-                return None;
-            }
-            let header = TileHeader {
-                generation,
-                rect: *rect,
-                mip_level: 0,
-                format,
-                image_width: width,
-                image_height: height,
-            };
-            frame.extend_from_slice(&header.encode(&tile_pixels(*rect)));
-        }
-        self.frames
-            .lock()
-            .expect("frame store poisoned")
-            .put(generation, frame);
-        Some(tiles.len() as u32)
-    }
-
-    /// Splits a frame into horizontal bands, encodes each as a JPEG on the
-    /// rayon pool and keeps the messages for [`Engine::frame`]. Returns the
-    /// band count, or `None` when a newer generation made this one stale.
-    fn store_jpeg_bands(
-        &self,
-        generation: u64,
-        frame: &genzo_pipeline::gpu::spike::Frame,
-        format: PixelFormat,
-    ) -> Option<u32> {
-        let size = (frame.width, frame.height);
-        let encoded = frames::bands(&frame.rgba, size)?;
-        if self.generations.is_stale(generation) {
-            return None;
-        }
-        let mut message = Vec::with_capacity(
-            encoded.iter().map(|(_, j)| j.len()).sum::<usize>()
-                + encoded.len() * genzo_model::frame::TILE_HEADER_LEN,
-        );
-        for (rect, jpeg) in &encoded {
-            let header = TileHeader {
-                generation,
-                rect: *rect,
-                mip_level: 0,
-                format: format.as_jpeg(),
-                image_width: size.0,
-                image_height: size.1,
-            };
-            message.extend_from_slice(&header.encode(jpeg));
-        }
-        let count = encoded.len() as u32;
-        self.frames
-            .lock()
-            .expect("frame store poisoned")
-            .put(generation, message);
-        Some(count)
     }
 
     /// The tile messages of a finished generation, concatenated. Each message
@@ -623,14 +444,6 @@ impl Drop for Engine {
             let _ = handle.join();
         }
     }
-}
-
-/// Callers ask for a color space; JPEG is a transport choice the engine makes.
-fn check_format(format: PixelFormat) -> Result<(), EngineError> {
-    if format.is_jpeg() {
-        return Err(EngineError::InvalidFormat(format));
-    }
-    Ok(())
 }
 
 pub(crate) fn check_size(width: u32, height: u32) -> Result<(), EngineError> {
@@ -695,52 +508,6 @@ fn write_atomically(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::api::PixelFormat;
-
-    /// An engine whose events a test reads back.
-    struct Recorded {
-        engine: Engine,
-        events: Arc<Mutex<Vec<Event>>>,
-    }
-
-    impl Recorded {
-        fn new(engine: Engine) -> Self {
-            let events = Arc::new(Mutex::new(Vec::new()));
-            let sink = events.clone();
-            Self {
-                engine: engine.with_event_sink(Arc::new(move |e| sink.lock().unwrap().push(e))),
-                events,
-            }
-        }
-
-        /// Runs `command`: the events it sent.
-        fn run(&self, command: Command) -> Result<Vec<Event>, EngineError> {
-            assert_eq!(self.engine.execute(command)?, CommandResult::Done);
-            Ok(std::mem::take(&mut *self.events.lock().unwrap()))
-        }
-    }
-
-    impl std::ops::Deref for Recorded {
-        type Target = Engine;
-        fn deref(&self) -> &Engine {
-            &self.engine
-        }
-    }
-
-    fn render(engine: &Recorded, w: u32, h: u32) -> u64 {
-        let events = engine
-            .run(Command::RenderTestPattern {
-                width: w,
-                height: h,
-                phase: 0.25,
-                format: PixelFormat::Rgba8Srgb,
-            })
-            .unwrap();
-        match events.as_slice() {
-            [Event::RenderFinished { generation, .. }] => *generation,
-            other => panic!("unexpected events {other:?}"),
-        }
-    }
 
     #[test]
     fn handshake_checks_version() {
@@ -778,17 +545,6 @@ mod tests {
             let (temp, tint) = preset.temp_tint();
             assert_eq!((p.temp, p.tint), (temp as f32, tint as f32), "{}", p.name);
         }
-    }
-
-    #[test]
-    fn test_pattern_frame_covers_image() {
-        let e = Recorded::new(Engine::headless());
-        let generation = render(&e, 600, 300);
-        let bytes = e.frame(generation).unwrap();
-        let tiles = split_frame(&bytes).unwrap();
-        assert_eq!(tiles.len(), 6);
-        assert_eq!(covered_area(&tiles), 600 * 300);
-        assert!(tiles.iter().all(|(h, _)| h.generation == generation));
     }
 
     #[test]
@@ -831,72 +587,37 @@ mod tests {
     }
 
     #[test]
-    fn keeps_only_recent_frames() {
-        let e = Recorded::new(Engine::headless());
-        let first = render(&e, 8, 8);
-        for _ in 0..KEPT_FRAMES {
-            render(&e, 8, 8);
-        }
-        assert!(e.frame(first).is_none());
-    }
-
-    #[test]
     fn rejects_empty_size() {
         let e = Engine::headless();
         assert!(
-            e.execute(Command::RenderTestPattern {
+            e.execute(Command::SetView {
                 width: 0,
                 height: 10,
-                phase: 0.0,
-                format: PixelFormat::Rgba8Srgb,
+                view: api::View::Fit,
+                space: api::ColorSpace::Srgb,
             })
             .is_err()
         );
     }
 
-    fn spike(width: u32, height: u32, interactive: bool) -> Command {
-        spike_with(width, height, interactive, false)
-    }
-
-    fn spike_with(width: u32, height: u32, interactive: bool, proxy: bool) -> Command {
-        Command::RenderSpike {
-            width,
-            height,
-            exposure_ev: 0.0,
-            wb: [1.0; 3],
-            format: PixelFormat::Rgba8DisplayP3,
-            interactive,
-            proxy,
-        }
+    #[test]
+    fn a_synthetic_photo_opens_only_for_the_autobench() {
+        let mut e = Engine::headless();
+        let open = |e: &Engine| {
+            e.execute(Command::OpenSynthetic {
+                width: 64,
+                height: 48,
+            })
+        };
+        assert!(matches!(open(&e), Err(EngineError::Invalid(_))));
+        // In autobench mode it goes to the GPU, which a headless engine has not.
+        e.autobench = Some(std::env::temp_dir().join("genzo-unused-report.json"));
+        assert!(matches!(open(&e), Err(EngineError::NoGpu(_))));
     }
 
     #[test]
-    fn jpeg_cannot_be_requested() {
-        let e = Engine::headless();
-        assert!(matches!(
-            e.execute(Command::RenderTestPattern {
-                width: 8,
-                height: 8,
-                phase: 0.0,
-                format: PixelFormat::JpegSrgb,
-            }),
-            Err(EngineError::InvalidFormat(PixelFormat::JpegSrgb))
-        ));
-    }
-
-    #[test]
-    fn headless_engine_refuses_gpu_work() {
-        let e = Engine::headless();
-        assert_eq!(e.info().adapter.kind, AdapterKind::None);
-        assert!(matches!(
-            e.execute(spike(64, 64, false)),
-            Err(EngineError::NoGpu(_))
-        ));
-    }
-
-    #[test]
-    fn spike_renders_through_the_gpu_as_tiles() {
-        let e = Recorded::new(Engine::new());
+    fn a_synthetic_photo_is_a_folder_of_one_in_develop() {
+        let mut e = Engine::new();
         if e.info().adapter.kind == AdapterKind::None {
             assert_ne!(
                 std::env::var("GENZO_REQUIRE_GPU").as_deref(),
@@ -905,97 +626,27 @@ mod tests {
             );
             return;
         }
-        let loaded = e
-            .run(Command::LoadSpikeImage {
-                source: SpikeSource::Synthetic {
-                    width: 1201,
-                    height: 800,
-                },
+        e.autobench = Some(std::env::temp_dir().join("genzo-unused-report.json"));
+        let r = e
+            .execute(Command::OpenSynthetic {
+                width: 641,
+                height: 480,
             })
             .unwrap();
-        // Odd sizes are trimmed to keep the CFA pattern whole.
-        assert_eq!(
-            loaded,
-            vec![Event::SpikeImageLoaded {
-                width: 1200,
-                height: 800
-            }]
-        );
-        let events = e.run(spike(600, 600, false)).unwrap();
-        let [
-            Event::RenderFinished {
-                generation,
-                tile_count,
-                ..
-            },
-        ] = events.as_slice()
+        let CommandResult::Folder {
+            strip,
+            edit,
+            reason,
+        } = r
         else {
-            panic!("unexpected events {events:?}");
+            panic!("{r:?}")
         };
-        let bytes = e.frame(*generation).unwrap();
-        let tiles = split_frame(&bytes).unwrap();
-        assert_eq!(tiles.len() as u32, *tile_count);
-        // 1200 × 800 fit into 600 × 600 is 600 × 400.
-        assert_eq!(covered_area(&tiles), 600 * 400);
-        assert!(
-            tiles
-                .iter()
-                .all(|(h, _)| h.format == PixelFormat::Rgba8DisplayP3 && h.image_width == 600)
-        );
-    }
-
-    #[test]
-    fn drag_preview_is_a_half_size_jpeg() {
-        let e = Recorded::new(Engine::new());
-        if e.info().adapter.kind == AdapterKind::None {
-            assert_ne!(
-                std::env::var("GENZO_REQUIRE_GPU").as_deref(),
-                Ok("1"),
-                "no GPU adapter"
-            );
-            return;
-        }
-        e.run(Command::LoadSpikeImage {
-            source: SpikeSource::Synthetic {
-                width: 1200,
-                height: 800,
-            },
-        })
-        .unwrap();
-        let frame_of = |command| {
-            let events = e.run(command).unwrap();
-            let [Event::RenderFinished { generation, .. }] = events.as_slice() else {
-                panic!("unexpected events {events:?}");
-            };
-            e.frame(*generation).unwrap()
-        };
-
-        // 1200 × 800 fit into 600 × 600 is 600 × 400, so the preview is 300 × 200.
-        let bytes = frame_of(spike_with(600, 600, true, true));
-        let bands = split_frame(&bytes).unwrap();
-        assert!(!bands.is_empty());
-        assert_eq!(covered_area(&bands), 300 * 200);
-        for (header, jpeg) in &bands {
-            assert_eq!(header.format, PixelFormat::JpegDisplayP3);
-            assert_eq!((header.image_width, header.image_height), (300, 200));
-            assert_eq!((header.rect.x, header.rect.width), (0, 300));
-            assert_eq!(&jpeg[..2], &[0xFF, 0xD8]);
-        }
-        let raw = frame_of(spike_with(600, 600, true, false)).len();
-        assert!(
-            bytes.len() * 10 < raw,
-            "preview is {} of {raw} bytes",
-            bytes.len()
-        );
-
-        // A preview is only for drags: a settled render ignores the flag.
-        let bytes = frame_of(spike_with(600, 600, false, true));
-        let tiles = split_frame(&bytes).unwrap();
-        assert_eq!(covered_area(&tiles), 600 * 400);
-        assert!(
-            tiles
-                .iter()
-                .all(|(h, _)| h.format == PixelFormat::Rgba8DisplayP3)
-        );
+        let edit = edit.expect("it renders");
+        assert_eq!(reason, None);
+        assert_eq!(strip.current, Some(edit.photo));
+        assert_eq!(strip.photos.len(), 1);
+        // Even sizes keep the CFA pattern whole.
+        assert_eq!((edit.shown.width, edit.shown.height), (640, 480));
+        assert_eq!(strip.photos[0].file_name, "Synthetic 640 × 480");
     }
 }

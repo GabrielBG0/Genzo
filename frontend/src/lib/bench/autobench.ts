@@ -7,8 +7,13 @@
  * Windows result: per case, wait for the first frame, then drag the slider end
  * to end 6 times in 120 steps of about 8 ms, release (the settled render) and
  * pause 600 ms. The difference: input is synthetic. Values go straight to the
- * slider's input handler, so pointer event dispatch is not timed; it is the
- * same start point the probe uses for real input.
+ * Develop session's gesture (`DevelopSession.change`), so pointer event
+ * dispatch is not timed; it is the same start point a slider's drag uses.
+ *
+ * Since M1 it runs in the app itself (`AppShell` with GENZO_AUTOBENCH), on a
+ * synthetic RAW opened through Develop (`OpenSynthetic`), so it times the
+ * shipped path: the session's queue, the engine's Develop render, the tile
+ * protocol and the viewport.
  */
 import type { EngineInfo } from '$contract/genzo';
 import type { Engine } from '../engine/types';
@@ -60,8 +65,8 @@ export interface Diagnostics extends TransportTimes {
 export const PROTOCOL = { drags: 6, steps: 120, stepMs: 8, pauseMs: 600, loadWaitMs: 3000, prepareTimeoutMs: 60_000 };
 
 /**
- * The gate cases are 2560 × 1440 at Fit. 1:1 sends full frames (an open M1
- * item); it is reported, not gated. 48 MP goes last: on a GPU with 2 GB it
+ * The gate cases are 2560 × 1440 at Fit. The 1:1 case is the region view of
+ * that size on the photo's center (DEV-01 viewport); it is reported, not gated. 48 MP goes last: on a GPU with 2 GB it
  * runs out of memory, which stops the render thread and every case after it.
  */
 export const CASES: AutobenchCase[] = [
@@ -168,7 +173,8 @@ export function timedEngine(engine: Engine, times: TransportTimes): Engine {
     async execute(command) {
       const t0 = performance.now();
       const result = await engine.execute(command);
-      if (command.type === 'renderSpike' && command.interactive) times.executeMs.push(performance.now() - t0);
+      // A drag's steps, as the slider sends them.
+      if (command.type === 'applyEditDelta' && command.phase === 'Update') times.executeMs.push(performance.now() - t0);
       return result;
     },
     async fetchFrame(generation) {

@@ -1,5 +1,5 @@
 /**
- * M0 spike 0.E step 5: does each webview draw sRGB and Display P3 frames with
+ * M0 spike 0.E step 5, now through Develop's commands: does each webview draw sRGB and Display P3 frames with
  * the right colors? Run at the end of the autobench.
  *
  * Two paths can go wrong, in different ways:
@@ -20,14 +20,14 @@
  * compositor, so it needs no wide-gamut monitor; what a person sees on one is
  * a separate, visual check.
  */
-import type { Event, PixelFormat } from '$contract/genzo';
+import type { ColorSpace, Event, PixelFormat } from '$contract/genzo';
 import type { Tile } from '../engine/tiles';
 import { decodeFrame } from '../engine/tiles';
 import type { Engine } from '../engine/types';
 import { putFrame } from '../viewport/frame';
 import { WebGLViewport } from '../viewport/webgl';
 
-/** Scene size: the proxy is half of it, so both fill the probe canvas exactly. */
+/** Scene size: the drag preview is half of it, so both fill the probe canvas exactly. */
 const SCENE: [number, number] = [1200, 800];
 const CANVAS: [number, number] = [600, 400];
 /** Largest per-channel error (8-bit codes) a path may show and still pass. */
@@ -120,32 +120,32 @@ export function maxError(a: number[][], b: number[][]): number {
   return Number.isNaN(max) ? Infinity : max;
 }
 
-/** Runs one render and resolves with its frame. */
-async function renderFrame(engine: Engine, format: PixelFormat, proxy: boolean): Promise<ArrayBuffer> {
+/**
+ * One render of the open photo through Develop's commands, and its frame:
+ * a view of the scene's size in `space` gives the settled lossless tiles;
+ * a gesture's start gives the drag preview, half size, as JPEG bands.
+ */
+async function renderFrame(engine: Engine, photo: number, space: ColorSpace, preview: boolean): Promise<ArrayBuffer> {
   let generation: number | null = null;
   const off = engine.onEvent((e: Event) => {
     if (e.type === 'renderFinished') generation = e.generation;
   });
   try {
-    // A preview is only made during a drag, so both paths render as interactive.
-    await engine.execute({
-      type: 'renderSpike',
-      width: SCENE[0],
-      height: SCENE[1],
-      exposureEv: 0,
-      wb: [1, 1, 1],
-      format,
-      interactive: true,
-      proxy,
-    });
+    await engine.execute({ type: 'setView', width: SCENE[0], height: SCENE[1], view: { type: 'fit' }, space });
+    if (preview) {
+      generation = null;
+      await engine.execute({ type: 'applyEditDelta', photo, changes: [{ Exposure: 0 }], phase: 'Start' });
+    }
   } finally {
     off();
   }
-  if (generation === null) throw new Error(`no frame for ${format}${proxy ? ' preview' : ''}`);
-  return engine.fetchFrame(generation);
+  const got = generation;
+  if (preview) await engine.execute({ type: 'applyEditDelta', photo, changes: [{ Exposure: 0 }], phase: 'End' });
+  if (got === null) throw new Error(`no frame for ${space}${preview ? ' preview' : ''}`);
+  return engine.fetchFrame(got);
 }
 
-/** Loads the scene, renders it four ways and reads each back. */
+/** Opens the scene, renders it four ways and reads each back. */
 export async function runColorProbe(engine: Engine): Promise<ColorProbeResult> {
   const support = colorSupport();
   const result: ColorProbeResult = { support, paths: [], srgbVsP3: 0 };
@@ -153,16 +153,21 @@ export async function runColorProbe(engine: Engine): Promise<ColorProbeResult> {
   try {
     viewport = new WebGLViewport(document.createElement('canvas'));
     viewport.resize(CANVAS[0], CANVAS[1], 1);
-    await engine.execute({ type: 'loadSpikeImage', source: { type: 'synthetic', width: SCENE[0], height: SCENE[1] } });
+    const opened = await engine.execute({ type: 'openSynthetic', width: SCENE[0], height: SCENE[1] });
+    const photo = opened.type === 'folder' ? opened.edit?.photo : undefined;
+    if (photo === undefined) throw new Error('the probe scene did not open');
     const truths: number[][][] = [];
-    for (const format of ['rgba8Srgb', 'rgba8DisplayP3'] as const) {
-      const raw = await renderFrame(engine, format, false);
+    for (const [format, space] of [
+      ['rgba8Srgb', 'srgb'],
+      ['rgba8DisplayP3', 'displayP3'],
+    ] as const) {
+      const raw = await renderFrame(engine, photo, space, false);
       const rawTiles = decodeFrame(raw);
       const truth = PATCHES.map(([x, y]) => pixelAt(rawTiles, x, y));
       truths.push(truth);
       for (const [bytes, tolerance] of [
         [raw, TOLERANCE.raw],
-        [await renderFrame(engine, format, true), TOLERANCE.jpeg],
+        [await renderFrame(engine, photo, space, true), TOLERANCE.jpeg],
       ] as const) {
         // Generations only go up, so each frame replaces the last one.
         if (!(await putFrame(viewport, bytes))) throw new Error('the probe frame was dropped as stale');
