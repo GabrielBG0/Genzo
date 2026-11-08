@@ -13,6 +13,7 @@
   import { Exports } from './develop/export.svelte';
   import { DevelopSession } from './develop/session.svelte';
   import { Thumbnails } from './develop/thumbnails.svelte';
+  import { bindLayout, Layout } from './layout.svelte';
   import type { Engine } from './engine/types';
   import { provideRegistry } from './shortcuts/context';
 
@@ -27,6 +28,9 @@
   const session = untrack(() => new DevelopSession(engine));
   const thumbnails = untrack(() => new Thumbnails(engine));
   const exports = untrack(() => new Exports(engine));
+  /** Which panels show (APP-08), for the session. */
+  const layout = new Layout(registry.platform === 'mac');
+  bindLayout(registry, layout, () => !exportOpen);
   /** The export dialog (OUT-01) is open. */
   let exportOpen = $state(false);
 
@@ -187,7 +191,10 @@
 
 <svelte:window {onkeydown} />
 
-<div class="shell">
+<div
+  class="shell"
+  style:grid-template-rows="var(--topbar-h) minmax(0, 1fr){layout.filmstrip ? ' var(--filmstrip-h)' : ''} var(--statusbar-h)"
+>
   <TopBar
     {module}
     catalog={current ? current.fileName : 'No folder open'}
@@ -195,8 +202,11 @@
     on={{ 'develop.beforeAfter': session.before }}
     {onmodule}
   />
-  <main>
-    <div class="left">
+  <!-- A hidden panel stays mounted, so it shows again as it was (APP-08). -->
+  <main
+    style:grid-template-columns="{layout.left ? 'var(--left-w) ' : ''}minmax(0, 1fr){layout.right ? ' var(--right-w)' : ''}"
+  >
+    <div class="left" hidden={!layout.left}>
       <LeftPanelDevelop />
     </div>
     <div class="center">
@@ -210,7 +220,7 @@
         badge={session.before ? 'Before' : null}
       />
     </div>
-    <aside class="right pane" aria-label="Right panel">
+    <aside class="right pane" aria-label="Right panel" hidden={!layout.right}>
       <Histogram
         histogram={session.histogram}
         exif={current ? exifRow(current.shooting) : []}
@@ -218,17 +228,19 @@
         canOverlay={session.editable}
         onoverlay={(side) => session.toggleClipping(side)}
       />
-      <BasicPanel {session} presets={info.whiteBalancePresets} />
+      <BasicPanel {session} presets={info.whiteBalancePresets} {layout} />
     </aside>
   </main>
-  <Filmstrip
-    {items}
-    selected={session.strip.current === null ? null : String(session.strip.current)}
-    onselect={(id) => void session.select(Number(id))}
-    onvisible={(first, last) => (visible = { first, last })}
-    message={stripMessage}
-    shortcut={session.folder === null ? registry.shortcut('file.openFolder') : ''}
-  />
+  <div class="strip" hidden={!layout.filmstrip}>
+    <Filmstrip
+      {items}
+      selected={session.strip.current === null ? null : String(session.strip.current)}
+      onselect={(id) => void session.select(Number(id))}
+      onvisible={(first, last) => (visible = { first, last })}
+      message={stripMessage}
+      shortcut={session.folder === null ? registry.shortcut('file.openFolder') : ''}
+    />
+  </div>
   <StatusBar
     mode="Develop"
     info={current ? [current.fileName] : []}
@@ -253,14 +265,12 @@
     height: 100%;
     min-height: 600px;
     display: grid;
-    grid-template-rows: var(--topbar-h) minmax(0, 1fr) var(--filmstrip-h) var(--statusbar-h);
     gap: var(--gap);
     padding: 0 var(--pad);
   }
 
   main {
     display: grid;
-    grid-template-columns: var(--left-w) minmax(0, 1fr) var(--right-w);
     gap: var(--gap);
     min-height: 0;
   }
@@ -273,5 +283,14 @@
   .right {
     min-height: 0;
     overflow: auto;
+  }
+
+  .strip {
+    display: grid;
+    min-height: 0;
+  }
+
+  [hidden] {
+    display: none !important;
   }
 </style>

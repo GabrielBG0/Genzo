@@ -424,3 +424,61 @@ test('The slider menu: reset, copy a value and paste it on another photo (APP-06
   await exposure.click({ button: 'right', force: true });
   await expect(menu).toBeHidden();
 });
+
+test('Panels: Tab, Shift Tab, F6, F7 and F8 hide and show them (APP-08)', async ({ page }) => {
+  await develop(page);
+  const left = page.locator('.left');
+  const right = page.getByRole('complementary', { name: 'Right panel' });
+  const strip = page.getByRole('region', { name: 'Filmstrip' });
+  const photo = page.getByRole('img', { name: 'Photo' });
+  const width = async () => (await photo.boundingBox())?.width ?? 0;
+  const before = await width();
+
+  // Nothing focused: Tab hides both side panels, and the photo grows.
+  await page.locator('body').click({ position: { x: 5, y: 5 } });
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await page.keyboard.press('Tab');
+  await expect(left).toBeHidden();
+  await expect(right).toBeHidden();
+  await expect(strip).toBeVisible();
+  await expect.poll(width).toBeGreaterThan(before + 200);
+  await page.keyboard.press('Tab');
+  await expect(right).toBeVisible();
+  await expect(left).toBeVisible();
+  await expect.poll(width).toBeLessThan(before + 1);
+
+  // A focused slider keeps Tab for focus.
+  const exposure = page.getByRole('slider', { name: 'Exposure' });
+  await exposure.focus();
+  await page.keyboard.press('Tab');
+  await expect(right).toBeVisible();
+  await expect(page.getByRole('slider', { name: 'Contrast' })).toBeFocused();
+
+  // F7, F8 and F6 work with a slider focused.
+  await page.keyboard.press('F8');
+  await expect(right).toBeHidden();
+  await page.keyboard.press('F7');
+  await expect(left).toBeHidden();
+  await page.keyboard.press('F6');
+  await expect(strip).toBeHidden();
+  await page.keyboard.press('F6');
+  await page.keyboard.press('F7');
+  await expect(strip).toBeVisible();
+  await expect(left).toBeVisible();
+  await page.keyboard.press('F8');
+  // The right panel shows again as it was: Basic still open.
+  await expect(right).toBeVisible();
+  await expect(page.getByRole('button', { name: /^Basic/ })).toHaveAttribute('aria-expanded', 'true');
+
+  // Shift Tab, nothing focused: the side panels and the filmstrip; the bars stay.
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await page.keyboard.press('Shift+Tab');
+  await expect(left).toBeHidden();
+  await expect(right).toBeHidden();
+  await expect(strip).toBeHidden();
+  await expect(page.getByRole('toolbar', { name: 'Quick actions' })).toBeVisible();
+  await expect(page.locator('footer')).toBeVisible();
+  await page.keyboard.press('Shift+Tab');
+  await expect(strip).toBeVisible();
+  await expect(right).toBeVisible();
+});
