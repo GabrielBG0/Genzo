@@ -29,9 +29,9 @@ The menu has a header naming the open folder ("No folder open" before one), then
 |---|---|
 | File | Open folder… (Ctrl O) · Export… (Ctrl Shift E) · Cancel export (only while an export runs) |
 | Edit | Undo *step* (Ctrl Z) · Redo *step* (Ctrl Shift Z) |
-| Photo | Previous photo (←) · Next photo (→) |
-| Develop | Before / after (\\) · Reset all (Ctrl Shift R) · separator · Color / B&W (V) · White balance picker (W) · Show clipping (J) |
-| View | ✓ Side panels (Tab) · ✓ All panels (Shift Tab) · ✓ Filmstrip (F6) · ✓ Left panel (F7) · ✓ Right panel (F8) |
+| Photo | Previous photo (←) · Next photo (→) · separator · Rotate left (Ctrl [) · Rotate right (Ctrl ]) · Flip horizontal · Flip vertical (DEV-12) |
+| Develop | Before / after (\\) · Reset all (Ctrl Shift R) · separator · ✓ Crop and rotate (R, DEV-12) · Color / B&W (V) · White balance picker (W) · Show clipping (J) |
+| View | ✓ Side panels (Tab) · ✓ All panels (Shift Tab) · ✓ Filmstrip (F6) · ✓ Left panel (F7) · ✓ Right panel (F8) · separator · Zoom to 1:1 or Zoom to Fit (Z) · ✓ Photo toolbar (T) (DEV-01-viewport.md) |
 | Help | About Genzo |
 
 - Every item is a registered command: its label, shortcut and enabled state come from the registry, so they read the same as in tooltips. A disabled command shows dimmed.
