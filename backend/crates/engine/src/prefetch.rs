@@ -261,7 +261,7 @@ impl Shared {
 
 impl Worker {
     /// Notes what a decode said about its file, for the strip's `kind`.
-    fn learn<T>(&self, id: u64, decoded: &Result<T, EngineError>) {
+    fn learn(&self, id: u64, decoded: &Result<(genzo_pipeline::raw::RawSource, u8), EngineError>) {
         self.session
             .lock()
             .expect("session")

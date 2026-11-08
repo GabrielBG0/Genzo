@@ -215,8 +215,7 @@
       exporting: exports.status,
       refusal: session.notice,
       reason: session.reason,
-      // The photo's notes come with the engine's part (APP-07, PhotoEdit.notes).
-      notes: [],
+      notes: session.editable ? (session.edit?.notes ?? []) : [],
       adapter: adapterNotice,
     }),
   );

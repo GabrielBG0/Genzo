@@ -128,6 +128,9 @@ pub struct EditState {
     pub revision: u64,
     /// The viewport shows the photo's defaults instead (WF-02).
     pub before: bool,
+    /// What the pipeline does not do as the file asks, for the status bar
+    /// (APP-07): empty until the photo's input is decoded.
+    pub notes: Vec<String>,
 }
 
 /// What a delta, an undo or a redo did.
@@ -171,11 +174,13 @@ impl Engine {
         let _switch = self.switching.lock().expect("switching");
         let (_, kind) = as_shot(&src);
         let size = src.size();
+        let notes = src.notes();
         let id = {
             let mut s = self.session.lock().expect("session");
             s.end_gesture();
             let id = s.take_id();
             s.edits.insert(id, PhotoEdits::new(kind, size, orientation));
+            s.strip.set_notes(id, notes);
             id
         };
         gpu.open(id, Photo { src, orientation })?;
@@ -197,16 +202,14 @@ impl Engine {
     pub fn edit_state(&self) -> Option<EditState> {
         let s = self.session.lock().expect("session");
         let id = s.open?;
-        Some(state(id, &s.edits[&id], s.before))
+        Some(state(&s, id, &s.edits[&id]))
     }
 
     /// Photo `photo`'s edit, open or not, if it was opened this session
     /// (`GetEdit`).
     pub fn edit_of(&self, photo: u64) -> Option<EditState> {
         let s = self.session.lock().expect("session");
-        s.edits
-            .get(&photo)
-            .map(|p| state(photo, p, s.shows_before(photo)))
+        s.edits.get(&photo).map(|p| state(&s, photo, p))
     }
 
     /// Sets the view and the target, and renders the open photo settled.
@@ -501,7 +504,7 @@ pub(crate) fn render_when(
             phase,
             overlay: s.overlay,
         };
-        (state(id, p, s.before), request)
+        (state(&s, id, p), request)
     };
     let generation = request.generation;
     let key = Key {
@@ -587,13 +590,15 @@ fn unchanged(s: &Session, photo: u64) -> Result<Applied, EngineError> {
         .ok_or(EngineError::UnknownPhoto(photo))?;
     Ok(Applied {
         recorded: false,
-        state: state(photo, p, s.shows_before(photo)),
+        state: state(s, photo, p),
         frame: None,
         tiles: None,
     })
 }
 
-fn state(id: u64, p: &PhotoEdits, before: bool) -> EditState {
+/// Photo `id`'s edit as the panels and the status bar show it.
+fn state(s: &Session, id: u64, p: &PhotoEdits) -> EditState {
+    let before = s.shows_before(id);
     EditState {
         photo: id,
         edit: p.current().clone(),
@@ -602,5 +607,6 @@ fn state(id: u64, p: &PhotoEdits, before: bool) -> EditState {
         redo: p.redo_label().map(String::from),
         revision: p.revision(),
         before,
+        notes: s.strip.notes_of(id).to_vec(),
     }
 }

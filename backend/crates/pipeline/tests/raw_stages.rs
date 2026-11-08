@@ -176,6 +176,7 @@ fn bayer() -> RawSource {
         gain_maps: gain_maps(1),
         color: Default::default(),
         encoding: None,
+        lens_corrections_skipped: false,
     }
 }
 
@@ -216,6 +217,7 @@ fn linear_with(samples: u32) -> RawSource {
         gain_maps: gain_maps(samples),
         color: Default::default(),
         encoding: None,
+        lens_corrections_skipped: false,
     }
 }
 

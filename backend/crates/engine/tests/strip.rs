@@ -41,7 +41,10 @@ impl Decode for Fake {
         if name.starts_with("broken") {
             return Err(EngineError::Decode(format!("{name} is broken")));
         }
-        Ok((source_for(&name), 1))
+        let mut src = source_for(&name);
+        // A file whose lens opcodes M1 skips (APP-07's notes).
+        src.lens_corrections_skipped = name.starts_with("lens");
+        Ok((src, 1))
     }
 }
 
@@ -281,4 +284,26 @@ fn a_photo_that_does_not_decode_is_still_selected() {
     let empty = TempDir::new("broken-empty", &[]);
     engine.open_folder(&empty.0).unwrap();
     assert!(engine.edit_state().is_none());
+}
+
+#[test]
+fn each_photo_answers_its_notes_once_decoded() {
+    use genzo_pipeline::raw::note;
+    let fake = Arc::new(Fake::default());
+    let Some(engine) = engine(&fake) else { return };
+    let dir = TempDir::new("notes", &["a.nef", "lens.dng"]);
+    let opened = engine.open_folder(&dir.0).unwrap();
+    let [plain, lens] = ids(&opened.strip)[..] else {
+        panic!("{:?}", opened.strip)
+    };
+    assert_eq!(engine.edit_state().unwrap().notes, Vec::<String>::new());
+    let shown = engine.select_photo(lens).unwrap();
+    assert_eq!(shown.state.notes, vec![note::LENS.to_owned()]);
+    // Kept for the photo, and answered for it when it is not open.
+    engine.select_photo(plain).unwrap();
+    assert!(engine.edit_state().unwrap().notes.is_empty());
+    assert_eq!(
+        engine.edit_of(lens).unwrap().notes,
+        vec![note::LENS.to_owned()]
+    );
 }

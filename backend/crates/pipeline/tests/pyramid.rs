@@ -79,6 +79,7 @@ fn sensor(
         gain_maps: Vec::new(),
         color,
         encoding: None,
+        lens_corrections_skipped: false,
     }
 }
 
@@ -152,6 +153,7 @@ fn linear_sensor(size: (u32, u32), samples: u32) -> RawSource {
         gain_maps: Vec::new(),
         color: CameraColor::default(),
         encoding: None,
+        lens_corrections_skipped: false,
     }
 }
 

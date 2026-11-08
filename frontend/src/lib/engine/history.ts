@@ -95,6 +95,8 @@ export class PhotoEdits {
       revision: this.revision,
       // The engine's session knows; the fake sets it (WF-02).
       before: false,
+      // The photo's, not the edit's: the fake sets them (APP-07).
+      notes: [],
     };
   }
 }
