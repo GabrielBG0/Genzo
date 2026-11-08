@@ -21,32 +21,33 @@ import {
   type StripPhoto,
   type TileHeader,
   type WhiteBalancePreset,
-} from '$contract/genzo';
-import type { EditKind } from './edit';
-import { PhotoEdits } from './history';
-import { encodeTile } from './tiles';
-import type { Engine } from './types';
+} from "$contract/genzo";
+import type { EditKind } from "./edit";
+import { PhotoEdits } from "./history";
+import { encodeTile } from "./tiles";
+import type { Engine } from "./types";
 
 const ADAPTER: AdapterInfo = {
-  kind: 'none',
-  name: 'Fake engine',
-  backend: 'none',
-  fallbackReason: 'Running against the fake engine',
+  kind: "none",
+  name: "Fake engine",
+  backend: "none",
+  fallbackReason: "Running against the fake engine",
 };
 
-const DONE: CommandResult = { type: 'done' };
+const DONE: CommandResult = { type: "done" };
 
 /** The engine's refusal of a destination that is a photo it opened (OUT-01). */
-export const ORIGINAL = 'Genzo does not write over the photos it opens. Choose another name or folder.';
+export const ORIGINAL =
+  "Genzo does not write over the photos it opens. Choose another name or folder.";
 
 /** The engine's presets (`genzo_color::white_balance::Preset`), as its info gives them. */
 export const PRESETS: WhiteBalancePreset[] = [
-  { name: 'Daylight', temp: 5501.4990234375, tint: 10.010603904724121 },
-  { name: 'Cloudy', temp: 6503.0107421875, tint: 9.78622055053711 },
-  { name: 'Shade', temp: 7505.99853515625, tint: 9.63988208770752 },
-  { name: 'Tungsten', temp: 2855.75537109375, tint: 0.008021079935133457 },
-  { name: 'Fluorescent', temp: 4224.54150390625, tint: 5.864230632781982 },
-  { name: 'Flash', temp: 5499.98388671875, tint: 0.000011306194210192189 },
+  { name: "Daylight", temp: 5501.4990234375, tint: 10.010603904724121 },
+  { name: "Cloudy", temp: 6503.0107421875, tint: 9.78622055053711 },
+  { name: "Shade", temp: 7505.99853515625, tint: 9.63988208770752 },
+  { name: "Tungsten", temp: 2855.75537109375, tint: 0.008021079935133457 },
+  { name: "Fluorescent", temp: 4224.54150390625, tint: 5.864230632781982 },
+  { name: "Flash", temp: 5499.98388671875, tint: 0.000011306194210192189 },
 ];
 
 /** A photo of the fake's folder: what the strip shows, and what it renders. */
@@ -71,47 +72,55 @@ export function demoFolder(): FakePhoto[] {
   ): StripPhoto => ({
     id,
     fileName,
-    captureTime: { year: 2026, month: 10, day: 12, hour: 17, minute, second: 4, nanos: 0 },
+    captureTime: {
+      year: 2026,
+      month: 10,
+      day: 12,
+      hour: 17,
+      minute,
+      second: 4,
+      nanos: 0,
+    },
     shooting: {
       iso,
       exposureTime: { num: 1, den: time },
       fNumber: { num: Math.round(f * 10), den: 10 },
       focalLength: { num: mm, den: 1 },
     },
-    kind: 'renders',
+    kind: "renders",
     reason: null,
     edited: false,
   });
   return [
     {
-      photo: photo(1, 'DSC_0412.NEF', 2, [100, 125, 8, 24]),
+      photo: photo(1, "DSC_0412.NEF", 2, [100, 125, 8, 24]),
       kind: { raw: true, asShotTemp: 5400, asShotTint: 4 },
       width: 6048,
       height: 4032,
     },
     {
-      photo: photo(2, 'DSC_0413.NEF', 3, [400, 60, 4, 50]),
+      photo: photo(2, "DSC_0413.NEF", 3, [400, 60, 4, 50]),
       kind: { raw: true, asShotTemp: 3200, asShotTint: -6 },
       width: 6048,
       height: 4032,
     },
     {
-      photo: photo(3, 'IMG_2201.DNG', 9, [64, 2000, 1.8, 6]),
+      photo: photo(3, "IMG_2201.DNG", 9, [64, 2000, 1.8, 6]),
       kind: { raw: true, asShotTemp: 6500, asShotTint: 10 },
       width: 3024,
       height: 4032,
     },
     {
-      photo: photo(4, 'harbor.jpg', 15, [200, 250, 5.6, 35]),
+      photo: photo(4, "harbor.jpg", 15, [200, 250, 5.6, 35]),
       kind: { raw: false },
       width: 4000,
       height: 3000,
     },
     {
       photo: {
-        ...photo(5, 'DSC_0420.NEF', 21, [100, 125, 8, 24]),
-        kind: 'unsupported',
-        reason: 'Nikon High Efficiency RAW is not supported yet',
+        ...photo(5, "DSC_0420.NEF", 21, [100, 125, 8, 24]),
+        kind: "unsupported",
+        reason: "Nikon High Efficiency RAW is not supported yet",
       },
       kind: null,
       width: 0,
@@ -139,7 +148,7 @@ export function isCompatible(a: string, b: string): boolean {
  * edit and history kept as the engine keeps them (`history.ts`).
  */
 export class FakeEngine implements Engine {
-  readonly kind = 'fake';
+  readonly kind = "fake";
   private listeners = new Set<(e: Event) => void>();
   private frames = new Map<number, ArrayBuffer>();
   private generation = 0;
@@ -159,29 +168,53 @@ export class FakeEngine implements Engine {
   /** Each `requestThumbnails` order, oldest first, for tests. */
   readonly thumbnailRequests: number[][] = [];
   /** What the fake's folder dialog answers: the demo folder by default. */
-  folderChoice: () => Promise<string | null> = () => Promise.resolve('demo');
+  folderChoice: () => Promise<string | null> = () => Promise.resolve("demo");
   /** What the fake's save dialog answers: the suggested path by default. */
-  saveChoice: (suggested: string) => Promise<string | null> = (suggested) => Promise.resolve(suggested);
+  saveChoice: (suggested: string) => Promise<string | null> = (suggested) =>
+    Promise.resolve(suggested);
+  /** What the fake's question dialog answers: ok by default. */
+  askChoice: (message: string) => Promise<boolean> = () =>
+    Promise.resolve(true);
+  /** Each question asked, oldest first, for tests. */
+  readonly asked: string[] = [];
+  /**
+   * Milliseconds between an export's tenths; null (the default) reports
+   * it in one step. Set, an export runs long enough to cancel or to quit
+   * during.
+   */
+  exportStepMs: number | null = null;
+  /** Whether the window was closed (`requestClose`). */
+  closed = false;
+  private closeHandlers: (() => Promise<boolean>)[] = [];
+  /** Each paced export's cancel, by job. */
+  private runningExports = new Map<number, () => void>();
   /** Files the fake's exports wrote, by path. */
   readonly written = new Set<string>();
   /** Waits before each thumbnail is made: none by default. */
-  thumbnailLatency: (photo: number) => Promise<void> = () => new Promise((r) => setTimeout(r, 0));
+  thumbnailLatency: (photo: number) => Promise<void> = () =>
+    new Promise((r) => setTimeout(r, 0));
   /** Each photo's thumbnail message, or null when it has none. */
   private thumbnails = new Map<number, ArrayBuffer | null>();
   private thumbnailQueue: number[] = [];
   private exportJobs = 0;
   /** The path the folder was opened as. */
-  private folderPath = '';
+  private folderPath = "";
   private makingThumbnails = false;
   private folder: FakePhoto[] = [];
-  private strip: Strip = { photos: [], current: null, direction: 'next' };
+  private strip: Strip = { photos: [], current: null, direction: "next" };
   private edits = new Map<number, PhotoEdits>();
   private view = { width: 0, height: 0 };
-  private histograms = new Map<number, { generation: number; histogram: Histogram }>();
+  private histograms = new Map<
+    number,
+    { generation: number; histogram: Histogram }
+  >();
   /** The J overlays' colors, each when on: the session's, kept across switches. */
-  private overlay: { shadows: Rgba | null; highlights: Rgba | null } = { shadows: null, highlights: null };
+  private overlay: { shadows: Rgba | null; highlights: Rgba | null } = {
+    shadows: null,
+    highlights: null,
+  };
   /** The Alt preview of the gesture in progress. */
-  private preview: ClippingPreview = 'none';
+  private preview: ClippingPreview = "none";
 
   constructor(private readonly contractVersion = CONTRACT_VERSION) {}
 
@@ -189,7 +222,7 @@ export class FakeEngine implements Engine {
     return {
       compatible: isCompatible(hello.contractVersion, this.contractVersion),
       engineContractVersion: this.contractVersion,
-      engineVersion: '0.0.0-fake',
+      engineVersion: "0.0.0-fake",
     };
   }
 
@@ -201,24 +234,30 @@ export class FakeEngine implements Engine {
 
   private answer(query: Query): QueryResult {
     switch (query.type) {
-      case 'getEngineInfo':
+      case "getEngineInfo":
         return {
-          type: 'engineInfo',
+          type: "engineInfo",
           info: {
-            engineVersion: '0.0.0-fake',
+            engineVersion: "0.0.0-fake",
             contractVersion: this.contractVersion,
             adapter: ADAPTER,
             autobench: this.autobench,
             whiteBalancePresets: structuredClone(PRESETS),
           },
         };
-      case 'listFolderPhotos':
-        return { type: 'folderPhotos', strip: structuredClone(this.strip) };
-      case 'getEdit':
-        return { type: 'edit', edit: this.edits.get(query.photo)?.state() ?? null };
-      case 'getHistogram': {
+      case "listFolderPhotos":
+        return { type: "folderPhotos", strip: structuredClone(this.strip) };
+      case "getEdit":
+        return {
+          type: "edit",
+          edit: this.edits.get(query.photo)?.state() ?? null,
+        };
+      case "getHistogram": {
         const h = this.histograms.get(query.photo);
-        return { type: 'histogram', counted: h ? { photo: query.photo, ...structuredClone(h) } : null };
+        return {
+          type: "histogram",
+          counted: h ? { photo: query.photo, ...structuredClone(h) } : null,
+        };
       }
     }
   }
@@ -232,116 +271,188 @@ export class FakeEngine implements Engine {
 
   private async deliver(message: Command | Query) {
     const delay = this.latency(message);
-    if (typeof delay !== 'number') await delay;
-    else if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
+    if (typeof delay !== "number") await delay;
+    else if (delay > 0)
+      await new Promise((resolve) => setTimeout(resolve, delay));
   }
 
   private run(command: Command): CommandResult {
     switch (command.type) {
-      case 'renderTestPattern': {
+      case "renderTestPattern": {
         const { width, height, phase, format } = command;
         this.renderPattern(width, height, phase, format);
         return DONE;
       }
-      case 'loadSpikeImage': {
+      case "loadSpikeImage": {
         // The fake has no GPU: it remembers the size and renders the test pattern.
         const { width, height } = command.source;
         this.spikeSize = [width & ~1, height & ~1];
-        this.emit({ type: 'spikeImageLoaded', width: this.spikeSize[0], height: this.spikeSize[1] });
+        this.emit({
+          type: "spikeImageLoaded",
+          width: this.spikeSize[0],
+          height: this.spikeSize[1],
+        });
         return DONE;
       }
-      case 'renderSpike': {
-        if (!this.spikeSize) throw new Error('no image loaded');
+      case "renderSpike": {
+        if (!this.spikeSize) throw new Error("no image loaded");
         const [w, h] = fit(this.spikeSize, [command.width, command.height]);
         // Exposure moves the pattern, so a stale frame is easy to spot.
         this.renderPattern(w, h, (command.exposureEv + 3) / 6, command.format);
         return DONE;
       }
-      case 'saveAutobenchReport': {
-        if (!this.autobench) throw new Error('not in autobench mode');
+      case "saveAutobenchReport": {
+        if (!this.autobench) throw new Error("not in autobench mode");
         this.autobenchReport = command.report;
         return DONE;
       }
       // Every path opens the demo folder, its first photo selected. Its
       // ids are the same each time, so edits are kept, as the engine keeps
       // them for a file it has seen this session.
-      case 'openFolder': {
+      case "openFolder": {
         this.endGesture();
         this.folder = demoFolder();
         this.folderPath = command.path;
-        for (const p of this.folder) p.photo.edited = this.edits.get(p.photo.id)?.state().edited ?? false;
-        this.strip = { photos: this.folder.map((p) => p.photo), current: null, direction: 'next' };
+        for (const p of this.folder)
+          p.photo.edited = this.edits.get(p.photo.id)?.state().edited ?? false;
+        this.strip = {
+          photos: this.folder.map((p) => p.photo),
+          current: null,
+          direction: "next",
+        };
         const first = this.folder[0]?.photo.id;
         const selected = first === undefined ? null : this.select(first);
         return {
-          type: 'folder',
+          type: "folder",
           strip: structuredClone(this.strip),
           edit: selected?.edit ?? null,
           reason: selected?.reason ?? null,
         };
       }
-      case 'setView':
+      case "setView":
         this.view = { width: command.width, height: command.height };
         this.renderPhoto();
         return DONE;
-      case 'setClippingOverlay':
+      case "setClippingOverlay":
         this.overlay = {
           shadows: command.shadows ? command.shadowColor : null,
           highlights: command.highlights ? command.highlightColor : null,
         };
         this.renderPhoto();
         return DONE;
-      case 'setClippingPreview':
+      case "setClippingPreview":
         // Outside a gesture there is none, as in `Session::set_clipping_preview`.
-        if (!this.openInGesture() || command.preview === this.preview) return DONE;
+        if (!this.openInGesture() || command.preview === this.preview)
+          return DONE;
         this.preview = command.preview;
         this.renderPhoto();
         return DONE;
-      case 'selectPhoto': {
+      case "selectPhoto": {
         const { edit, reason } = this.select(command.photo);
-        return { type: 'selected', photo: command.photo, edit, reason };
+        return { type: "selected", photo: command.photo, edit, reason };
       }
-      case 'applyEditDelta':
-        return this.edited(command.photo, (p) => p.apply(command.changes, command.phase), command.phase);
-      case 'resetParam': {
-        const change: Change = command.param === null ? 'ResetAll' : { Reset: command.param };
-        return this.edited(command.photo, (p) => p.apply([change], 'End'), 'End');
+      case "applyEditDelta":
+        return this.edited(
+          command.photo,
+          (p) => p.apply(command.changes, command.phase),
+          command.phase,
+        );
+      case "resetParam": {
+        const change: Change =
+          command.param === null ? "ResetAll" : { Reset: command.param };
+        return this.edited(
+          command.photo,
+          (p) => p.apply([change], "End"),
+          "End",
+        );
       }
-      case 'pickWhiteBalance':
+      case "pickWhiteBalance":
         return this.pick(command.photo, command.x, command.y);
-      case 'undo':
-        return this.edited(command.photo, (p) => p.undo(), 'End');
-      case 'redo':
-        return this.edited(command.photo, (p) => p.redo(), 'End');
-      case 'exportJpeg': {
+      case "undo":
+        return this.edited(command.photo, (p) => p.undo(), "End");
+      case "redo":
+        return this.edited(command.photo, (p) => p.redo(), "End");
+      case "exportJpeg": {
         // The fake writes no file: it remembers the path, refuses as the
         // engine does (an original, an existing file without replace), and
         // reports the export's progress in one step.
         const fake = this.folder.find((p) => p.photo.id === command.photo);
-        if (command.photo !== this.strip.current || !fake?.kind) throw new Error('no photo is open');
-        const name = command.path.split(/[\\/]/).pop() ?? '';
+        if (command.photo !== this.strip.current || !fake?.kind)
+          throw new Error("no photo is open");
+        const name = command.path.split(/[\\/]/).pop() ?? "";
         // The engine refuses a file it listed, by its whole path.
-        const norm = (path: string) => path.replace(/\\/g, '/');
-        if (this.folder.some((p) => norm(`${this.folderPath}/${p.photo.fileName}`) === norm(command.path))) {
+        const norm = (path: string) => path.replace(/\\/g, "/");
+        if (
+          this.folder.some(
+            (p) =>
+              norm(`${this.folderPath}/${p.photo.fileName}`) ===
+              norm(command.path),
+          )
+        ) {
           throw new Error(ORIGINAL);
         }
-        if (this.written.has(command.path) && !command.replace) throw new Error(`${name} already exists`);
-        if (command.longEdge !== null && command.longEdge < 32) throw new Error(`a long edge of ${command.longEdge} px`);
+        if (this.written.has(command.path) && !command.replace)
+          throw new Error(`${name} already exists`);
+        if (command.longEdge !== null && command.longEdge < 32)
+          throw new Error(`a long edge of ${command.longEdge} px`);
         this.written.add(command.path);
         const job = ++this.exportJobs;
         const long = Math.max(fake.width, fake.height);
-        const scale = command.longEdge !== null && command.longEdge < long ? command.longEdge / long : 1;
+        const scale =
+          command.longEdge !== null && command.longEdge < long
+            ? command.longEdge / long
+            : 1;
         const rowsTotal = Math.max(1, Math.round(fake.height * scale));
         const progress = (rowsDone: number, state: ExportState) =>
-          this.emit({ type: 'exportProgress', job, photo: command.photo, path: command.path, rowsDone, rowsTotal, state });
-        progress(0, { type: 'queued' });
-        progress(0, { type: 'running' });
-        progress(rowsTotal, { type: 'finished', notes: [] });
-        return { type: 'export', job };
+          this.emit({
+            type: "exportProgress",
+            job,
+            photo: command.photo,
+            path: command.path,
+            rowsDone,
+            rowsTotal,
+            state,
+          });
+        progress(0, { type: "queued" });
+        progress(0, { type: "running" });
+        const step = this.exportStepMs;
+        if (step === null) {
+          progress(rowsTotal, { type: "finished", notes: [] });
+        } else {
+          // One export at a time is not modelled: each runs on its own.
+          let tenth = 0;
+          let timer: ReturnType<typeof setTimeout>;
+          const next = () => {
+            tenth += 1;
+            if (tenth < 10) {
+              progress(Math.round((rowsTotal * tenth) / 10), {
+                type: "running",
+              });
+              timer = setTimeout(next, step);
+            } else {
+              this.runningExports.delete(job);
+              progress(rowsTotal, { type: "finished", notes: [] });
+            }
+          };
+          timer = setTimeout(next, step);
+          this.runningExports.set(job, () => {
+            clearTimeout(timer);
+            // The engine deletes a cancelled export's file.
+            this.written.delete(command.path);
+            progress(Math.round((rowsTotal * tenth) / 10), {
+              type: "cancelled",
+            });
+          });
+        }
+        return { type: "export", job };
       }
-      case 'cancelExport':
+      case "cancelExport": {
+        const cancel = this.runningExports.get(command.job);
+        this.runningExports.delete(command.job);
+        cancel?.();
         return DONE;
-      case 'requestThumbnails': {
+      }
+      case "requestThumbnails": {
         this.thumbnailRequests.push([...command.photos]);
         const listed = new Set(this.folder.map((p) => p.photo.id));
         const ready: number[] = [];
@@ -352,7 +463,11 @@ export class FakeEngine implements Engine {
           else this.thumbnailQueue.push(photo);
         }
         for (const photo of ready) {
-          this.emit({ type: 'thumbnailReady', photo, found: this.thumbnails.get(photo) !== null });
+          this.emit({
+            type: "thumbnailReady",
+            photo,
+            found: this.thumbnails.get(photo) !== null,
+          });
         }
         void this.makeThumbnails();
         return DONE;
@@ -361,13 +476,19 @@ export class FakeEngine implements Engine {
   }
 
   /** Switches to `id`, as `Engine::select_photo` does, and renders it. */
-  private select(id: number): { edit: PhotoEdit | null; reason: string | null } {
+  private select(id: number): {
+    edit: PhotoEdit | null;
+    reason: string | null;
+  } {
     const index = this.folder.findIndex((p) => p.photo.id === id);
     const fake = this.folder[index];
     if (!fake) throw new Error(`photo ${id} is not in the strip`);
     if (id !== this.strip.current) this.endGesture();
-    const previous = this.folder.findIndex((p) => p.photo.id === this.strip.current);
-    if (previous >= 0 && index !== previous) this.strip.direction = index > previous ? 'next' : 'previous';
+    const previous = this.folder.findIndex(
+      (p) => p.photo.id === this.strip.current,
+    );
+    if (previous >= 0 && index !== previous)
+      this.strip.direction = index > previous ? "next" : "previous";
     this.strip.current = id;
     if (!fake.kind) return { edit: null, reason: fake.photo.reason };
     let edits = this.edits.get(id);
@@ -384,11 +505,11 @@ export class FakeEngine implements Engine {
    * before that photo goes: mirrors `Session::end_gesture`.
    */
   private endGesture() {
-    this.preview = 'none';
+    this.preview = "none";
     const open = this.strip.current;
     const p = open === null ? undefined : this.edits.get(open);
     if (!p?.inGesture()) return;
-    p.apply([], 'End');
+    p.apply([], "End");
     const entry = this.strip.photos.find((s) => s.id === open);
     if (entry) entry.edited = p.state().edited;
   }
@@ -398,7 +519,11 @@ export class FakeEngine implements Engine {
    * does: a photo not open changes nothing, and one never opened is an
    * error.
    */
-  private edited(photo: number, act: (p: PhotoEdits) => boolean, phase: Phase): CommandResult {
+  private edited(
+    photo: number,
+    act: (p: PhotoEdits) => boolean,
+    phase: Phase,
+  ): CommandResult {
     const p = this.edits.get(photo);
     if (!p) throw new Error(`photo ${photo} was not opened this session`);
     const open = this.strip.current === photo;
@@ -407,9 +532,9 @@ export class FakeEngine implements Engine {
     const entry = this.strip.photos.find((s) => s.id === photo);
     if (entry) entry.edited = state.edited;
     // The engine ends the Alt preview with the gesture.
-    if (phase === 'End') this.preview = 'none';
+    if (phase === "End") this.preview = "none";
     if (open) this.renderPhoto();
-    return { type: 'edit', edit: state, recorded, refused: null };
+    return { type: "edit", edit: state, recorded, refused: null };
   }
 
   /**
@@ -419,21 +544,26 @@ export class FakeEngine implements Engine {
    */
   private pick(photo: number, x: number, y: number): CommandResult {
     const p = this.edits.get(photo);
-    if (!p || this.strip.current !== photo || p.inGesture()) return this.edited(photo, () => false, 'End');
+    if (!p || this.strip.current !== photo || p.inGesture())
+      return this.edited(photo, () => false, "End");
     if (y < 0.1) {
       return {
-        type: 'edit',
+        type: "edit",
         edit: p.state(),
         recorded: false,
         refused: "Can't set white balance here: the area is clipped",
       };
     }
-    const mode = 'Custom' as const;
+    const mode = "Custom" as const;
     const tint = Math.round(40 * y - 20);
     const change: Change = p.kind.raw
       ? { WhiteBalance: { mode, temp: Math.round(3000 + 5000 * x), tint } }
       : { WhiteBalance: { mode, temp: Math.round(80 * x - 40), tint } };
-    return this.edited(photo, (q) => q.apply([change], 'End', 'White balance: picked'), 'End');
+    return this.edited(
+      photo,
+      (q) => q.apply([change], "End", "White balance: picked"),
+      "End",
+    );
   }
 
   private openInGesture(): boolean {
@@ -454,19 +584,27 @@ export class FakeEngine implements Engine {
     const edits = id === null ? undefined : this.edits.get(id);
     if (id === null || !fake?.kind || !edits || this.view.width === 0) return;
     const started = performance.now();
-    const [width, height] = fit([fake.width, fake.height], [this.view.width, this.view.height]);
+    const [width, height] = fit(
+      [fake.width, fake.height],
+      [this.view.width, this.view.height],
+    );
     const generation = ++this.generation;
     const look = lookOf(edits.current(), fake.kind);
     const histogram = emptyHistogram();
     const parts: Uint8Array[] = [];
     for (let y = 0; y < height; y += TILE_SIZE) {
       for (let x = 0; x < width; x += TILE_SIZE) {
-        const rect = { x, y, width: Math.min(TILE_SIZE, width - x), height: Math.min(TILE_SIZE, height - y) };
+        const rect = {
+          x,
+          y,
+          width: Math.min(TILE_SIZE, width - x),
+          height: Math.min(TILE_SIZE, height - y),
+        };
         const header: TileHeader = {
           generation,
           rect,
           mipLevel: 0,
-          format: 'rgba8Srgb',
+          format: "rgba8Srgb",
           imageWidth: width,
           imageHeight: height,
         };
@@ -478,7 +616,7 @@ export class FakeEngine implements Engine {
     }
     this.keepFrame(generation, parts);
     this.emit({
-      type: 'renderFinished',
+      type: "renderFinished",
       photo: id,
       generation,
       tileCount: parts.length,
@@ -486,10 +624,20 @@ export class FakeEngine implements Engine {
       gpuMs: null,
     });
     this.histograms.set(id, { generation, histogram });
-    this.emit({ type: 'histogramReady', photo: id, generation, histogram: structuredClone(histogram) });
+    this.emit({
+      type: "histogramReady",
+      photo: id,
+      generation,
+      histogram: structuredClone(histogram),
+    });
   }
 
-  private renderPattern(width: number, height: number, phase: number, format: PixelFormat) {
+  private renderPattern(
+    width: number,
+    height: number,
+    phase: number,
+    format: PixelFormat,
+  ) {
     const started = performance.now();
     const generation = ++this.generation;
     const parts: Uint8Array[] = [];
@@ -509,12 +657,14 @@ export class FakeEngine implements Engine {
           imageWidth: width,
           imageHeight: height,
         };
-        parts.push(encodeTile(header, testPatternTile(width, height, rect, phase)));
+        parts.push(
+          encodeTile(header, testPatternTile(width, height, rect, phase)),
+        );
       }
     }
     this.keepFrame(generation, parts);
     this.emit({
-      type: 'renderFinished',
+      type: "renderFinished",
       photo: null,
       generation,
       tileCount: parts.length,
@@ -547,6 +697,27 @@ export class FakeEngine implements Engine {
     return this.saveChoice(suggested);
   }
 
+  ask(message: string): Promise<boolean> {
+    this.asked.push(message);
+    return this.askChoice(message);
+  }
+
+  onCloseRequested(allow: () => Promise<boolean>): () => void {
+    this.closeHandlers.push(allow);
+    return () => {
+      this.closeHandlers = this.closeHandlers.filter((h) => h !== allow);
+    };
+  }
+
+  /** The user closes the window, for tests: closed unless a handler says no. */
+  async requestClose(): Promise<boolean> {
+    for (const allow of this.closeHandlers) {
+      if (!(await allow())) return false;
+    }
+    this.closed = true;
+    return true;
+  }
+
   async fetchThumbnail(photo: number): Promise<ArrayBuffer> {
     const bytes = this.thumbnails.get(photo);
     if (!bytes) throw new Error(`photo ${photo} has no thumbnail`);
@@ -563,7 +734,11 @@ export class FakeEngine implements Engine {
     if (this.makingThumbnails) return;
     this.makingThumbnails = true;
     try {
-      for (let photo = this.thumbnailQueue.shift(); photo !== undefined; photo = this.thumbnailQueue.shift()) {
+      for (
+        let photo = this.thumbnailQueue.shift();
+        photo !== undefined;
+        photo = this.thumbnailQueue.shift()
+      ) {
         if (this.thumbnails.has(photo)) continue;
         await this.thumbnailLatency(photo);
         const index = this.folder.findIndex((p) => p.photo.id === photo);
@@ -571,7 +746,7 @@ export class FakeEngine implements Engine {
         if (!fake || this.thumbnails.has(photo)) continue;
         const bytes = fake.kind ? thumbnail(fake, index) : null;
         this.thumbnails.set(photo, bytes);
-        this.emit({ type: 'thumbnailReady', photo, found: bytes !== null });
+        this.emit({ type: "thumbnailReady", photo, found: bytes !== null });
       }
     } finally {
       this.makingThumbnails = false;
@@ -585,7 +760,10 @@ export class FakeEngine implements Engine {
 }
 
 /** Mirrors genzo_pipeline::gpu::spike::fit: fit inside bounds, never enlarge. */
-export function fit([w, h]: [number, number], [bw, bh]: [number, number]): [number, number] {
+export function fit(
+  [w, h]: [number, number],
+  [bw, bh]: [number, number],
+): [number, number] {
   const s = Math.min(bw / w, bh / h, 1);
   return [Math.max(1, Math.round(w * s)), Math.max(1, Math.round(h * s))];
 }
@@ -599,12 +777,18 @@ interface Look {
 function lookOf(edit: Edit, kind: EditKind): Look {
   const wb = edit.white_balance;
   // How far white balance moves from as shot, about -1 to 1.
-  const warm = kind.raw ? (1e6 / kind.asShotTemp - 1e6 / wb.temp) / 200 : wb.temp / 100;
+  const warm = kind.raw
+    ? (1e6 / kind.asShotTemp - 1e6 / wb.temp) / 200
+    : wb.temp / 100;
   const green = (kind.raw ? wb.tint - kind.asShotTint : wb.tint) / 150;
   return {
     gain: 2 ** edit.exposure * (1 + edit.contrast / 400),
-    rgb: [1 + 0.3 * warm + 0.1 * green, 1 - 0.2 * green, 1 - 0.3 * warm + 0.1 * green],
-    mono: edit.treatment === 'Monochrome',
+    rgb: [
+      1 + 0.3 * warm + 0.1 * green,
+      1 - 0.2 * green,
+      1 - 0.3 * warm + 0.1 * green,
+    ],
+    mono: edit.treatment === "Monochrome",
   };
 }
 
@@ -618,14 +802,17 @@ export const THUMB_EDGE = 320;
  * here, where the engine sends JPEG; the app reads both.
  */
 function thumbnail(fake: FakePhoto, index: number): ArrayBuffer {
-  const [width, height] = fit([fake.width, fake.height], [THUMB_EDGE, THUMB_EDGE]);
+  const [width, height] = fit(
+    [fake.width, fake.height],
+    [THUMB_EDGE, THUMB_EDGE],
+  );
   const rect = { x: 0, y: 0, width, height };
   const look: Look = { gain: 0.8 + 0.1 * index, rgb: [1, 1, 1], mono: false };
   const header: TileHeader = {
     generation: 0,
     rect,
     mipLevel: 0,
-    format: 'rgba8Srgb',
+    format: "rgba8Srgb",
     imageWidth: width,
     imageHeight: height,
   };
@@ -652,7 +839,11 @@ function sceneTile(
           ? [0.35 + 0.3 * u, 0.5 + 0.2 * v, 0.8]
           : [0.35, 0.3 + 0.2 * u, 0.2];
       const [gr, gg, gb] = look.rgb;
-      const [r, g, b] = [r0 * gr * look.gain, g0 * gg * look.gain, b0 * gb * look.gain];
+      const [r, g, b] = [
+        r0 * gr * look.gain,
+        g0 * gg * look.gain,
+        b0 * gb * look.gain,
+      ];
       const gray = 0.3 * r + 0.59 * g + 0.11 * b;
       for (const c of look.mono ? [gray, gray, gray] : [r, g, b]) {
         out[i++] = Math.round(255 * Math.min(1, Math.max(0, c)));
@@ -689,14 +880,16 @@ function paintClipping(
   overlay: { shadows: Rgba | null; highlights: Rgba | null },
   preview: ClippingPreview,
 ) {
-  if (preview === 'none' && !overlay.shadows && !overlay.highlights) return;
+  if (preview === "none" && !overlay.shadows && !overlay.highlights) return;
   for (let i = 0; i < rgba.length; i += 4) {
     const px = [rgba[i] ?? 0, rgba[i + 1] ?? 0, rgba[i + 2] ?? 0];
     let out: number[] | null = null;
-    if (preview === 'highlights') out = px.map((c) => (c === 255 ? 255 : 0));
-    else if (preview === 'shadows') out = px.map((c) => (c === 0 ? 0 : 255));
-    else if (overlay.highlights && px.includes(255)) out = overlay.highlights.slice(0, 3);
-    else if (overlay.shadows && px.includes(0)) out = overlay.shadows.slice(0, 3);
+    if (preview === "highlights") out = px.map((c) => (c === 255 ? 255 : 0));
+    else if (preview === "shadows") out = px.map((c) => (c === 0 ? 0 : 255));
+    else if (overlay.highlights && px.includes(255))
+      out = overlay.highlights.slice(0, 3);
+    else if (overlay.shadows && px.includes(0))
+      out = overlay.shadows.slice(0, 3);
     if (out) rgba.set(out, i);
   }
 }

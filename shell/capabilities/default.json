@@ -1,13 +1,15 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "IPC the frontend's transport module needs: invoke, events, and the folder and save dialogs.",
+  "description": "IPC the frontend's transport module needs: invoke, events, and the folder, save and question dialogs, and closing the window after asking (an export in progress).",
   "windows": [
     "main"
   ],
   "permissions": [
     "core:default",
     "dialog:allow-open",
-    "dialog:allow-save"
+    "dialog:allow-save",
+    "dialog:allow-ask",
+    "core:window:allow-destroy"
   ]
 }

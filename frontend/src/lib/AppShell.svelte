@@ -48,6 +48,12 @@
   );
 
   registry.bind(
+    'export.cancel',
+    () => void exports.cancel(),
+    () => exports.busy,
+  );
+
+  registry.bind(
     'edit.undo',
     () => session.undo(),
     () => session.canUndo,
@@ -110,7 +116,10 @@
       // to be chosen (wired with the real engine).
       if (engine.kind === 'fake') void session.openFolder('demo');
     });
+    // Quitting during an export asks first, and cancels it (OUT-01).
+    const stopClose = engine.onCloseRequested(() => exports.allowQuit());
     return () => {
+      stopClose();
       session.dispose();
       thumbnails.dispose();
       exports.dispose();
@@ -174,7 +183,12 @@
 <svelte:window {onkeydown} />
 
 <div class="shell">
-  <TopBar {module} catalog={current ? current.fileName : 'No folder open'} {onmodule} />
+  <TopBar
+    {module}
+    catalog={current ? current.fileName : 'No folder open'}
+    progress={{ 'module.export': exports.progress }}
+    {onmodule}
+  />
   <main>
     <div class="left">
       <LeftPanelDevelop />
@@ -213,6 +227,7 @@
     info={current ? [current.fileName] : []}
     facts={['sRGB', '8-bit', engine.kind === 'fake' ? 'Fake engine' : info.adapter.name]}
     notice={exports.status ?? session.notice ?? session.reason ?? adapterNotice}
+    noticeMenu={exports.busy ? [{ label: 'Cancel export', command: 'export.cancel' }] : null}
   />
   {#if exportOpen && current && session.editable}
     <ExportDialog

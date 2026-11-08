@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ExportState } from '$contract/genzo';
 import { FakeEngine, ORIGINAL } from '../engine/fake';
-import { DONE_FOR_MS, Exports, exportName, folderOf, join, nameOf, withJpg } from './export.svelte';
+import { DONE_FOR_MS, Exports, QUIT_QUESTION, exportName, folderOf, join, nameOf, withJpg } from './export.svelte';
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -119,5 +119,53 @@ describe('Exports, originals', () => {
     // Another folder, or a name that only starts the same: allowed.
     expect(await refused('/photos/demo/DSC_0412.NEF')).toBe(false);
     expect(await refused('demoX/harbor.jpg')).toBe(false);
+  });
+});
+
+describe('Exports, in progress (OUT-01)', () => {
+  it('tracks every export until it ends, and its progress for the ring', async () => {
+    vi.useFakeTimers();
+    const { engine, exports, photo } = await opened();
+    engine.exportStepMs = 100;
+    expect(exports.running).toBe(false);
+    expect(exports.progress).toBeNull();
+    await exports.start(photo, '/out/a.jpg', false);
+    await exports.start(photo, '/out/b.jpg', false);
+    expect(exports.running).toBe(true);
+    expect(exports.progress).toBe(0);
+    await vi.advanceTimersByTimeAsync(400);
+    expect(exports.progress).toBeCloseTo(0.4);
+    expect(exports.status).toMatch(/^Exporting b\.jpg, 40 %$/);
+    // The newer export's end leaves the older one running.
+    await exports.cancel();
+    expect(exports.status).toBe('Export cancelled');
+    expect(exports.busy).toBe(false);
+    expect(exports.progress).toBeNull();
+    expect(exports.running).toBe(true);
+    await vi.advanceTimersByTimeAsync(600);
+    expect(exports.running).toBe(false);
+    expect(engine.written.has('/out/a.jpg')).toBe(true);
+    expect(engine.written.has('/out/b.jpg')).toBe(false);
+  });
+
+  it('quitting asks only during an export, and cancels it when the user quits', async () => {
+    const { engine, exports, photo } = await opened();
+    engine.onCloseRequested(() => exports.allowQuit());
+    expect(await engine.requestClose()).toBe(true);
+    expect(engine.asked).toEqual([]);
+
+    engine.closed = false;
+    engine.exportStepMs = 1000;
+    await exports.start(photo, '/out/a.jpg', false);
+    engine.askChoice = () => Promise.resolve(false);
+    expect(await engine.requestClose()).toBe(false);
+    expect(engine.asked).toEqual([QUIT_QUESTION]);
+    expect(exports.running).toBe(true);
+
+    engine.askChoice = () => Promise.resolve(true);
+    expect(await engine.requestClose()).toBe(true);
+    expect(exports.running).toBe(false);
+    expect(engine.sent.at(-1)).toEqual({ type: 'cancelExport', job: 1 });
+    expect(engine.written.has('/out/a.jpg')).toBe(false);
   });
 });
