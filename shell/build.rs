@@ -3,6 +3,8 @@
 fn main() {
     let lock = "../contract/contract.lock";
     println!("cargo:rerun-if-changed={lock}");
+    // The window and .exe icons are baked in here too: a new icon must rebuild them.
+    println!("cargo:rerun-if-changed=icons");
     let text = std::fs::read_to_string(lock).expect("contract/contract.lock is missing");
     let json: serde_json::Value = serde_json::from_str(&text).expect("contract.lock is not JSON");
     let version = json["version"]
