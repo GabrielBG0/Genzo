@@ -8,6 +8,7 @@
   import Filmstrip from './components/Filmstrip.svelte';
   import Histogram from './components/Histogram.svelte';
   import LeftPanelDevelop from './components/LeftPanelDevelop.svelte';
+  import PhotoToolbar from './components/PhotoToolbar.svelte';
   import PhotoViewport from './components/PhotoViewport.svelte';
   import StatusBar from './components/StatusBar.svelte';
   import TopBar, { type Module } from './components/TopBar.svelte';
@@ -16,6 +17,7 @@
   import { chooseNotice } from './develop/status';
   import { DevelopSession } from './develop/session.svelte';
   import { Thumbnails } from './develop/thumbnails.svelte';
+  import { ZoomState } from './develop/zoom.svelte';
   import { bindLayout, Layout } from './layout.svelte';
   import type { Engine } from './engine/types';
   import { provideRegistry } from './shortcuts/context';
@@ -33,6 +35,12 @@
   const exports = untrack(() => new Exports(engine));
   /** Which panels show (APP-08), for the session. */
   const layout = new Layout(registry.platform === 'mac');
+  /** The viewport's zoom and pan (DEV-01 viewport spec), for the session. */
+  const zoom = new ZoomState();
+  /** The photo toolbar shows (T), for the session. */
+  let toolbarShown = $state(true);
+  /** Space is down: its key repeats are not new presses. */
+  let spaceDown = false;
   /** The export dialog (OUT-01) is open. */
   let exportOpen = $state(false);
   /** About Genzo (APP-02) is open. */
@@ -151,6 +159,33 @@
     () => void session.step('next'),
     () => at >= 0 && at < session.strip.photos.length - 1,
   );
+  // The viewport (DEV-01 viewport spec): Z, Space held, T.
+  registry.bind(
+    'view.zoom',
+    () => zoom.toggle(zoom.pointer),
+    () => session.editable && !inDialog,
+    () => (zoom.level === 'fit' ? 'Zoom to 1:1' : 'Zoom to Fit'),
+  );
+  registry.bind(
+    'view.zoomHold',
+    () => {
+      if (spaceDown) return;
+      spaceDown = true;
+      zoom.hold(zoom.pointer);
+    },
+    () => session.editable && !inDialog,
+  );
+  registry.bind(
+    'view.toolbar',
+    () => (toolbarShown = !toolbarShown),
+    () => !inDialog,
+    () => (toolbarShown ? 'Hide toolbar' : 'Show toolbar'),
+  );
+  function releaseSpace() {
+    spaceDown = false;
+    zoom.release();
+  }
+
   registry.bind(
     'develop.pickerCancel',
     () => (session.picking = false),
@@ -184,15 +219,39 @@
     module = m;
   }
 
-  /** The viewport's size goes to the engine once per animation frame at most. */
-  let viewFrame: number | null = null;
   function onresize(width: number, height: number) {
+    zoom.resize(width, height);
+  }
+
+  /** What the viewport shows goes to the engine once per animation frame at most, the last one always. */
+  let viewFrame: number | null = null;
+  $effect(() => {
+    const { width, height } = zoom.view;
+    const request = zoom.request;
+    // Again once a switch has answered: the engine opens each photo at Fit.
+    void session.edit?.photo;
+    if (width === 0 || height === 0) return;
     if (viewFrame !== null) cancelAnimationFrame(viewFrame);
     viewFrame = requestAnimationFrame(() => {
       viewFrame = null;
-      void session.setView(width, height);
+      void session.setView(width, height, request);
     });
-  }
+  });
+
+  // The shown image's size comes with each edit reply; a new photo opens on its center.
+  let sizedPhoto: number | null = null;
+  $effect(() => {
+    const e = session.edit;
+    if (!e) return;
+    untrack(() => {
+      zoom.setShown(e.shown.width, e.shown.height, e.photo !== sizedPhoto);
+      sizedPhoto = e.photo;
+    });
+  });
+  // A photo that does not render shows at Fit (its embedded preview); one opening keeps the zoom.
+  $effect(() => {
+    if (session.reason !== null) untrack(() => zoom.fit());
+  });
 
   const current = $derived(session.strip.photos.find((p) => p.id === session.strip.current) ?? null);
   const items = $derived(
@@ -282,6 +341,8 @@
   }
 
   function onkeyup(e: KeyboardEvent) {
+    // Space up ends a temporary zoom, wherever focus went meanwhile.
+    if (e.code === 'Space') releaseSpace();
     if (e.key !== 'Alt') return;
     const alone = altAlone;
     altAlone = false;
@@ -297,6 +358,7 @@
     'view.filmstrip': layout.filmstrip,
     'view.leftPanel': layout.left,
     'view.rightPanel': layout.right,
+    'view.toolbar': toolbarShown,
     'develop.beforeAfter': session.before,
     'develop.picker': session.picking,
     'develop.clipping':
@@ -320,6 +382,7 @@
   onblur={() => {
     altAlone = false;
     pressing = false;
+    releaseSpace();
   }}
 />
 
@@ -351,7 +414,19 @@
         {onresize}
         empty={session.reason ?? 'No photo open'}
         badge={session.before ? 'Before' : null}
-      />
+        view={zoom}
+        zoomable={session.editable}
+      >
+        {#if toolbarShown && session.editable}
+          <PhotoToolbar
+            {zoom}
+            on={{
+              'develop.beforeAfter': session.before,
+              'develop.clipping': session.overlay.shadows || session.overlay.highlights,
+            }}
+          />
+        {/if}
+      </PhotoViewport>
     </div>
     <aside class="right pane" aria-label="Right panel" hidden={!layout.right}>
       <Histogram

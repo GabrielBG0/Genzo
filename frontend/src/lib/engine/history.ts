@@ -97,6 +97,9 @@ export class PhotoEdits {
       before: false,
       // The photo's, not the edit's: the fake sets them (APP-07).
       notes: [],
+      // The photo's size is the fake's to know: it sets them (DEV-01 viewport).
+      oriented: { width: 0, height: 0 },
+      shown: { width: 0, height: 0 },
     };
   }
 }

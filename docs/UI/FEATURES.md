@@ -242,7 +242,7 @@ Spec template for each feature: **Behavior** (what it does, step by step), **Inp
 - Priority: P0 · Screens: not mocked
 - Scope: Non-destructive pipeline in the technical spec's fixed stage order: decode, white balance and highlights, demosaic, camera matrix, lens and geometry, exposure and tone, color, detail, then effects, crop and the output transform. Local adjustments blend inside the tone, color and detail stages.
 - Decided: rawler plus Genzo's own DNG reader, no LibRaw in M1, and the camera priority order; GPU first on wgpu, with a software adapter fallback (see the Decided table in `docs/development-plan.md`).
-- Spec: [DEV-01](../specs/DEV-01.md) (the M1 part: decode, stages 1 to 4, the core of stages 6 and 7, crop and rotate, the output transform)
+- Spec: [DEV-01](../specs/DEV-01.md) (the M1 part: decode, stages 1 to 4, the core of stages 6 and 7, crop and rotate, the output transform); the viewport's frontend: [DEV-01-viewport](../specs/DEV-01-viewport.md) (Fit and 1:1, Space, pan, the photo toolbar)
 
 ### DEV-02 · Basic panel
 - Priority: P0 · Screens: D1

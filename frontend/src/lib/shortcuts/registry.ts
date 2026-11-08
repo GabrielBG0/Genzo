@@ -95,6 +95,7 @@ function eventChord(e: KeyboardEvent, platform: Platform): Chord | null {
   else if (e.code === 'BracketLeft') key = '[';
   else if (e.code === 'BracketRight') key = ']';
   else if (e.code === 'Slash') key = '/';
+  else if (e.code === 'Space') key = 'Space';
   return { mod, shift: e.shiftKey, alt: e.altKey, key: normalizeKey(key) };
 }
 
@@ -198,6 +199,8 @@ export class ShortcutRegistry {
     if (e.key.startsWith('Arrow') && target?.closest('[role="slider"]')) return false;
     // Tab moves focus between controls; it hides panels only outside them (APP-08).
     if (e.key === 'Tab' && target && isControl(target)) return false;
+    // Space presses a focused button or control; it is a command only outside them.
+    if (e.code === 'Space' && target && isControl(target)) return false;
     const cmd = this.match(e, scope);
     if (!cmd || !cmd.enabled()) return false;
     e.preventDefault();

@@ -272,3 +272,31 @@ fn resets_keep_unknown_fields() {
     }
     assert!(!p.is_edited());
 }
+
+/// The sizes an edit reply names (DEV-01 viewport, DEV-12): the oriented
+/// size before the crop, and the framed image's in whole pixels.
+#[test]
+fn the_sizes_follow_the_orientation_and_the_crop() {
+    let mut p = photo();
+    assert_eq!(p.sizes(p.current()), ((6000, 4000), (6000, 4000)));
+    p.apply(&[Change::Turn { clockwise: true }], Phase::End)
+        .unwrap();
+    assert_eq!(p.sizes(p.current()), ((4000, 6000), (4000, 6000)));
+    p.apply(
+        &[Change::Crop {
+            cx: 0.5,
+            cy: 0.5,
+            w: 0.5,
+            h: 0.25,
+            angle: 0.0,
+        }],
+        Phase::End,
+    )
+    .unwrap();
+    assert_eq!(p.sizes(p.current()), ((4000, 6000), (2000, 1500)));
+    // The defaults stay whole and level.
+    assert_eq!(p.sizes(p.defaults()), ((6000, 4000), (6000, 4000)));
+    // A file stored on its side (orientation 6) is oriented upright.
+    let side = PhotoEdits::new(RAW, (6000, 4000), 6);
+    assert_eq!(side.sizes(side.current()), ((4000, 6000), (4000, 6000)));
+}

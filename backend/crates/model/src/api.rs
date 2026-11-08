@@ -260,6 +260,20 @@ pub struct PhotoEdit {
     /// missing as-shot white, an unreadable tone curve. Empty until the
     /// photo is decoded.
     pub notes: Vec<String>,
+    /// The photo's size in pixels as the shown edit orients it, before its
+    /// crop: what the crop's normalized values are fractions of (DEV-12).
+    pub oriented: Size,
+    /// The size of the image the shown edit frames, in whole pixels, as
+    /// its frames name it: what a `View::Region`'s origin and 1:1 refer to.
+    /// The before's, while the before shows.
+    pub shown: Size,
+}
+
+/// A size in pixels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub struct Size {
+    pub width: u32,
+    pub height: u32,
 }
 
 /// One side's clipping (DEV-03).
@@ -714,6 +728,14 @@ mod tests {
                 revision: 4,
                 before: false,
                 notes: vec![],
+                oriented: Size {
+                    width: 600,
+                    height: 400,
+                },
+                shown: Size {
+                    width: 300,
+                    height: 400,
+                },
             },
             recorded: true,
             refused: None,
@@ -722,6 +744,8 @@ mod tests {
         assert_eq!(json["type"], "edit");
         assert_eq!(json["edit"]["revision"], 4);
         assert_eq!(json["edit"]["undo"], "Exposure");
+        assert_eq!(json["edit"]["shown"]["width"], 300);
+        assert_eq!(json["edit"]["oriented"]["height"], 400);
         // The edit as stored: snake_case fields, its unknown ones left out.
         assert_eq!(json["edit"]["edit"]["schema_version"], 1);
         assert_eq!(json["edit"]["edit"]["white_balance"]["mode"], "AsShot");

@@ -44,6 +44,10 @@ export const DEFAULT_COMMANDS: CommandSpec[] = [
   { id: 'view.filmstrip', label: 'Show filmstrip', keys: ['F6'], group: 'View' },
   { id: 'view.leftPanel', label: 'Show left panel', keys: ['F7'], group: 'View' },
   { id: 'view.rightPanel', label: 'Show right panel', keys: ['F8'], group: 'View' },
+  // The Develop viewport (DEV-01 viewport spec)
+  { id: 'view.zoom', label: 'Zoom to 1:1', keys: ['Z'], scope: 'develop', group: 'View' },
+  { id: 'view.zoomHold', label: 'Temporary zoom', keys: ['Space'], scope: 'develop', group: 'View' },
+  { id: 'view.toolbar', label: 'Hide toolbar', keys: ['T'], scope: 'develop', group: 'View' },
 ];
 
 export function createRegistry(): ShortcutRegistry {

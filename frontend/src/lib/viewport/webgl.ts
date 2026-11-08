@@ -29,34 +29,61 @@ function compile(gl: WebGL2RenderingContext, type: number, src: string): WebGLSh
   return s;
 }
 
-/** Image placement in normalized canvas coordinates (0..1). */
-export function placement(
-  t: ViewTransform,
-  image: { width: number; height: number },
-  canvas: { width: number; height: number; dpr: number },
-): { scaleX: number; scaleY: number; offsetX: number; offsetY: number } {
-  const cw = canvas.width * canvas.dpr;
-  const ch = canvas.height * canvas.dpr;
-  const s =
-    t.zoom === 'fit' ? Math.min(cw / image.width, ch / image.height) : t.zoom;
-  const w = (image.width * s) / cw;
-  const h = (image.height * s) / ch;
-  return {
-    scaleX: w,
-    scaleY: h,
-    offsetX: (1 - w) / 2 + (t.panX * canvas.dpr) / cw,
-    offsetY: (1 - h) / 2 + (t.panY * canvas.dpr) / ch,
-  };
+/** Where the view is on the shown image: its zoom (device pixels per shown pixel) and top left. */
+export interface Placement {
+  zoom: number;
+  originX: number;
+  originY: number;
+  shownWidth: number;
+  shownHeight: number;
 }
 
-/** The WebGL2 tile canvas. Zoom and pan only change uniforms. */
+/**
+ * The view on the shown image for transform `t`, with a held frame of size
+ * `held` (the shown image's size when the transform names none) and a
+ * canvas of CSS size `canvas` at its device pixel ratio.
+ */
+export function placement(
+  t: ViewTransform,
+  held: { width: number; height: number },
+  canvas: { width: number; height: number; dpr: number },
+): Placement {
+  const cw = canvas.width * canvas.dpr;
+  const ch = canvas.height * canvas.dpr;
+  const shown = t.shown && t.shown.width > 0 && t.shown.height > 0 ? t.shown : held;
+  const zoom = t.zoom === 'fit' ? Math.min(cw / shown.width, ch / shown.height) : t.zoom;
+  const originX = (t.origin?.x ?? (shown.width - cw / zoom) / 2) - ((t.panX ?? 0) * canvas.dpr) / zoom;
+  const originY = (t.origin?.y ?? (shown.height - ch / zoom) / 2) - ((t.panY ?? 0) * canvas.dpr) / zoom;
+  return { zoom, originX, originY, shownWidth: shown.width, shownHeight: shown.height };
+}
+
+/**
+ * A layer held for drawing: a texture covering `rect` of a frame whose
+ * image is `image` in size (a Fit frame's is smaller than the shown
+ * image; a 1:1 frame's is the shown image's).
+ */
+interface Layer {
+  texture: WebGLTexture;
+  image: { width: number; height: number };
+  rect: { x: number; y: number; width: number; height: number };
+  /** The texture's allocated size; zero when the layer holds nothing. */
+  size: { width: number; height: number };
+}
+
+/**
+ * The WebGL2 tile canvas. It holds two layers, both moved by uniforms only
+ * (DEV-01 viewport spec): the Fit frame, the backdrop at any zoom, and the
+ * newest 1:1 frame's tiles over it, placed by their rect in the shown
+ * image. A frame whose tiles cover its whole image is a Fit frame; one
+ * that covers part of it is a 1:1 frame.
+ */
 export class WebGLViewport implements Viewport {
   generation = 0;
   private gl: WebGL2RenderingContext;
   private program: WebGLProgram;
-  private texture: WebGLTexture;
-  private image = { width: 0, height: 0 };
-  private transform: ViewTransform = { zoom: 'fit', panX: 0, panY: 0 };
+  private base: Layer;
+  private detail: Layer;
+  private transform: ViewTransform = { zoom: 'fit' };
   private size = { width: 1, height: 1, dpr: 1 };
   private uScale: WebGLUniformLocation | null;
   private uOffset: WebGLUniformLocation | null;
@@ -80,50 +107,85 @@ export class WebGLViewport implements Viewport {
     gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
     this.uScale = gl.getUniformLocation(program, 'u_scale');
     this.uOffset = gl.getUniformLocation(program, 'u_offset');
-    const tex = gl.createTexture();
-    this.texture = tex;
-    gl.bindTexture(gl.TEXTURE_2D, tex);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    this.base = this.layer(gl.LINEAR);
+    // 1:1 tiles sit on whole device pixels: nearest keeps them exact.
+    this.detail = this.layer(gl.NEAREST);
+  }
+
+  private layer(filter: number): Layer {
+    const gl = this.gl;
+    const texture = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, filter);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, filter);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    return { texture, image: { width: 0, height: 0 }, rect: { x: 0, y: 0, width: 0, height: 0 }, size: { width: 0, height: 0 } };
   }
 
   putTiles(tiles: Tile[]): boolean {
     const gl = this.gl;
-    let accepted = false;
+    const layer = this.accept(tiles.map((t) => t.header));
+    if (!layer) return false;
     for (const { header, pixels } of tiles) {
-      if (!this.accept(header)) continue;
-      accepted = true;
       const { x, y, width, height } = header.rect;
-      gl.texSubImage2D(gl.TEXTURE_2D, 0, x, y, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, x - layer.rect.x, y - layer.rect.y, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
     }
-    return accepted;
+    return true;
   }
 
   putImages(tiles: DecodedTile[]): boolean {
     const gl = this.gl;
-    let accepted = false;
+    const layer = this.accept(tiles.map((t) => t.header));
+    if (!layer) return false;
     for (const { header, image } of tiles) {
-      if (!this.accept(header)) continue;
-      accepted = true;
-      gl.texSubImage2D(gl.TEXTURE_2D, 0, header.rect.x, header.rect.y, gl.RGBA, gl.UNSIGNED_BYTE, image);
-    }
-    return accepted;
-  }
-
-  /** Drops stale tiles; otherwise prepares the texture for the tile's frame. */
-  private accept(header: TileHeader): boolean {
-    const gl = this.gl;
-    if (header.generation < this.generation) return false;
-    if (header.generation > this.generation) this.generation = header.generation;
-    this.setColorSpace(header.format === 'rgba8DisplayP3' || header.format === 'jpegDisplayP3' ? 'display-p3' : 'srgb');
-    if (header.imageWidth !== this.image.width || header.imageHeight !== this.image.height) {
-      this.image = { width: header.imageWidth, height: header.imageHeight };
-      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, header.imageWidth, header.imageHeight, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+      const { x, y } = header.rect;
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, x - layer.rect.x, y - layer.rect.y, gl.RGBA, gl.UNSIGNED_BYTE, image);
     }
     return true;
+  }
+
+  /**
+   * Takes one frame's tiles, unless they are older than the newest frame
+   * drawn: the layer they go to, its texture bound and sized for them.
+   */
+  private accept(headers: TileHeader[]): Layer | null {
+    const gl = this.gl;
+    const first = headers[0];
+    if (!first) return null;
+    const generation = Math.max(...headers.map((h) => h.generation));
+    if (generation < this.generation) return null;
+    this.generation = generation;
+    this.setColorSpace(first.format === 'rgba8DisplayP3' || first.format === 'jpegDisplayP3' ? 'display-p3' : 'srgb');
+    const image = { width: first.imageWidth, height: first.imageHeight };
+    // The tiles' bounding box, and whether they cover the whole image.
+    let [x0, y0, x1, y1, area] = [Infinity, Infinity, 0, 0, 0];
+    for (const { rect } of headers) {
+      x0 = Math.min(x0, rect.x);
+      y0 = Math.min(y0, rect.y);
+      x1 = Math.max(x1, rect.x + rect.width);
+      y1 = Math.max(y1, rect.y + rect.height);
+      area += rect.width * rect.height;
+    }
+    const whole = x0 === 0 && y0 === 0 && x1 === image.width && y1 === image.height && area >= image.width * image.height;
+    const layer = whole ? this.base : this.detail;
+    // A Fit frame is the newer render: the 1:1 tiles held are of an older one.
+    if (whole) this.dropDetail();
+    layer.image = image;
+    layer.rect = { x: x0, y: y0, width: x1 - x0, height: y1 - y0 };
+    gl.bindTexture(gl.TEXTURE_2D, layer.texture);
+    // A 1:1 frame starts transparent, so the Fit frame shows where it has no tile.
+    if (!whole || layer.size.width !== layer.rect.width || layer.size.height !== layer.rect.height) {
+      layer.size = { width: layer.rect.width, height: layer.rect.height };
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, layer.size.width, layer.size.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    }
+    return layer;
+  }
+
+  private dropDetail() {
+    this.detail.image = { width: 0, height: 0 };
+    this.detail.size = { width: 0, height: 0 };
   }
 
   private setColorSpace(space: PredefinedColorSpace) {
@@ -137,7 +199,15 @@ export class WebGLViewport implements Viewport {
   }
 
   setTransform(t: ViewTransform): void {
+    // Back at Fit, the 1:1 tiles go (DEV-01 viewport spec).
+    if (t.zoom === 'fit') this.dropDetail();
     this.transform = t;
+  }
+
+  clear(): void {
+    this.base.image = { width: 0, height: 0 };
+    this.base.size = { width: 0, height: 0 };
+    this.dropDetail();
   }
 
   resize(width: number, height: number, dpr: number): void {
@@ -146,24 +216,45 @@ export class WebGLViewport implements Viewport {
     this.canvas.height = Math.round(this.size.height * dpr);
   }
 
+  /** The view on the shown image now, or null before a frame. */
+  private where(): Placement | null {
+    const held = this.base.size.width > 0 ? this.base.image : this.detail.size.width > 0 ? this.detail.image : null;
+    return held ? placement(this.transform, held, this.size) : null;
+  }
+
   draw(): void {
     const gl = this.gl;
     gl.viewport(0, 0, this.canvas.width, this.canvas.height);
     gl.clearColor(0, 0, 0, 0);
     gl.clear(gl.COLOR_BUFFER_BIT);
-    if (this.image.width === 0) return;
-    const p = placement(this.transform, this.image, this.size);
+    const p = this.where();
+    if (!p) return;
     gl.useProgram(this.program);
-    gl.uniform2f(this.uScale, p.scaleX, p.scaleY);
-    gl.uniform2f(this.uOffset, p.offsetX, p.offsetY);
-    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    for (const layer of [this.base, this.detail]) {
+      if (layer.size.width === 0) continue;
+      // The layer's rect in shown pixels: its frame scaled to the shown image.
+      const sx = p.shownWidth / layer.image.width;
+      const sy = p.shownHeight / layer.image.height;
+      const x = (layer.rect.x * sx - p.originX) * p.zoom;
+      const y = (layer.rect.y * sy - p.originY) * p.zoom;
+      gl.bindTexture(gl.TEXTURE_2D, layer.texture);
+      gl.uniform2f(
+        this.uScale,
+        (layer.rect.width * sx * p.zoom) / this.canvas.width,
+        (layer.rect.height * sy * p.zoom) / this.canvas.height,
+      );
+      gl.uniform2f(this.uOffset, x / this.canvas.width, y / this.canvas.height);
+      gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    }
   }
 
   imagePoint(x: number, y: number): [number, number] | null {
-    if (this.image.width === 0) return null;
-    const p = placement(this.transform, this.image, this.size);
-    const u = (x / this.size.width - p.offsetX) / p.scaleX;
-    const v = (y / this.size.height - p.offsetY) / p.scaleY;
+    const p = this.where();
+    if (!p) return null;
+    const u = (p.originX + (x * this.size.dpr) / p.zoom) / p.shownWidth;
+    const v = (p.originY + (y * this.size.dpr) / p.zoom) / p.shownHeight;
     return u >= 0 && u <= 1 && v >= 0 && v <= 1 ? [u, v] : null;
   }
 
@@ -207,7 +298,8 @@ export class WebGLViewport implements Viewport {
   }
 
   destroy(): void {
-    this.gl.deleteTexture(this.texture);
+    this.gl.deleteTexture(this.base.texture);
+    this.gl.deleteTexture(this.detail.texture);
     this.gl.deleteProgram(this.program);
   }
 }

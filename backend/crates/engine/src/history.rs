@@ -15,6 +15,7 @@
 
 use genzo_model::edit::{Change, Edit, Param, Phase, PhotoKind, WhiteBalance, WhiteBalanceMode};
 use genzo_pipeline::geometry::{Crop, Geometry, fit};
+use genzo_pipeline::reference::sampling::{Frame, shown};
 
 /// One finished change: the whole edit after it, and what it changed.
 #[derive(Debug, Clone, PartialEq)]
@@ -118,6 +119,16 @@ impl PhotoEdits {
     /// revision is newer.
     pub fn revision(&self) -> u64 {
         self.revision
+    }
+
+    /// The photo's size in pixels in `edit`'s orientation, before its
+    /// crop, and the size of the image it frames, in whole pixels as its
+    /// frames name it (DEV-01, *Crop and rotation coordinates*).
+    pub fn sizes(&self, edit: &Edit) -> ((u32, u32), (u32, u32)) {
+        let g = Geometry::from(edit);
+        let oriented = shown(self.size, g.orientation(self.file_orientation));
+        let framed = Frame::of(&g, self.file_orientation).pixel_size(self.size);
+        (oriented, framed)
     }
 
     pub fn steps(&self) -> &[Step] {
