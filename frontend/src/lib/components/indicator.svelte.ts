@@ -52,9 +52,20 @@ export function slidingLens(index: () => number | null, kind: 'segment' | 'menu'
       place();
     });
 
+    // Re-placed when the group or an item changes size, and when items
+    // come or go (a menu's items can change while it is open).
     const resize = new ResizeObserver(place);
-    resize.observe(group);
-    for (const item of group.querySelectorAll('[data-segment]')) resize.observe(item);
+    const observeItems = () => {
+      resize.disconnect();
+      resize.observe(group);
+      for (const item of group.querySelectorAll('[data-segment]')) resize.observe(item);
+    };
+    observeItems();
+    const mutation = new MutationObserver(() => {
+      observeItems();
+      place();
+    });
+    mutation.observe(group, { childList: true, subtree: true });
 
     const press = (e: PointerEvent) => {
       if (e.target instanceof Element && e.target.closest('[data-segment]:not(:disabled)')) {
@@ -68,6 +79,7 @@ export function slidingLens(index: () => number | null, kind: 'segment' | 'menu'
 
     return () => {
       resize.disconnect();
+      mutation.disconnect();
       group.removeEventListener('pointerdown', press);
       window.removeEventListener('pointerup', release);
       window.removeEventListener('pointercancel', release);

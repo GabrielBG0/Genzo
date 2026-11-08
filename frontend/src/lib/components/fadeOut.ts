@@ -23,5 +23,6 @@ export function fadeOut(el: HTMLElement | undefined, ms = 90): void {
     animation: 'none',
   });
   document.body.append(ghost);
-  ghost.animate([{ opacity: 1 }, { opacity: 0 }], { duration: ms, easing: 'ease-out' }).onfinish = () => ghost.remove();
+  const fade = ghost.animate([{ opacity: 1 }, { opacity: 0 }], { duration: ms, easing: 'ease-out' });
+  fade.onfinish = fade.oncancel = () => ghost.remove();
 }
