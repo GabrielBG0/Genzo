@@ -4,9 +4,9 @@
 # into one zip to send back. Double-click run-bench.cmd, or run:
 #   powershell -ExecutionPolicy Bypass -File run-bench.ps1
 #
-# On Windows the gate was measured with real mouse events over DevTools
-# (frontend/scripts/measure-latency.mjs); this run uses the autobench's
-# synthetic input, so the two can be compared on the same machine.
+# In M0 the Windows gate was measured with real mouse events over DevTools
+# (docs/m0-results.md). Since M1 the autobench runs in the app itself, on
+# every OS, through Develop's own commands.
 #
 # Written for Windows PowerShell 5.1, which every Windows 10 and 11 has.
 param(
