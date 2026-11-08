@@ -1,7 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { Command } from '$contract/genzo';
 import { FakeEngine } from '../engine/fake';
-import { DevelopSession, type ClipColors } from './session.svelte';
+import { DevelopSession, NOTICE_MS, type ClipColors } from './session.svelte';
 
 const COLORS: ClipColors = { shadow: [1, 2, 3, 255], highlight: [4, 5, 6, 255] };
 
@@ -356,5 +356,62 @@ describe('DevelopSession, before / after (WF-02)', () => {
     session.toggleBefore();
     expect(session.before).toBe(false);
     expect(engine.sent).toEqual([]);
+  });
+});
+
+describe('DevelopSession, the status bar (APP-07)', () => {
+  it('follows what the photo shows: its preview, its first render, a drag', async () => {
+    const { engine, session } = await open();
+    expect(session.previewStatus).toBe('Settled');
+    session.change([{ Exposure: 0.5 }], 'Start');
+    expect(session.previewStatus).toBe('Interactive');
+    session.change([{ Exposure: 0.6 }], 'End');
+    await settled(session);
+    expect(session.previewStatus).toBe('Settled');
+    // A switch, seen event by event: opening, the preview, the render.
+    const photo = session.photo as number;
+    session['shownState'].delete(photo);
+    expect(session.previewStatus).toBe('Opening');
+    engine['emit']({ type: 'previewShown', photo, generation: 90, tileCount: 1 });
+    await wait(0);
+    expect(session.previewStatus).toBe('Embedded preview');
+    engine['emit']({ type: 'renderFinished', photo, generation: 91, tileCount: 1, renderMs: 1, gpuMs: null });
+    await wait(0);
+    expect(session.previewStatus).toBe('Settled');
+    // A preview after a render does not take it back.
+    engine['emit']({ type: 'previewShown', photo, generation: 92, tileCount: 1 });
+    await wait(0);
+    expect(session.previewStatus).toBe('Settled');
+  });
+
+  it('an unsupported photo shows its embedded preview, and says so', async () => {
+    const { session } = await open();
+    const broken = session.strip.photos.find((p) => p.kind !== 'renders');
+    if (!broken) throw new Error('the demo folder has a photo that does not render');
+    await session.select(broken.id);
+    expect(session.reason).toBe('Nikon High Efficiency RAW is not supported yet');
+    expect(session.previewStatus).toBe('Embedded preview');
+  });
+
+  it('a refusal goes after NOTICE_MS, or at the next success', async () => {
+    vi.useFakeTimers();
+    try {
+      const { session } = await open();
+      const clipped = "Can't set white balance here: the area is clipped";
+      session.togglePicker();
+      session.pick(0.5, 0.05);
+      await vi.advanceTimersByTimeAsync(10);
+      expect(session.notice).toBe(clipped);
+      await vi.advanceTimersByTimeAsync(NOTICE_MS);
+      expect(session.notice).toBeNull();
+      session.pick(0.5, 0.05);
+      await vi.advanceTimersByTimeAsync(10);
+      expect(session.notice).toBe(clipped);
+      session.change([{ Exposure: 1 }]);
+      await vi.advanceTimersByTimeAsync(10);
+      expect(session.notice).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

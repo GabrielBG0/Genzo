@@ -50,7 +50,7 @@ Spec template for each feature: **Behavior** (what it does, step by step), **Inp
 ### APP-07 · Status bar
 - Priority: P2 · Screens: all
 - Scope: Bottom bar with current mode, selection count, active filter, edit count, color space, bit depth, preview status and catalog save state.
-- Spec: _to be written_
+- Spec: [APP-07.md](../specs/APP-07.md) (M1 part)
 
 ### APP-08 · Panel visibility
 - Priority: P1 · Screens: not mocked

@@ -85,14 +85,17 @@
     const eng = engine;
     if (!eng) return;
     return eng.onEvent(async (event) => {
-      if (event.type !== 'renderFinished' || !viewport) return;
-      if (event.generation < viewport.generation) return;
-      if (photo !== undefined && event.photo !== photo) return;
-      const bytes = await eng.fetchFrame(event.generation);
+      // A render's frame, or a photo's embedded preview while it opens (DEV-01).
+      const generation =
+        event.type === 'renderFinished' ? event.generation : event.type === 'previewShown' ? event.generation : null;
+      if (generation === null || !viewport) return;
+      if (generation < viewport.generation) return;
+      if (photo !== undefined && 'photo' in event && event.photo !== photo) return;
+      const bytes = await eng.fetchFrame(generation);
       if (!viewport) return;
       if (await putFrame(viewport, bytes)) {
         hasFrame = true;
-        schedule(event.generation);
+        schedule(generation);
       }
     });
   });

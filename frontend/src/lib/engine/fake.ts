@@ -56,6 +56,8 @@ export interface FakePhoto {
   kind: EditKind | null;
   width: number;
   height: number;
+  /** The file has an embedded preview, shown while it opens (DEV-01). A JPEG has none. */
+  preview?: boolean;
 }
 
 /**
@@ -88,18 +90,21 @@ export function demoFolder(): FakePhoto[] {
       kind: { raw: true, asShotTemp: 5400, asShotTint: 4 },
       width: 6048,
       height: 4032,
+      preview: true,
     },
     {
       photo: photo(2, 'DSC_0413.NEF', 3, [400, 60, 4, 50]),
       kind: { raw: true, asShotTemp: 3200, asShotTint: -6 },
       width: 6048,
       height: 4032,
+      preview: true,
     },
     {
       photo: photo(3, 'IMG_2201.DNG', 9, [64, 2000, 1.8, 6]),
       kind: { raw: true, asShotTemp: 6500, asShotTint: 10 },
       width: 3024,
       height: 4032,
+      preview: true,
     },
     {
       photo: photo(4, 'harbor.jpg', 15, [200, 250, 5.6, 35]),
@@ -114,8 +119,9 @@ export function demoFolder(): FakePhoto[] {
         reason: 'Nikon High Efficiency RAW is not supported yet',
       },
       kind: null,
-      width: 0,
-      height: 0,
+      width: 6048,
+      height: 4032,
+      preview: true,
     },
   ];
 }
@@ -426,6 +432,7 @@ export class FakeEngine implements Engine {
     if (previous >= 0 && index !== previous) this.strip.direction = index > previous ? 'next' : 'previous';
     this.strip.current = id;
     this.before = false;
+    this.showPreview(fake);
     if (!fake.kind) return { edit: null, reason: fake.photo.reason };
     let edits = this.edits.get(id);
     if (!edits) {
@@ -494,6 +501,40 @@ export class FakeEngine implements Engine {
       ? { WhiteBalance: { mode, temp: Math.round(3000 + 5000 * x), tint } }
       : { WhiteBalance: { mode, temp: Math.round(80 * x - 40), tint } };
     return this.edited(photo, (q) => q.apply([change], 'End', 'White balance: picked'), 'End');
+  }
+
+  /**
+   * The photo's embedded preview, before it renders (DEV-01, *Opening*):
+   * `PreviewShown` with a frame of flat gray, or without one when the file
+   * has none.
+   */
+  private showPreview(fake: FakePhoto) {
+    const photo = fake.photo.id;
+    if (!fake.preview || this.view.width === 0) {
+      this.emit({ type: 'previewShown', photo, generation: null, tileCount: null });
+      return;
+    }
+    const [width, height] = fit([fake.width, fake.height], [this.view.width, this.view.height]);
+    const generation = ++this.generation;
+    const parts: Uint8Array[] = [];
+    for (let y = 0; y < height; y += TILE_SIZE) {
+      for (let x = 0; x < width; x += TILE_SIZE) {
+        const rect = { x, y, width: Math.min(TILE_SIZE, width - x), height: Math.min(TILE_SIZE, height - y) };
+        const header: TileHeader = {
+          generation,
+          rect,
+          mipLevel: 0,
+          format: 'rgba8Srgb',
+          imageWidth: width,
+          imageHeight: height,
+        };
+        const pixels = new Uint8Array(rect.width * rect.height * 4);
+        for (let i = 0; i < pixels.length; i += 4) pixels.set([96, 98, 104, 255], i);
+        parts.push(encodeTile(header, pixels));
+      }
+    }
+    this.keepFrame(generation, parts);
+    this.emit({ type: 'previewShown', photo, generation, tileCount: parts.length });
   }
 
   /** A photo's edit as the engine answers it, with `before` for the open one. */

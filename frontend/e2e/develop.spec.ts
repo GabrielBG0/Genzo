@@ -569,3 +569,27 @@ test('Quit (Ctrl Q) closes the window, cancelling an export first (APP-02, OUT-0
   await page.keyboard.press('Control+q');
   await expect(page.locator('footer').getByText('Export cancelled')).toBeVisible();
 });
+
+test('The status bar: where you are, what shows, and why (APP-07)', async ({ page }) => {
+  await develop(page);
+  const bar = page.locator('footer');
+  await expect(bar).toContainText('Develop');
+  await expect(bar.getByText('5 photos')).toBeVisible();
+  await expect(bar.getByText('DSC_0412.NEF')).toBeVisible();
+  await expect(bar.getByText('Settled')).toHaveAttribute('title', 'Rendered at full quality');
+  await expect(bar.getByText('sRGB')).toHaveAttribute('title', 'Frames are rendered in sRGB');
+  await expect(bar.getByText('8-bit')).toBeVisible();
+  await expect(bar.getByText('Fake engine', { exact: true })).toBeVisible();
+
+  // An unsupported photo: its embedded preview drawn, and why.
+  const frames = page.getByRole('region', { name: 'Filmstrip' }).getByRole('button');
+  await frames.nth(4).click();
+  await expect(bar.getByRole('status')).toHaveText('Nikon High Efficiency RAW is not supported yet');
+  await expect(bar.getByText('Embedded preview')).toBeVisible();
+  await expect(page.getByRole('img', { name: 'Photo' }).getByText('Nikon High Efficiency')).toBeHidden();
+
+  // Back on a photo that renders: settled, the reason gone.
+  await frames.nth(0).click();
+  await expect(bar.getByText('Settled')).toBeVisible();
+  await expect(bar.getByText('Nikon High Efficiency RAW is not supported yet')).toBeHidden();
+});

@@ -1,3 +1,4 @@
+import { SvelteMap } from 'svelte/reactivity';
 import type {
   Change,
   ClippingPreview,
@@ -33,6 +34,9 @@ export interface ClipColors {
 }
 
 export type ClipSide = 'shadows' | 'highlights';
+
+/** How long a refusal stays in the status bar (APP-07). */
+export const NOTICE_MS = 6000;
 
 const tokenClipColors = (): ClipColors => ({
   shadow: tokenRgba('--clip-shadow'),
@@ -70,8 +74,11 @@ export class DevelopSession {
   edit: PhotoEdit | null = $state(null);
   /** Why the open photo does not render, for the status bar. */
   reason: string | null = $state(null);
-  /** The last refusal (a pick on a clipped area), for the status bar. */
+  /** The last refusal (a pick on a clipped area), for the status bar; it goes after `NOTICE_MS` (APP-07). */
   notice: string | null = $state(null);
+  /** What each photo shows so far since it was opened: its embedded preview, or a render. */
+  private shownState = new SvelteMap<number, 'preview' | 'rendered'>();
+  private noticeTimer: ReturnType<typeof setTimeout> | null = null;
   /** The white balance picker is on (DEV-02, W). */
   picking = $state(false);
   /** A gesture is in progress: Undo and Redo wait for its end (APP-10). */
@@ -104,7 +111,8 @@ export class DevelopSession {
 
   constructor(
     private readonly engine: Engine,
-    private readonly space: ColorSpace = 'srgb',
+    /** The viewport's color space, as the engine renders it. */
+    readonly space: ColorSpace = 'srgb',
     private readonly clipColors: () => ClipColors = tokenClipColors,
   ) {
     this.unsubscribe = engine.onEvent((e) => this.onEvent(e));
@@ -112,6 +120,34 @@ export class DevelopSession {
 
   dispose(): void {
     this.unsubscribe();
+    if (this.noticeTimer !== null) clearTimeout(this.noticeTimer);
+  }
+
+  /**
+   * The status bar's preview status of the photo shown (APP-07): null with
+   * none, else what its viewport shows.
+   */
+  get previewStatus(): 'Opening' | 'Embedded preview' | 'No preview' | 'Interactive' | 'Settled' | null {
+    const photo = this.strip.current;
+    if (photo === null) return null;
+    if (this.inGesture) return 'Interactive';
+    const shown = this.shownState.get(photo);
+    if (shown === 'rendered' && this.editable) return 'Settled';
+    if (shown === 'preview') return 'Embedded preview';
+    return this.reason ? 'No preview' : 'Opening';
+  }
+
+  /** A refusal or an error, said in the status bar until the next success or `NOTICE_MS`. */
+  private say(text: string | null) {
+    if (this.noticeTimer !== null) clearTimeout(this.noticeTimer);
+    this.noticeTimer = null;
+    this.notice = text;
+    if (text !== null) {
+      this.noticeTimer = setTimeout(() => {
+        this.noticeTimer = null;
+        if (this.notice === text) this.notice = null;
+      }, NOTICE_MS);
+    }
   }
 
   get photo(): number | null {
@@ -137,6 +173,8 @@ export class DevelopSession {
   }
 
   async openFolder(path: string): Promise<void> {
+    // Every photo opens anew: its preview, then its first render.
+    this.shownState.clear();
     const r = await this.engine.execute({ type: 'openFolder', path });
     if (r.type !== 'folder') throw new Error(`openFolder answered ${r.type}`);
     this.folder = path;
@@ -166,7 +204,8 @@ export class DevelopSession {
     this.strip.current = photo;
     this.edit = null;
     this.reason = null;
-    this.notice = null;
+    this.say(null);
+    this.shownState.delete(photo);
     this.picking = false;
     this.previewing = 'none';
     this.clearHistogram();
@@ -182,7 +221,7 @@ export class DevelopSession {
       await this.fetchHistogram();
     } catch (e) {
       // Said in the status bar, as a failed edit command is.
-      if (this.strip.current === photo) this.notice = e instanceof Error ? e.message : String(e);
+      if (this.strip.current === photo) this.say(e instanceof Error ? e.message : String(e));
     }
   }
 
@@ -316,7 +355,7 @@ export class DevelopSession {
     try {
       colors = this.clipColors();
     } catch (e) {
-      this.notice = e instanceof Error ? e.message : String(e);
+      this.say(e instanceof Error ? e.message : String(e));
       return;
     }
     this.overlay = overlay;
@@ -325,6 +364,11 @@ export class DevelopSession {
 
   private onEvent(e: Event) {
     if (e.type === 'histogramReady') this.takeHistogram(e.photo, e.generation, e.histogram);
+    else if (e.type === 'previewShown' && e.generation !== null && this.shownState.get(e.photo) !== 'rendered') {
+      this.shownState.set(e.photo, 'preview');
+    } else if (e.type === 'renderFinished' && e.photo !== null) {
+      this.shownState.set(e.photo, 'rendered');
+    }
   }
 
   /** Takes counts of the open photo newer than those shown. */
@@ -375,14 +419,13 @@ export class DevelopSession {
           if (r.type === 'edit') {
             this.accept(r.edit);
             if (next.type === 'pickWhiteBalance' && r.edit.photo === this.photo) {
-              this.notice = r.refused;
               if (!r.refused) this.picking = false;
-            } else if (r.refused) {
-              this.notice = r.refused;
             }
+            // A refusal is said; a success clears the last one (APP-07).
+            if (r.edit.photo === this.photo) this.say(r.refused);
           }
         } catch (e) {
-          this.notice = e instanceof Error ? e.message : String(e);
+          this.say(e instanceof Error ? e.message : String(e));
         }
       }
     } finally {
