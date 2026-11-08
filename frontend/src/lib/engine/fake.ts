@@ -58,6 +58,8 @@ export interface FakePhoto {
   height: number;
   /** The file has an embedded preview, shown while it opens (DEV-01). A JPEG has none. */
   preview?: boolean;
+  /** What the engine could not do as the file asks, for the status bar (APP-07). */
+  notes?: string[];
 }
 
 /**
@@ -105,6 +107,7 @@ export function demoFolder(): FakePhoto[] {
       width: 3024,
       height: 4032,
       preview: true,
+      notes: ['Lens corrections from the file are not applied yet'],
     },
     {
       photo: photo(4, 'harbor.jpg', 15, [200, 250, 5.6, 35]),
@@ -540,7 +543,8 @@ export class FakeEngine implements Engine {
   /** A photo's edit as the engine answers it, with `before` for the open one. */
   private stateOf(p: PhotoEdits | undefined): PhotoEdit | null {
     if (!p) return null;
-    return { ...p.state(), before: this.before && p.photo === this.strip.current };
+    const notes = this.folder.find((f) => f.photo.id === p.photo)?.notes ?? [];
+    return { ...p.state(), before: this.before && p.photo === this.strip.current, notes: [...notes] };
   }
 
   private openInGesture(): boolean {

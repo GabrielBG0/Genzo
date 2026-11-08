@@ -2,7 +2,7 @@
 
 The bar along the bottom of the window. This spec covers what M1 builds (plan, M1 frontend item 11: "mode pill, color space, bit depth, preview status, the software-adapter notice, and why a photo shows only its embedded preview"), and the photo notes other M1 specs send to it.
 
-The frontend part landed first; the photo notes need the engine's part (`PhotoEdit.notes`), which follows in its own PR. While the photo shows its embedded preview, the viewport draws it (DEV-01, *Opening*), which the frontend did not do before this spec.
+The frontend part landed first (#112); the photo notes followed with the engine's part (`PhotoEdit.notes`, contract 0.6.2). While the photo shows its embedded preview, the viewport draws it (DEV-01, *Opening*), which the frontend did not do before this spec.
 
 Sources: FEATURES.md (APP-07), the handoff's Status bar component, DEV-01 (*States*: Opening, Rendering after a change, Unsupported, Software adapter; the notes on skipped lens corrections, an unusable color profile and a missing as-shot white), DEV-02 (the unreadable tone curve note, the picker's refusals), LIB-09 (a folder that cannot be read), OUT-01 (an export's progress). Where this spec and the technical spec disagree, the technical spec wins and this file is corrected.
 
@@ -64,7 +64,8 @@ Nothing is stored.
 ## The engine's side (photo notes)
 
 - `PhotoEdit.notes` (contract 0.6.2, additive): the open photo's notes, as the strings above, in the order the stages meet them. They come with every edit reply, so a switch brings the new photo's notes.
-- The engine gathers them when the photo's input is decoded: stage 1's skipped non-optional lens opcodes, stage 4's `ColorFallback` (no usable profile; the as-shot white unsolved), and stage 7's base curve note. Until the input is decoded, `notes` is empty; the frontend asks `GetEdit` again after the photo's first frame, so its notes show from then on.
+- The engine gathers them when the photo's input is decoded (`RawSource::notes`, recorded per photo by the strip): stage 1's skipped non-optional lens opcodes, stage 4's `ColorFallback` (no usable profile; the as-shot white unsolved, or no as-shot data at all, which is D55 as in the SDK), and stage 7's base curve note. A non-RAW image has none.
+- In the corpus, the Leica Q (L1000750.DNG) and the Halide iPhone 16 Pro DNG say lens corrections are not applied, and the Kodak DCS760C (86L57188.DCR) says its as-shot white is unavailable; the other 25 files that decode say nothing. Until the input is decoded, `notes` is empty; the frontend asks `GetEdit` again after the photo's first frame, so its notes show from then on.
 
 ## Edge cases
 

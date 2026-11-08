@@ -592,4 +592,10 @@ test('The status bar: where you are, what shows, and why (APP-07)', async ({ pag
   await frames.nth(0).click();
   await expect(bar.getByText('Settled')).toBeVisible();
   await expect(bar.getByText('Nikon High Efficiency RAW is not supported yet')).toBeHidden();
+  // A photo with a note: said over the adapter notice, gone on the next photo.
+  const note = 'Lens corrections from the file are not applied yet';
+  await frames.nth(2).click();
+  await expect(bar.getByRole('status')).toHaveText(note);
+  await frames.nth(3).click();
+  await expect(bar.getByText(note)).toBeHidden();
 });

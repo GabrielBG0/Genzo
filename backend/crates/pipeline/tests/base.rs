@@ -87,6 +87,7 @@ fn linear(
         gain_maps: Vec::new(),
         color: Default::default(),
         encoding: None,
+        lens_corrections_skipped: false,
     };
     src.color.baseline_exposure = baseline_exposure;
     src

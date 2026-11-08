@@ -171,6 +171,8 @@ pub(crate) struct StripSession {
     /// What each photo's last decode said, by id: kept across folder
     /// switches like the edits.
     kinds: std::collections::HashMap<u64, PhotoKind>,
+    /// Each decoded photo's notes for the status bar (APP-07), by id.
+    notes: std::collections::HashMap<u64, Vec<String>>,
 }
 
 impl StripSession {
@@ -188,17 +190,36 @@ impl StripSession {
             .map(|(_, f)| f.path.clone())
     }
 
-    /// Notes what decoding photo `id` said about its file.
-    pub(crate) fn learn<T>(&mut self, id: u64, decoded: &Result<T, EngineError>) {
+    /// Notes what decoding photo `id` said about its file: its kind, and
+    /// its notes for the status bar.
+    pub(crate) fn learn(&mut self, id: u64, decoded: &Result<(RawSource, u8), EngineError>) {
         if let Some(kind) = PhotoKind::of(decoded) {
             self.kinds.insert(id, kind);
         }
+        if let Ok((src, _)) = decoded {
+            self.notes.insert(id, src.notes());
+        }
+    }
+
+    /// Photo `id`'s notes (APP-07), as its last decode found them; none
+    /// before it decoded.
+    pub(crate) fn notes_of(&self, id: u64) -> &[String] {
+        self.notes.get(&id).map_or(&[], Vec::as_slice)
+    }
+
+    /// Sets photo `id`'s notes: a photo opened from its bytes, outside the strip.
+    pub(crate) fn set_notes(&mut self, id: u64, notes: Vec<String>) {
+        self.notes.insert(id, notes);
     }
 
     /// As [`Self::learn`], for a neighbor's decode by prefetch: dropped
     /// once the photo is current, since the switch to it decodes it again
     /// and its result is the newer one.
-    pub(crate) fn learn_neighbor<T>(&mut self, id: u64, decoded: &Result<T, EngineError>) {
+    pub(crate) fn learn_neighbor(
+        &mut self,
+        id: u64,
+        decoded: &Result<(RawSource, u8), EngineError>,
+    ) {
         let current = self.current.map(|i| self.photos[i].0);
         if current != Some(id) {
             self.learn(id, decoded);

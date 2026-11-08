@@ -328,6 +328,7 @@ fn stops(size: (u32, u32), t: impl Fn(u32) -> f64) -> RawSource {
         gain_maps: Vec::new(),
         color: Default::default(),
         encoding: None,
+        lens_corrections_skipped: false,
     };
     src.color.baseline_exposure = 3.0;
     src

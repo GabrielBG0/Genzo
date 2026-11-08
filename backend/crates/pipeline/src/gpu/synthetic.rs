@@ -112,6 +112,7 @@ pub fn scene_raw(width: u32, height: u32) -> crate::raw::RawSource {
         gain_maps: Vec::new(),
         color: Default::default(),
         encoding: None,
+        lens_corrections_skipped: false,
     }
 }
 

@@ -217,6 +217,7 @@ pub(crate) fn photo_edit(s: EditState) -> PhotoEdit {
         redo: s.redo,
         revision: s.revision,
         before: s.before,
+        notes: s.notes,
     }
 }
 

@@ -367,7 +367,11 @@ export class DevelopSession {
     else if (e.type === 'previewShown' && e.generation !== null && this.shownState.get(e.photo) !== 'rendered') {
       this.shownState.set(e.photo, 'preview');
     } else if (e.type === 'renderFinished' && e.photo !== null) {
+      const first = this.shownState.get(e.photo) !== 'rendered';
       this.shownState.set(e.photo, 'rendered');
+      // Its notes are known once it decoded, which can come after the
+      // switch's reply (a neighbor shown from its level 1): asked again.
+      if (first && e.photo === this.strip.current && this.edit) void this.refresh();
     }
   }
 

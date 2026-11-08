@@ -255,6 +255,11 @@ pub struct PhotoEdit {
     /// Develop shows the photo's before, its defaults, instead of its edit
     /// (WF-02). Any change to the edit, and a switch, turn it off.
     pub before: bool,
+    /// What the pipeline does not do as the file asks, for the status bar
+    /// (APP-07): a skipped lens correction, an unusable color profile, a
+    /// missing as-shot white, an unreadable tone curve. Empty until the
+    /// photo is decoded.
+    pub notes: Vec<String>,
 }
 
 /// One side's clipping (DEV-03).
@@ -708,6 +713,7 @@ mod tests {
                 redo: None,
                 revision: 4,
                 before: false,
+                notes: vec![],
             },
             recorded: true,
             refused: None,

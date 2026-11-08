@@ -64,6 +64,9 @@ pub struct RawSource {
     /// code up in its curves in place of the levels, white balance is 1,
     /// and stage 4 takes its matrix ([`crate::camera_color::encoded_transform`]).
     pub encoding: Option<InputEncoding>,
+    /// A lens opcode not marked optional was skipped (DEV-01: M1 applies
+    /// none; the status bar says so, [`Self::notes`]).
+    pub lens_corrections_skipped: bool,
 }
 
 /// Stage 1's levels, per plane, already multiplied by the scale: a sample
@@ -189,7 +192,44 @@ impl Linearization {
     }
 }
 
+/// The status bar's notes (APP-07): what the pipeline does not do as the
+/// file asks.
+pub mod note {
+    /// A non-optional lens opcode skipped (DEV-01, stage 1).
+    pub const LENS: &str = "Lens corrections from the file are not applied yet";
+    /// No usable color profile: camera values pass through (DEV-01, stage 4).
+    pub const NO_PROFILE: &str = "This photo's color profile can't be used; showing camera colors";
+    /// The as-shot white could not be solved: D55 (DEV-01, stage 4).
+    pub const WHITE: &str = "The as-shot white balance is unavailable; using D55";
+}
+
 impl RawSource {
+    /// What the status bar says about this photo, in the order the stages
+    /// meet them (APP-07): a skipped lens opcode (stage 1), a color
+    /// fallback (stage 4) and the base curve's (stage 7). None for a
+    /// non-RAW image, whose encoding has its own matrix and curve.
+    pub fn notes(&self) -> Vec<String> {
+        let mut notes = Vec::new();
+        if self.lens_corrections_skipped {
+            notes.push(note::LENS.to_owned());
+        }
+        if self.encoding.is_none() {
+            use crate::camera_color::{ColorFallback, camera_transform};
+            match camera_transform(&self.color, None).fallback {
+                Some(ColorFallback::NoProfile(_)) => notes.push(note::NO_PROFILE.to_owned()),
+                // No as-shot data is D55 too, as the SDK does, without a
+                // fallback of the transform's own (DEV-01, the Kodak DCS760C).
+                Some(ColorFallback::WhiteUnsolved) => notes.push(note::WHITE.to_owned()),
+                None if self.color.as_shot.is_none() => notes.push(note::WHITE.to_owned()),
+                None => {}
+            }
+            if let Some(n) = crate::look::BaseCurve::new(&self.color).note() {
+                notes.push(n.to_owned());
+            }
+        }
+        notes
+    }
+
     /// The decoder's output for stages 1 to 3.
     pub fn from_decoded(img: DecodedImage) -> Result<Self, RawError> {
         let stored = (img.width, img.height);
@@ -240,7 +280,12 @@ impl RawSource {
         let size = (active.right - active.left, active.bottom - active.top);
         let linearization = Linearization::new(&raw.levels, samples, size)?;
         let color = raw.color.clone();
-        let OpcodePlan { list1, list2, .. } = raw.opcode_plan;
+        let OpcodePlan {
+            list1,
+            list2,
+            lens_corrections_skipped,
+            ..
+        } = raw.opcode_plan;
         if !matches!(cfa, Some(Cfa::Bayer(_))) && !list1.is_empty() {
             return Err(RawError::Unsupported(
                 "FixBadPixelsConstant on an image without a Bayer pattern".into(),
@@ -280,6 +325,7 @@ impl RawSource {
             gain_maps,
             color,
             encoding: None,
+            lens_corrections_skipped,
         })
     }
 
@@ -328,6 +374,7 @@ impl RawSource {
             gain_maps: Vec::new(),
             color: CameraColor::default(),
             encoding: Some(encoding.clone()),
+            lens_corrections_skipped: false,
         })
     }
 
