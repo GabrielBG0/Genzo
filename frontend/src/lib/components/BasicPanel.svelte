@@ -5,6 +5,7 @@
   import { EXPOSURE, PARAM_OF, RAW_TEMP, RAW_TINT, SLIDER, type ValueField } from '../engine/edit';
   import { useRegistry } from '../shortcuts/context';
   import Icon from './Icon.svelte';
+  import Menu, { type MenuItem } from './Menu.svelte';
   import PanelHeader from './PanelHeader.svelte';
   import SliderRow from './SliderRow.svelte';
 
@@ -86,6 +87,61 @@
   /** A double-click on a group label resets the group: one step. */
   function resetGroup(fields: ValueField[]) {
     session.change(fields.map((f): Change => ({ Reset: PARAM_OF[f] as Param })));
+  }
+
+  /**
+   * A slider's menu (APP-06): what it acts on. `key` names the slider, and
+   * for Temp and Tint their scale, so a value pastes only where it means
+   * the same.
+   */
+  interface SliderTarget {
+    key: string;
+    name: string;
+    /** The header's value: as the slider shows it, with its unit. */
+    value: string;
+    current: number;
+    resetLabel: string;
+    reset: () => void;
+    paste: (v: number) => void;
+  }
+
+  /** The value Copy value kept, for the session. */
+  let copied: { key: string; value: number } | null = $state(null);
+  let menu: { x: number; y: number; target: SliderTarget } | null = $state(null);
+
+  function openMenu(e: MouseEvent, target: SliderTarget) {
+    if (session.inGesture) return;
+    // From the keyboard there is no pointer: open at the slider.
+    let { clientX: x, clientY: y } = e;
+    if (x === 0 && y === 0 && e.currentTarget instanceof HTMLElement) {
+      const r = e.currentTarget.getBoundingClientRect();
+      x = r.left + r.width / 2;
+      y = r.bottom;
+    }
+    // Kept inside the window: the menu is about 260 × 170 px.
+    menu = { x: Math.min(x, window.innerWidth - 270), y: Math.min(y, window.innerHeight - 180), target };
+  }
+
+  function copy(t: SliderTarget, text: string) {
+    copied = { key: t.key, value: t.current };
+    // Best effort: the value stays kept for Paste value either way.
+    void navigator.clipboard?.writeText(text).catch(() => {});
+  }
+
+  const menuItems = (t: SliderTarget, text: string): MenuItem[] => [
+    { label: t.resetLabel, shortcut: 'double-click', onselect: t.reset },
+    { separator: true },
+    { label: 'Copy value', shortcut: '', onselect: () => copy(t, text) },
+    {
+      label: 'Paste value',
+      shortcut: '',
+      disabled: copied?.key !== t.key,
+      onselect: () => copied && t.paste(copied.value),
+    },
+  ];
+
+  function onwindowdown(e: PointerEvent) {
+    if (menu && !(e.target instanceof Element && e.target.closest('.slider-menu'))) menu = null;
   }
 
   const formatExposure = (v: number) => v.toFixed(2);
@@ -177,6 +233,16 @@
       oninput={(v) => session.change([white(v, tint)], 'Update')}
       onchange={(v) => session.change([white(v, tint)], 'End')}
       onreset={() => session.reset('WhiteBalance')}
+      oncontextmenu={(e, shown) =>
+        openMenu(e, {
+          key: `temp:${raw ? 'raw' : 'relative'}`,
+          name: 'Temp',
+          value: raw ? `${shown} K` : shown,
+          current: temp,
+          resetLabel: 'Reset White balance',
+          reset: () => session.reset('WhiteBalance'),
+          paste: (v) => session.change([white(v, tint)]),
+        })}
     />
     <SliderRow
       label="Tint"
@@ -191,6 +257,16 @@
       oninput={(v) => session.change([white(temp, v)], 'Update')}
       onchange={(v) => session.change([white(temp, v)], 'End')}
       onreset={() => session.reset('WhiteBalance')}
+      oncontextmenu={(e, shown) =>
+        openMenu(e, {
+          key: `tint:${raw ? 'raw' : 'relative'}`,
+          name: 'Tint',
+          value: shown,
+          current: tint,
+          resetLabel: 'Reset White balance',
+          reset: () => session.reset('WhiteBalance'),
+          paste: (v) => session.change([white(temp, v)]),
+        })}
     />
 
     {#snippet group(name: string, fields: ValueField[])}
@@ -213,6 +289,16 @@
           onchange={(v) => session.change([valueChange(f, v)], 'End')}
           onreset={() => session.reset(PARAM_OF[f])}
           onalt={clipPreview(f)}
+          oncontextmenu={(e, shown) =>
+            openMenu(e, {
+              key: f,
+              name: LABEL[f],
+              value: f === 'exposure' ? `${shown} EV` : shown,
+              current: edit?.[f] ?? 0,
+              resetLabel: `Reset ${LABEL[f]}`,
+              reset: () => session.reset(PARAM_OF[f]),
+              paste: (v) => session.change([valueChange(f, v)]),
+            })}
         />
       {/each}
     {/snippet}
@@ -222,7 +308,27 @@
   {/if}
 </section>
 
+<svelte:window onpointerdown={onwindowdown} onwheel={() => (menu = null)} />
+{#if menu}
+  {@const t = menu.target}
+  <div class="slider-menu" style:left="{menu.x}px" style:top="{menu.y}px">
+    <Menu
+      items={menuItems(t, t.value.replace(/ (K|EV)$/, ''))}
+      label="{t.name} slider"
+      header={{ name: t.name, value: t.value }}
+      width={260}
+      autofocus
+      onclose={() => (menu = null)}
+    />
+  </div>
+{/if}
+
 <style>
+  .slider-menu {
+    position: fixed;
+    z-index: 20;
+  }
+
   .profile {
     display: flex;
     gap: 6px;

@@ -354,3 +354,73 @@ test('Before / after: \\ and the quick action toggle the before; a drag shows th
   await page.keyboard.press('\\');
   await expect(badge).toBeHidden();
 });
+
+test('The slider menu: reset, copy a value and paste it on another photo (APP-06)', async ({ page }) => {
+  await develop(page);
+  const exposure = page.getByRole('slider', { name: 'Exposure' });
+  const menu = page.getByRole('menu', { name: 'Exposure slider' });
+  await drag(page, 'Exposure', 0.5, 0.7);
+  await exposure.click({ button: 'right' });
+  await expect(menu).toBeVisible();
+  await expect(menu.getByText('+2.00 EV')).toBeVisible();
+  await expect(menu.getByRole('menuitem', { name: /Reset Exposure/ })).toContainText('double-click');
+  await expect(menu.getByRole('menuitem', { name: 'Paste value' })).toBeDisabled();
+  await page.keyboard.press('Escape');
+  await expect(menu).toBeHidden();
+
+  // Copy, then paste on the next photo: one step there.
+  await exposure.click({ button: 'right' });
+  await menu.getByRole('menuitem', { name: 'Copy value' }).click();
+  await expect(menu).toBeHidden();
+  const frames = page.getByRole('region', { name: 'Filmstrip' }).getByRole('button');
+  await frames.nth(1).click();
+  await expect(frames.nth(1)).toHaveAttribute('aria-current', 'true');
+  await expect(exposure).toHaveAttribute('aria-valuetext', '0.00');
+  await exposure.click({ button: 'right' });
+  await menu.getByRole('menuitem', { name: 'Paste value' }).click();
+  await expect(exposure).toHaveAttribute('aria-valuetext', '+2.00');
+  await expect(undo(page)).toHaveAttribute('title', 'Undo Exposure  Ctrl Z');
+  // Another slider cannot take it.
+  await page.getByRole('slider', { name: 'Contrast' }).click({ button: 'right' });
+  await expect(page.getByRole('menu', { name: 'Contrast slider' }).getByRole('menuitem', { name: 'Paste value' })).toBeDisabled();
+  await page.keyboard.press('Escape');
+
+  // Reset, as a double-click does.
+  await exposure.click({ button: 'right' });
+  await menu.getByRole('menuitem', { name: /Reset Exposure/ }).click();
+  await expect(exposure).toHaveAttribute('aria-valuetext', '0.00');
+  await expect(undo(page)).toHaveAttribute('title', 'Undo Reset Exposure  Ctrl Z');
+
+  // From the keyboard: Shift F10, the first item focused, ↓ and Enter.
+  const highlights = page.getByRole('slider', { name: 'Highlights' });
+  await highlights.focus();
+  await page.keyboard.press('Shift+F10');
+  const hmenu = page.getByRole('menu', { name: 'Highlights slider' });
+  await expect(hmenu.getByRole('menuitem', { name: /Reset Highlights/ })).toBeFocused();
+  await page.keyboard.press('ArrowDown');
+  await expect(hmenu.getByRole('menuitem', { name: 'Copy value' })).toBeFocused();
+  await page.keyboard.press('Enter');
+  await expect(hmenu).toBeHidden();
+
+  // Temp on a RAW file is Kelvin: it pastes into RAW files only.
+  const temp = page.getByRole('slider', { name: 'Temp' });
+  const tmenu = page.getByRole('menu', { name: 'Temp slider' });
+  await temp.click({ button: 'right' });
+  await expect(tmenu.getByText(/^\d+ K$/)).toBeVisible();
+  await tmenu.getByRole('menuitem', { name: 'Copy value' }).click();
+  await frames.nth(2).click();
+  await temp.click({ button: 'right' });
+  await expect(tmenu.getByRole('menuitem', { name: 'Paste value' })).toBeEnabled();
+  await page.keyboard.press('Escape');
+  await frames.nth(3).click();
+  await expect(frames.nth(3)).toHaveAttribute('aria-current', 'true');
+  await temp.click({ button: 'right' });
+  await expect(tmenu.getByRole('menuitem', { name: 'Paste value' })).toBeDisabled();
+  await page.keyboard.press('Escape');
+
+  // A photo that does not render: its sliders open no menu.
+  await frames.nth(4).click();
+  await expect(page.getByRole('slider', { name: 'Shadows' })).toHaveAttribute('aria-disabled', 'true');
+  await exposure.click({ button: 'right', force: true });
+  await expect(menu).toBeHidden();
+});

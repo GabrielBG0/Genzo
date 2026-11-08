@@ -428,6 +428,7 @@ These come from `docs/m0-results.md` and decide how the steps below are built:
    - Photo toolbar and badges on the flat Overlay surface.
 9. **LIB-09 Filmstrip** of the opened folder: a white ring on the current photo and a blue dot on photos edited this session.
 10. **APP-06 Slider context menu** (part of Menu-4): reset, copy value, paste value.
+   - Done (2026-11-08): `docs/specs/APP-06.md`. Right-click, the context-menu key or Shift F10 on a Basic slider opens its menu, headed "NAME  value": Reset (as double-click), Copy value (kept for the session, and its text on the system clipboard), Paste value (the same slider only, Temp and Tint on the same scale; one step). Reset Basic panel waits for DEV-13's panel resets.
 11. **APP-07 Status bar**: mode pill, color space, bit depth, preview status, the software-adapter notice, and why a photo shows only its embedded preview.
 12. **APP-08 Panel visibility**: Tab, Shift Tab, F6, F7, F8, Alt-click for solo mode.
 13. **APP-10 Undo and redo** (Ctrl Z, Ctrl Shift Z) for edits.

@@ -45,7 +45,7 @@ Spec template for each feature: **Behavior** (what it does, step by step), **Inp
 - Priority: P0 · Screens: M3, M4
 - Scope: Context menus on grid photos (acts on whole selection, mixed states shown with –), on the Develop photo (zoom, background, before/after, snapshot, copy/paste, overlays) and on sliders (reset, copy/paste value, apply to selection, pin). The slider menu can open with a header naming the target and its value.
 - Decided: the optional header is 11 px caps with the value in mono accent-soft, for example "EXPOSURE  +0.35 EV" (2026-11-05). See the handoff's Design system.
-- Spec: _to be written_
+- Spec: [APP-06.md](../specs/APP-06.md) (M1 part: the slider menu)
 
 ### APP-07 · Status bar
 - Priority: P2 · Screens: all
