@@ -64,10 +64,10 @@ button {
   z-index: 0;
   pointer-events: none;
   transition:
-    left var(--t-indicator) var(--ease-indicator),
-    top var(--t-indicator) var(--ease-indicator),
-    width var(--t-indicator) var(--ease-indicator),
-    height var(--t-indicator) var(--ease-indicator),
+    left var(--t-select) var(--ease-out),
+    top var(--t-select) var(--ease-out),
+    width var(--t-select) var(--ease-out),
+    height var(--t-select) var(--ease-out),
     opacity var(--t-fast) ease-out,
     transform var(--t-fast) ease-out;
 }

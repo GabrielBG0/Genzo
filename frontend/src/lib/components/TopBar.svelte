@@ -1,6 +1,7 @@
 <script lang="ts">
   import { useRegistry } from '../shortcuts/context';
   import Icon from './Icon.svelte';
+  import Logo from './Logo.svelte';
   import { slidingLens } from './indicator.svelte';
   import type { IconName } from './icons';
 
@@ -71,7 +72,7 @@
     title={registry.title('app.menu')}
     onclick={() => onmenu?.()}
   >
-    <span class="logo lens"><Icon name="logo" stroke={2} /></span>
+    <span class="logo lens"><Logo size={18} /></span>
     <span class="name">Genzo</span>
     <span class="catalog">{catalog}</span>
     <Icon name="chevronDown" size={11} stroke={2.4} />
@@ -172,14 +173,15 @@
     color: var(--text-muted);
   }
 
+  /* A flat toolbar group (APP-03, the handoff's control decisions). */
   .quick {
     flex: none;
     display: flex;
     align-items: center;
     gap: 2px;
     padding: 2px;
-    border-radius: var(--r-pill);
-    background: var(--trough);
+    border-radius: var(--r-group);
+    background: var(--group-flat);
   }
 
   .qa {
@@ -189,7 +191,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    border-radius: var(--r-pill);
+    border-radius: var(--r-btn);
     border: 1px solid transparent;
     color: var(--text-body);
   }
@@ -221,12 +223,12 @@
   }
 
   .qa:hover:not(:disabled) {
-    background: var(--hover);
+    background: var(--btn-flat-hover);
   }
 
   .qa.on {
     color: var(--accent-soft);
-    background: var(--toggle-on-bg);
+    background: var(--btn-flat-on);
   }
 
   .qa:disabled {

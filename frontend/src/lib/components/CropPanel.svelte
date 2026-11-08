@@ -186,7 +186,7 @@
     display: inline-flex;
     align-items: center;
     gap: 5px;
-    border-radius: 6px;
+    border-radius: var(--r-btn);
     color: var(--text-body);
   }
 
@@ -201,12 +201,12 @@
 
   .icon:hover:not(:disabled),
   .text:hover:not(:disabled) {
-    background: var(--hover);
+    background: var(--btn-flat-hover);
   }
 
   .on {
     color: var(--accent-soft);
-    background: var(--toggle-on-bg);
+    background: var(--btn-flat-on);
   }
 
   button:disabled {
