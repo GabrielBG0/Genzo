@@ -201,7 +201,7 @@
       <StatusBar
         mode="Develop"
         info={['96 photos · 1 selected', '14 adjustments · 2 masks']}
-        facts={['Display P3', '16-bit', 'Previews 96/96', 'Catalog saved']}
+        facts={['Display P3', '16-bit', 'Previews 96/96', 'Catalog saved'].map((text) => ({ text }))}
       />
     </div>
   </section>

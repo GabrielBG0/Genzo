@@ -259,7 +259,7 @@
   <StatusBar
     mode="Develop"
     info={[`Engine ${info.engineVersion}`, `Contract ${info.contractVersion}`]}
-    facts={['sRGB', '8-bit', engine.kind === 'fake' ? 'Fake engine' : info.adapter.name]}
+    facts={['sRGB', '8-bit', engine.kind === 'fake' ? 'Fake engine' : info.adapter.name].map((text) => ({ text }))}
     {notice}
   />
 </div>

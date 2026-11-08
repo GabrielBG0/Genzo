@@ -6,17 +6,19 @@
     mode: string;
     /** Left-side info, after the pill. The last item is shown brighter. */
     info?: string[];
-    /** Right-side facts: color space, bit depth, preview status. */
-    facts?: string[];
-    /** Software-adapter or other warning (APP-07). */
+    /** Right-side facts: preview status, color space, bit depth, adapter; each with a tooltip. */
+    facts?: { text: string; title?: string }[];
+    /** The one message (APP-07): export progress, a refusal, a reason, notes, the adapter notice. */
     notice?: string | null;
+    /** The notice's tooltip: its whole text. */
+    noticeTitle?: string | undefined;
     /**
      * Set, the notice is a button offering these (an export's progress
      * offers "Cancel export", OUT-01).
      */
     noticeMenu?: MenuItem[] | null;
   }
-  let { mode, info = [], facts = [], notice = null, noticeMenu = null }: Props = $props();
+  let { mode, info = [], facts = [], notice = null, noticeTitle, noticeMenu = null }: Props = $props();
 
   /** Where the open menu's bottom right corner is, in the window. */
   let menuAt: { right: number; bottom: number } | null = $state(null);
@@ -56,12 +58,14 @@
   {/each}
   <span class="spacer"></span>
   {#if notice && noticeMenu}
-    <span role="status">
-      <button class="notice" aria-haspopup="menu" aria-expanded={menuAt !== null} onclick={toggle}>{notice}</button>
+    <span role="status" class="notice-slot">
+      <button class="notice" title={noticeTitle} aria-haspopup="menu" aria-expanded={menuAt !== null} onclick={toggle}
+        >{notice}</button
+      >
     </span>
-  {:else if notice}<span class="notice" role="status">{notice}</span>{/if}
+  {:else if notice}<span class="notice notice-slot" role="status" title={noticeTitle}>{notice}</span>{/if}
   {#each facts as fact, i (i)}
-    <span>{fact}</span>
+    <span class="fact" title={fact.title}>{fact.text}</span>
   {/each}
 </footer>
 {#if menuAt && noticeMenu}
@@ -96,6 +100,20 @@
 
   .bright {
     color: var(--text-body);
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .notice-slot {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .fact,
+  .pill {
+    flex: none;
   }
 
   .notice {

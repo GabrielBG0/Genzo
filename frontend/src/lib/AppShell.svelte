@@ -13,6 +13,7 @@
   import TopBar, { type Module } from './components/TopBar.svelte';
   import { exifRow } from './develop/exif';
   import { Exports } from './develop/export.svelte';
+  import { chooseNotice } from './develop/status';
   import { DevelopSession } from './develop/session.svelte';
   import { Thumbnails } from './develop/thumbnails.svelte';
   import { bindLayout, Layout } from './layout.svelte';
@@ -208,6 +209,45 @@
   );
   const adapterNotice = $derived(info.adapter.kind === 'hardware' ? null : info.adapter.fallbackReason);
 
+  // The status bar (APP-07).
+  const notice = $derived(
+    chooseNotice({
+      exporting: exports.status,
+      refusal: session.notice,
+      reason: session.reason,
+      // The photo's notes come with the engine's part (APP-07, PhotoEdit.notes).
+      notes: [],
+      adapter: adapterNotice,
+    }),
+  );
+  const statusInfo = $derived(
+    session.folder === null
+      ? []
+      : [
+          `${session.strip.photos.length} ${session.strip.photos.length === 1 ? 'photo' : 'photos'}`,
+          ...(current ? [current.fileName] : []),
+        ],
+  );
+  const PREVIEW_TITLES: Record<string, string> = {
+    Opening: 'The photo is opening',
+    'Embedded preview': "The file's embedded preview: not rendered by Genzo",
+    'No preview': 'This file has no embedded preview to show',
+    Interactive: 'A quick preview while you drag; full quality when you let go',
+    Settled: 'Rendered at full quality',
+  };
+  const statusFacts = $derived([
+    ...(session.previewStatus
+      ? [{ text: session.previewStatus, title: PREVIEW_TITLES[session.previewStatus] ?? '' }]
+      : []),
+    session.space === 'displayP3'
+      ? { text: 'Display P3', title: 'Frames are rendered in Display P3' }
+      : { text: 'sRGB', title: 'Frames are rendered in sRGB' },
+    { text: '8-bit', title: 'Frames are shown with 8 bits per channel' },
+    engine.kind === 'fake'
+      ? { text: 'Fake engine', title: 'The browser build: a fake engine, no GPU' }
+      : { text: info.adapter.name, title: 'The GPU rendering the photos' },
+  ]);
+
   /**
    * Alt opens the app menu only on its own (APP-02): pressed and released
    * with no other key or click between, so Alt-drag and Alt-click keep
@@ -326,9 +366,10 @@
   </div>
   <StatusBar
     mode="Develop"
-    info={current ? [current.fileName] : []}
-    facts={['sRGB', '8-bit', engine.kind === 'fake' ? 'Fake engine' : info.adapter.name]}
-    notice={exports.status ?? session.notice ?? session.reason ?? adapterNotice}
+    info={statusInfo}
+    facts={statusFacts}
+    notice={notice?.text ?? null}
+    noticeTitle={notice?.title}
     noticeMenu={exports.busy ? [{ label: 'Cancel export', command: 'export.cancel' }] : null}
   />
   {#if menuAt}
