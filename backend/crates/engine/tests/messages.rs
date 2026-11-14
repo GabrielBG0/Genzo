@@ -321,6 +321,9 @@ fn each_frame_goes_before_its_counts_at_fit_and_at_1_1() {
     // A drag, the Alt preview during it, and its end: each frame counted
     // after it.
     s.delta(p, Change::Exposure(0.5), Phase::Start);
+    // The start answers before its frame: waited for, or the preview's
+    // render, coming first, would replace it (the newest render wins).
+    s.engine.wait_renders_idle();
     let preview = ClippingPreview::Highlights;
     assert_eq!(
         s.run(Command::SetClippingPreview { preview }),
