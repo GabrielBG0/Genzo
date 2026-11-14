@@ -204,9 +204,9 @@ impl Staging {
             gpu.queue.submit([encoder.finish()]);
             let used = placed.last().map_or(0, |&(b, _)| b + 1);
             let (tx, rx) = mpsc::channel();
-            for b in 0..used {
+            for buffer in &self.buffers[..used] {
                 let tx = tx.clone();
-                self.buffers[b].map_async(wgpu::MapMode::Read, .., move |r| {
+                buffer.map_async(wgpu::MapMode::Read, .., move |r| {
                     let _ = tx.send(r);
                 });
             }
@@ -236,8 +236,8 @@ impl Staging {
                 }
                 Ok(())
             })();
-            for b in 0..used {
-                self.buffers[b].unmap();
+            for buffer in &self.buffers[..used] {
+                buffer.unmap();
             }
             result?;
             rest = &rest[placed.len()..];
