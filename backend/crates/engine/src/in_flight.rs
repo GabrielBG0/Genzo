@@ -21,6 +21,13 @@ use genzo_pipeline::gpu::thread::Pending;
 use crate::develop::{Issued, To, finish};
 use crate::settle::{Parts, Settler};
 
+/// The most renders in flight. Each answer holds its frame's readback until
+/// the thread takes it; past this many, the next step waits for one to be
+/// finished, as every step did before, so a thread that falls behind holds
+/// a few frames and never a drag's worth. The steps a newer one replaced
+/// answer at once and do not count for long.
+const MOST: usize = 4;
+
 /// A render asked for and not answered yet.
 struct Flying {
     pending: Pending,
@@ -40,7 +47,7 @@ pub(crate) struct Finisher {
 #[derive(Debug, Default)]
 pub(crate) struct InFlight {
     thread: Mutex<Option<(Sender<Flying>, JoinHandle<()>)>>,
-    /// Renders in flight, and the signal that none is left.
+    /// Renders in flight, and the signal that one is finished.
     busy: Arc<(Mutex<usize>, Condvar)>,
 }
 
@@ -64,18 +71,22 @@ impl InFlight {
                 .spawn(move || {
                     for flying in rx {
                         finisher.finish(flying);
-                        let (count, idle) = &*busy;
-                        let mut count = count.lock().expect("busy");
-                        *count -= 1;
-                        if *count == 0 {
-                            idle.notify_all();
-                        }
+                        let (count, finished) = &*busy;
+                        *count.lock().expect("busy") -= 1;
+                        finished.notify_all();
                     }
                 })?;
             *thread = Some((tx, handle));
         }
         let (tx, _) = thread.as_ref().expect("started above");
-        *self.busy.0.lock().expect("busy") += 1;
+        {
+            let (count, finished) = &*self.busy;
+            let mut count = count.lock().expect("busy");
+            while *count >= MOST {
+                count = finished.wait(count).expect("busy");
+            }
+            *count += 1;
+        }
         // The thread only ends with its sender, which is held here.
         let _ = tx.send(Flying { pending, issued });
         Ok(())
@@ -83,10 +94,10 @@ impl InFlight {
 
     /// Waits until every render taken is finished or dropped.
     pub(crate) fn wait_idle(&self) {
-        let (count, idle) = &*self.busy;
+        let (count, finished) = &*self.busy;
         let mut count = count.lock().expect("busy");
         while *count > 0 {
-            count = idle.wait(count).expect("busy");
+            count = finished.wait(count).expect("busy");
         }
     }
 

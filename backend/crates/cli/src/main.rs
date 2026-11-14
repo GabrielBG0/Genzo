@@ -232,6 +232,8 @@ fn run(file: &str) -> Result<(), String> {
             Err(e) => return Err(format!("{file}:{}: {e}", n + 1)),
         }
     }
+    // A gesture's step answers before its frame: its event comes first.
+    engine.wait_renders_idle();
     engine.wait_histograms_idle();
     engine.wait_prefetch_idle();
     engine.wait_histograms_idle();
