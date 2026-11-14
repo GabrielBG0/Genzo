@@ -31,6 +31,7 @@ pub mod folder;
 mod frames;
 pub mod histogram;
 pub mod history;
+mod in_flight;
 mod messages;
 mod prefetch;
 pub mod preview;
@@ -166,7 +167,10 @@ pub struct Engine {
     /// ([`Self::with_rest_settle`]); `None`: only on its release.
     rest: Option<std::time::Duration>,
     /// Renders those frames.
-    settler: settle::Settler,
+    settler: Arc<settle::Settler>,
+    /// A gesture's renders asked for by command, whose frames come later
+    /// ([`Self::submit_to`]).
+    in_flight: in_flight::InFlight,
 }
 
 /// Receives every event, on the thread that produced it: a command's own,
@@ -280,7 +284,8 @@ impl Engine {
             histograms: Arc::default(),
             events: None,
             rest: None,
-            settler: settle::Settler::default(),
+            settler: Arc::default(),
+            in_flight: in_flight::InFlight::default(),
         }
     }
 
@@ -422,7 +427,8 @@ impl Engine {
 
     /// Runs a command and returns its result. Its events go to the sink
     /// before it returns, but for those that come later: the whole photo's
-    /// histogram, the prefetch's sharper render.
+    /// histogram, the prefetch's sharper render, and the frame of a
+    /// gesture's *start* or *update* ([`Self::submit_to`]).
     pub fn execute(&self, command: Command) -> Result<CommandResult, EngineError> {
         let events = match command {
             Command::SaveAutobenchReport { report } => {
@@ -459,6 +465,8 @@ impl Drop for Engine {
     fn drop(&mut self) {
         self.exports.stop();
         self.thumbs.stop();
+        // First: a frame it finishes tells the settler.
+        self.in_flight.stop();
         self.settler.stop();
         let worker = self.worker.get_mut().ok().and_then(Option::take);
         if let Some(handle) = worker {

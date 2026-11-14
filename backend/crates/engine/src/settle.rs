@@ -26,6 +26,7 @@ use crate::{EventSink, FrameStore};
 pub const REST: Duration = Duration::from_millis(150);
 
 /// What the waiting thread renders with.
+#[derive(Clone)]
 pub(crate) struct Parts {
     pub gpu: Arc<RenderThread>,
     pub session: Arc<Mutex<Session>>,

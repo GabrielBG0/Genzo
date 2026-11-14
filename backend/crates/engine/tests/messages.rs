@@ -22,8 +22,8 @@ use std::sync::{Arc, Condvar, Mutex};
 
 use genzo_engine::api::edit::{Change, Phase};
 use genzo_engine::api::{
-    ClippingPreview, ColorSpace, Command, CommandResult, Event, PhotoEdit, PhotoKind, Query,
-    QueryResult, View,
+    ClippingPreview, ColorSpace, Command, CommandResult, Event, PhotoEdit, PhotoKind, PixelFormat,
+    Query, QueryResult, View,
 };
 use genzo_engine::strip::Decode;
 use genzo_engine::{Engine, EngineError, split_frame};
@@ -163,9 +163,10 @@ impl Session {
         self.engine.execute(command).unwrap()
     }
 
-    /// The events sent since the last call, once every count asked for
-    /// is sent.
+    /// The events sent since the last call, once every frame in flight
+    /// is kept and every count asked for is sent.
     fn events(&self) -> Vec<Event> {
+        self.engine.wait_renders_idle();
         self.engine.wait_histograms_idle();
         std::mem::take(&mut self.events.lock().unwrap())
     }
@@ -547,4 +548,56 @@ fn a_command_for_a_photo_not_open_changes_nothing_and_replies_are_ordered() {
         s.engine.execute(Command::Undo { photo: never }),
         Err(EngineError::UnknownPhoto(p)) if p == never
     ));
+}
+
+#[test]
+fn a_gestures_step_answers_without_its_frame_which_follows() {
+    let _lock = ONE_DEVICE.lock().unwrap_or_else(|e| e.into_inner());
+    let fake = Arc::new(Fake::default());
+    let Some(s) = Session::new(&fake) else { return };
+    let dir = TempDir::new("flight", &["p0.jpg"]);
+    let (ids, _) = opened(s.run(Command::OpenFolder { path: dir.path() }));
+    s.view(200, 150, View::Fit);
+    let before = frames(&s.events()).into_iter().max().unwrap();
+
+    // The step's answer has the edit and no frame; the frame comes after.
+    let a = s
+        .engine
+        .submit_to(ids[0], &[Change::Exposure(0.2)], Phase::Start)
+        .unwrap();
+    assert!(a.frame.is_none() && a.tiles.is_none() && !a.recorded);
+    assert!(a.state.edited);
+    let first = frames(&s.events());
+    assert_eq!(first.len(), 1, "its frame followed");
+    assert!(first[0] > before);
+
+    // A burst of steps, sent as commands: each answers with its own edit,
+    // in order, and the frames that come are the drag's, each newer than
+    // the last. The steps that waited together rendered only the newest.
+    let mut revision = a.state.revision;
+    for i in 3..15 {
+        let (edit, recorded) = s.delta(ids[0], Change::Exposure(0.1 * i as f32), Phase::Update);
+        assert!(!recorded);
+        assert!(edit.revision > revision);
+        revision = edit.revision;
+    }
+    let drag = frames(&s.events());
+    assert!(!drag.is_empty() && drag.len() <= 12, "{drag:?}");
+    assert!(drag.windows(2).all(|w| w[0] < w[1]), "{drag:?}");
+    assert!(drag[0] > first[0]);
+    let newest = *drag.last().unwrap();
+    let bytes = s.engine.frame(newest).expect("the newest frame is kept");
+    let (header, _) = split_frame(&bytes).unwrap()[0];
+    assert_eq!(header.format, PixelFormat::JpegSrgb, "the drag's preview");
+
+    // The end waits for its frame: it is there when the command answers.
+    let (_, recorded) = s.delta(ids[0], Change::Exposure(1.5), Phase::End);
+    assert!(recorded);
+    let end = *frames(&s.events()).last().expect("the end frame");
+    assert!(end > newest);
+    let bytes = s.engine.frame(end).unwrap();
+    let (header, _) = split_frame(&bytes).unwrap()[0];
+    assert_eq!(header.format, PixelFormat::Rgba8Srgb, "settled");
+    // Nothing is left in flight.
+    assert!(frames(&s.events()).is_empty());
 }

@@ -35,7 +35,7 @@ commands:
   bench gpu [W H N]            open a W×H synthetic raw in Develop at Fit in a
                                2560 px viewport, N slider steps per case (drags
                                and settled deltas), print GPU, engine and
-                               latency (the command's wall time) p50/p95. With
+                               latency (from the command to its frame) p50/p95. With
                                --export, an export of the photo runs during
                                each case (OUT-01 criterion 7)
   bench open FOLDER [W H N]    open FOLDER at Fit in a W×H view, N times: first
@@ -312,8 +312,10 @@ fn bench_gpu(args: &[&str], exporting: bool, metrics: &mut Metrics) -> Result<()
         started.elapsed().as_secs_f64() * 1000.0
     );
 
-    // One delta: the times of the frame it rendered, and the command's
-    // wall time, which an export region in progress adds to.
+    // One delta: the times of the frame it rendered, and the wall time
+    // from the command to its frame, which an export region in progress
+    // adds to. A gesture's step answers before its frame comes, so the
+    // frame's event is waited for.
     let send = |changes: Vec<Change>, phase: Phase| -> Result<(f64, Option<f64>, f64), String> {
         events.try_iter().for_each(drop);
         let started = Instant::now();
@@ -324,16 +326,18 @@ fn bench_gpu(args: &[&str], exporting: bool, metrics: &mut Metrics) -> Result<()
                 phase,
             })
             .map_err(|e| e.to_string())?;
-        let wall = started.elapsed().as_secs_f64() * 1000.0;
-        events
-            .try_iter()
-            .find_map(|e| match e {
-                Event::RenderFinished {
+        loop {
+            match events.recv_timeout(std::time::Duration::from_secs(60)) {
+                Ok(Event::RenderFinished {
                     render_ms, gpu_ms, ..
-                } => Some((render_ms, gpu_ms, wall)),
-                _ => None,
-            })
-            .ok_or_else(|| "a delta rendered no frame".to_owned())
+                }) => {
+                    let wall = started.elapsed().as_secs_f64() * 1000.0;
+                    return Ok((render_ms, gpu_ms, wall));
+                }
+                Ok(_) => {}
+                Err(_) => return Err("a delta rendered no frame".to_owned()),
+            }
+        }
     };
     let out = std::env::temp_dir().join(format!("genzo-bench-gpu-{}.jpg", std::process::id()));
     if exporting {

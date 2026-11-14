@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use genzo_engine::api::edit::{Change, Phase};
-use genzo_engine::api::{Event, PixelFormat};
+use genzo_engine::api::{Command, Event, PixelFormat};
 use genzo_engine::develop::{Readback, Target, ViewSpec};
 use genzo_engine::{Engine, split_frame};
 use genzo_pipeline::gpu::synthetic::{scene_raw, with_camera_profile};
@@ -160,4 +160,38 @@ fn without_it_a_gesture_settles_only_on_its_release() {
     let drag = a.frame.unwrap().generation;
     std::thread::sleep(REST * 5);
     assert_eq!(rendered.lock().unwrap().iter().max(), Some(&drag));
+}
+
+#[test]
+fn a_step_sent_as_a_command_settles_at_rest_too() {
+    let _lock = ONE_DEVICE.lock().unwrap_or_else(|e| e.into_inner());
+    let Some((engine, rendered)) = engine(Some(REST)) else {
+        return;
+    };
+    let photo = engine
+        .open_source(with_camera_profile(scene_raw(1030, 777)), 1)
+        .unwrap();
+    let open = engine
+        .set_view(ViewSpec::Fit((600, 450)), Target::Srgb)
+        .unwrap()
+        .frame
+        .unwrap()
+        .generation;
+    // The command answers without its frame; the drag's frame follows, and
+    // the settled one after the rest.
+    engine
+        .execute(Command::ApplyEditDelta {
+            photo,
+            changes: vec![Change::Exposure(0.5)],
+            phase: Phase::Start,
+        })
+        .unwrap();
+    let drag = frame_after(&rendered, open).expect("the drag's frame");
+    let at_rest = frame_after(&rendered, drag).expect("a frame at rest");
+    let jpeg = |generation| {
+        let bytes = engine.frame(generation).expect("kept");
+        split_frame(&bytes).unwrap()[0].0.format == PixelFormat::JpegSrgb
+    };
+    assert!(jpeg(drag) && !jpeg(at_rest));
+    engine.apply(&[], Phase::End).unwrap();
 }
