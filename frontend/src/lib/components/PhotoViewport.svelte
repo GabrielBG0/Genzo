@@ -103,19 +103,47 @@
   $effect(() => {
     const eng = engine;
     if (!eng) return;
-    return eng.onEvent(async (event) => {
+    // One fetch at a time, and of the frames that came meanwhile only the
+    // newest: a gesture's steps answer before their frames (DEV-01), so
+    // frames can come faster than the webview takes them in.
+    let wanted: { generation: number; of: number | null | undefined } | null = null;
+    let fetching = false;
+    // A frame of a photo that is no longer the one shown: a switch came
+    // while it waited or was fetched.
+    const stale = (of: number | null | undefined) => photo !== undefined && of !== undefined && of !== photo;
+    const take = async () => {
+      fetching = true;
+      try {
+        while (wanted !== null && viewport) {
+          const { generation, of } = wanted;
+          wanted = null;
+          if (stale(of)) continue;
+          try {
+            const bytes = await eng.fetchFrame(generation);
+            if (viewport && !stale(of) && (await putFrame(viewport, bytes))) {
+              hasFrame = true;
+              schedule(generation);
+            }
+          } catch (e) {
+            // The engine keeps only its newest frames: one replaced before its
+            // fetch is gone, and a newer frame is on its way. The frame shown stays.
+            console.debug(`frame ${generation} not drawn`, e);
+          }
+        }
+      } finally {
+        fetching = false;
+      }
+    };
+    return eng.onEvent((event) => {
       // A render's frame, or a photo's embedded preview while it opens (DEV-01).
       const generation =
         event.type === 'renderFinished' ? event.generation : event.type === 'previewShown' ? event.generation : null;
       if (generation === null || !viewport) return;
       if (generation < viewport.generation) return;
-      if (photo !== undefined && 'photo' in event && event.photo !== photo) return;
-      const bytes = await eng.fetchFrame(generation);
-      if (!viewport) return;
-      if (await putFrame(viewport, bytes)) {
-        hasFrame = true;
-        schedule(generation);
-      }
+      const of = 'photo' in event ? event.photo : undefined;
+      if (stale(of)) return;
+      if (wanted === null || generation > wanted.generation) wanted = { generation, of };
+      if (!fetching) void take();
     });
   });
 

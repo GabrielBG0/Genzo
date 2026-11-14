@@ -42,7 +42,7 @@ Contract workflow: change the Rust types in `backend/crates/model`, bump `CONTRA
 - The `cli` crate must be able to do everything the UI does except draw.
 - The backend owns the edit document and its history. The frontend sends edit deltas, receives frames and never computes pixels.
 - Pixels (tiles, thumbnails) never travel as JSON; they use the binary tile protocol.
-- One render thread owns the GPU device. CPU work runs on rayon, file IO on tokio, SQLite writes on a dedicated thread. Nothing blocks the render thread.
+- One render thread owns the GPU device. CPU work runs on rayon, file IO as blocking reads on worker threads (rayon's, or a thread of the job's own), SQLite writes on a dedicated thread. Nothing blocks the render thread. No async runtime: tokio was named here until 2026-11-14 and never used; adopting one needs a spec change.
 - Original files are never written to, including DNG and JPEG. Metadata goes to XMP sidecars.
 
 ## Frontend rules

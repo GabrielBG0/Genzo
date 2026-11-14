@@ -121,7 +121,7 @@ impl Session {
     }
 
     /// Whether the open photo's gesture is in progress.
-    fn in_gesture(&self) -> bool {
+    pub(crate) fn in_gesture(&self) -> bool {
         self.open
             .and_then(|id| self.edits.get(&id))
             .is_some_and(PhotoEdits::in_gesture)
@@ -480,15 +480,91 @@ impl Engine {
 
     /// Renders the open photo's current edit with a new generation.
     pub(crate) fn render(&self, recorded: bool, phase: Phase) -> Result<Applied, EngineError> {
-        let to = To {
+        let to = self.to()?;
+        let a = render_when(&to, recorded, phase, |_| true).map(|a| a.expect("always rendered"))?;
+        // A gesture's frame settles once its input rests (`crate::settle`).
+        if phase.interactive()
+            && let Some(rest) = self.rest
+            && let (Some(f), Some(parts)) = (&a.frame, self.parts())
+        {
+            self.settler.rested(f.generation, rest, || parts);
+        }
+        Ok(a)
+    }
+
+    /// [`Self::apply_to`] for a gesture's *start* or *update*, without
+    /// waiting for its frame (`crate::in_flight`): the edit changes and
+    /// its render is asked for, and the answer has no frame. The frame is
+    /// kept and sent as `RenderFinished` when it comes, unless a newer
+    /// render replaced it first. What the commands do; the tests and the
+    /// benchmarks that want the frame call [`Self::apply_to`].
+    pub fn submit_to(
+        &self,
+        photo: u64,
+        changes: &[Change],
+        phase: Phase,
+    ) -> Result<Applied, EngineError> {
+        debug_assert!(phase.interactive(), "an end waits for its frame");
+        let recorded = {
+            let mut s = self.session.lock().expect("session");
+            if s.open != Some(photo) {
+                return unchanged(&s, photo);
+            }
+            // Nothing changes out of sight (WF-02).
+            s.before = false;
+            s.edits
+                .get_mut(&photo)
+                .expect("open")
+                .apply(changes, phase)?
+        };
+        let to = self.to()?;
+        let (state, request, issued) = issue(&to, phase, false, |_| true)?.expect("always issued");
+        let pending = to.gpu.submit(request)?;
+        let parts = self.parts().expect("a render thread, checked above");
+        self.in_flight
+            .take(pending, issued, || crate::in_flight::Finisher {
+                parts,
+                rest: self.rest,
+                settler: self.settler.clone(),
+            })
+            .map_err(|e| EngineError::Io(format!("the frames thread: {e}")))?;
+        Ok(Applied {
+            recorded,
+            state,
+            frame: None,
+            tiles: None,
+        })
+    }
+
+    /// Waits until every render in flight ([`Self::submit_to`]) has its
+    /// frame kept and sent, or was replaced: for the tests and the
+    /// benchmarks.
+    #[doc(hidden)]
+    pub fn wait_renders_idle(&self) {
+        self.in_flight.wait_idle();
+    }
+
+    fn to(&self) -> Result<To<'_>, EngineError> {
+        Ok(To {
             gpu: self.gpu()?,
             session: &self.session,
             generations: &self.generations,
             histograms: &self.histograms,
             frames: &self.frames,
             events: self.events.as_ref(),
-        };
-        render_when(&to, recorded, phase, |_| true).map(|a| a.expect("always rendered"))
+        })
+    }
+
+    /// What the threads that render on their own hold of the engine.
+    fn parts(&self) -> Option<crate::settle::Parts> {
+        Some(crate::settle::Parts {
+            gpu: self.gpu.clone()?,
+            session: self.session.clone(),
+            generations: self.generations.clone(),
+            histograms: self.histograms.clone(),
+            frames: self.frames.clone(),
+            events: self.events.clone(),
+        })
     }
 }
 
@@ -517,94 +593,153 @@ pub(crate) fn render_when(
     phase: Phase,
     when: impl FnOnce(&Session) -> bool,
 ) -> Result<Option<Applied>, EngineError> {
-    let To {
-        gpu,
-        session,
-        generations,
-        histograms,
-        frames,
-        events,
-    } = *to;
-    let (state, request) = {
-        let mut s = session.lock().expect("session");
-        let id = s.open.ok_or(EngineError::NoPhoto)?;
-        if !when(&s) {
-            return Ok(None);
-        }
-        let generation = generations.next();
-        s.issued = generation;
-        // A settled render shows no preview, whatever was set.
-        if phase == Phase::End || !s.in_gesture() {
-            s.overlay.preview = Preview::None;
-        }
-        let p = &s.edits[&id];
-        let request = DevelopRequest {
-            generation,
-            photo: id,
-            edit: s.shown_edit(id, p),
-            view: s.view,
-            target: s.target,
-            phase,
-            overlay: s.overlay,
-        };
-        (state(&s, id, p), request)
+    render(to, recorded, phase, false, when)
+}
+
+/// Renders the open photo settled while its gesture goes on, its input at
+/// rest since interactive frame `generation` (`crate::settle`): only if
+/// that frame is still the last one issued and the gesture still in
+/// progress. The gesture's Alt preview stays, and nothing is recorded.
+pub(crate) fn render_at_rest(to: &To<'_>, generation: u64) -> Result<Option<Applied>, EngineError> {
+    render(to, false, Phase::End, true, |s| {
+        s.issued == generation && s.in_gesture()
+    })
+}
+
+/// [`render_when`]; `at_rest` is [`render_at_rest`]'s render, settled
+/// within a gesture.
+fn render(
+    to: &To<'_>,
+    recorded: bool,
+    phase: Phase,
+    at_rest: bool,
+    when: impl FnOnce(&Session) -> bool,
+) -> Result<Option<Applied>, EngineError> {
+    let Some((state, request, issued)) = issue(to, phase, at_rest, when)? else {
+        return Ok(None);
     };
-    let generation = request.generation;
-    let key = Key {
-        photo: request.photo,
-        edit: request.edit.clone(),
-        target: request.target,
-        view: request.view,
-    };
-    let target = request.target;
-    let started = Instant::now();
-    let frame = gpu.develop(request)?;
-    let mut tiles = None;
-    if let Some(f) = &frame {
-        // Kept before its histogram goes, which can follow it at once.
-        if let Some((bytes, count)) =
-            crate::frames::encode(generation, &f.readback, target, phase.interactive())
-        {
-            frames
-                .lock()
-                .expect("frame store poisoned")
-                .put(generation, bytes);
-            tiles = Some(count);
-            if let Some(sink) = events {
-                sink.send(Event::RenderFinished {
-                    photo: Some(key.photo),
-                    generation,
-                    tile_count: count,
-                    render_ms: started.elapsed().as_secs_f64() * 1000.0,
-                    gpu_ms: f.gpu_ms,
-                });
-            }
-        }
-        let last = {
-            let mut s = session.lock().expect("session");
-            // A frame older than the last one issued says nothing about it.
-            let last = s.issued == generation;
-            if last {
-                s.provisional = f.provisional.then_some(generation);
-            }
-            last
-        };
-        match &f.histogram {
-            Some(h) => histograms.deliver(Counted {
-                photo: key.photo,
-                generation,
-                histogram: h.clone(),
-            }),
-            None if last && !phase.interactive() => histograms.whole(gpu, session, generation, key),
-            None => {}
-        }
-    }
+    let frame = to.gpu.develop(request)?;
+    let tiles = finish(to, issued, frame.as_ref());
     Ok(Some(Applied {
         recorded,
         state,
         frame,
         tiles,
     }))
+}
+
+/// A render asked for: what [`finish`] needs once its frame comes.
+pub(crate) struct Issued {
+    key: Key,
+    generation: u64,
+    phase: Phase,
+    started: Instant,
+}
+
+impl Issued {
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation
+    }
+}
+
+/// Takes a new generation for a render of the open photo's current edit,
+/// if `when` holds of the session then: the edit as the panels show it,
+/// the request for the render thread, and what [`finish`] needs.
+pub(crate) fn issue(
+    to: &To<'_>,
+    phase: Phase,
+    at_rest: bool,
+    when: impl FnOnce(&Session) -> bool,
+) -> Result<Option<(EditState, DevelopRequest, Issued)>, EngineError> {
+    let mut s = to.session.lock().expect("session");
+    let id = s.open.ok_or(EngineError::NoPhoto)?;
+    if !when(&s) {
+        return Ok(None);
+    }
+    let generation = to.generations.next();
+    s.issued = generation;
+    // A settled render shows no preview, whatever was set, but the one
+    // of a gesture at rest: its Alt is still held.
+    if !at_rest && (phase == Phase::End || !s.in_gesture()) {
+        s.overlay.preview = Preview::None;
+    }
+    let p = &s.edits[&id];
+    let request = DevelopRequest {
+        generation,
+        photo: id,
+        edit: s.shown_edit(id, p),
+        view: s.view,
+        target: s.target,
+        phase,
+        overlay: s.overlay,
+    };
+    let issued = Issued {
+        key: Key {
+            photo: request.photo,
+            edit: request.edit.clone(),
+            target: request.target,
+            view: request.view,
+        },
+        generation,
+        phase,
+        started: Instant::now(),
+    };
+    Ok(Some((state(&s, id, p), request, issued)))
+}
+
+/// Keeps the frame of render `issued` as tile messages and sends its
+/// `RenderFinished`, notes whether it is provisional, and sends or asks
+/// for its counts. The number of tile messages kept; `None` without a
+/// frame (a newer render replaced it) or when it could not be encoded.
+pub(crate) fn finish(to: &To<'_>, issued: Issued, frame: Option<&DevelopFrame>) -> Option<u32> {
+    let Issued {
+        key,
+        generation,
+        phase,
+        started,
+    } = issued;
+    let f = frame?;
+    let mut tiles = None;
+    // Kept before its histogram goes, which can follow it at once.
+    if let Some((bytes, count)) =
+        crate::frames::encode(generation, &f.readback, key.target, phase.interactive())
+    {
+        to.frames
+            .lock()
+            .expect("frame store poisoned")
+            .put(generation, bytes);
+        tiles = Some(count);
+        if let Some(sink) = to.events {
+            sink.send(Event::RenderFinished {
+                photo: Some(key.photo),
+                generation,
+                tile_count: count,
+                render_ms: started.elapsed().as_secs_f64() * 1000.0,
+                gpu_ms: f.gpu_ms,
+            });
+        }
+    }
+    let last = {
+        let mut s = to.session.lock().expect("session");
+        // A frame older than the last one issued says nothing about it.
+        let last = s.issued == generation;
+        if last {
+            s.provisional = f.provisional.then_some(generation);
+        }
+        last
+    };
+    match &f.histogram {
+        Some(h) => to.histograms.deliver(Counted {
+            photo: key.photo,
+            generation,
+            histogram: h.clone(),
+        }),
+        None if last && !phase.interactive() => {
+            to.histograms.whole(to.gpu, to.session, generation, key)
+        }
+        None => {}
+    }
+    tiles
 }
 
 /// A file's bytes decoded into the render thread's input, with the file's

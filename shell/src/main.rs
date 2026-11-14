@@ -130,7 +130,7 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let handle = app.handle().clone();
-            let mut engine = Engine::new();
+            let mut engine = Engine::new().with_rest_settle();
             // Without a cache directory, thumbnails are kept in memory only.
             if let Ok(dir) = app.path().app_cache_dir() {
                 engine = engine.with_cache_dir(dir);

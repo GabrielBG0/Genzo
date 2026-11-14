@@ -1,6 +1,6 @@
 //! Scheduling primitives: generation numbers for latest-wins coalescing and
-//! cancellation tokens. The priority scheduler (rayon for CPU work, tokio for
-//! IO) arrives in M1.
+//! cancellation tokens. The priority scheduler (rayon for CPU work, blocking
+//! reads on worker threads for IO) is not built yet.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};

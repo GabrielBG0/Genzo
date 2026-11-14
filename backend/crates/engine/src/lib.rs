@@ -31,9 +31,11 @@ pub mod folder;
 mod frames;
 pub mod histogram;
 pub mod history;
+mod in_flight;
 mod messages;
 mod prefetch;
 pub mod preview;
+pub mod settle;
 pub mod strip;
 pub mod thumbs;
 
@@ -161,6 +163,14 @@ pub struct Engine {
     exports: Arc<export::Exports>,
     /// Where events go.
     events: Option<EventSink>,
+    /// How long a gesture's input rests before its frame settles
+    /// ([`Self::with_rest_settle`]); `None`: only on its release.
+    rest: Option<std::time::Duration>,
+    /// Renders those frames.
+    settler: Arc<settle::Settler>,
+    /// A gesture's renders asked for by command, whose frames come later
+    /// ([`Self::submit_to`]).
+    in_flight: in_flight::InFlight,
 }
 
 /// Receives every event, on the thread that produced it: a command's own,
@@ -273,6 +283,9 @@ impl Engine {
             preview_sink: None,
             histograms: Arc::default(),
             events: None,
+            rest: None,
+            settler: Arc::default(),
+            in_flight: in_flight::InFlight::default(),
         }
     }
 
@@ -287,6 +300,23 @@ impl Engine {
     /// [`Self::with_event_sink`] or [`Self::with_thumb_sink`].
     pub fn with_cache_dir(mut self, dir: PathBuf) -> Self {
         self.thumbs = Arc::new(Self::thumbs_in(Some(dir), &self.prefetch));
+        self
+    }
+
+    /// This engine, settling a gesture's frame once its input has rested
+    /// for [`settle::REST`], without waiting for its release (DEV-01,
+    /// *Re-runs, quality levels and generations*): a slider held still shows full quality.
+    /// The frame comes as any other, by `RenderFinished`. Off by default,
+    /// so a caller that steps through a gesture itself (a test, a
+    /// benchmark) gets no render it did not ask for.
+    pub fn with_rest_settle(self) -> Self {
+        self.with_rest_settle_after(settle::REST)
+    }
+
+    /// [`Self::with_rest_settle`] with another wait: for the tests.
+    #[doc(hidden)]
+    pub fn with_rest_settle_after(mut self, rest: std::time::Duration) -> Self {
+        self.rest = Some(rest);
         self
     }
 
@@ -397,7 +427,8 @@ impl Engine {
 
     /// Runs a command and returns its result. Its events go to the sink
     /// before it returns, but for those that come later: the whole photo's
-    /// histogram, the prefetch's sharper render.
+    /// histogram, the prefetch's sharper render, and the frame of a
+    /// gesture's *start* or *update* ([`Self::submit_to`]).
     pub fn execute(&self, command: Command) -> Result<CommandResult, EngineError> {
         let events = match command {
             Command::SaveAutobenchReport { report } => {
@@ -434,6 +465,9 @@ impl Drop for Engine {
     fn drop(&mut self) {
         self.exports.stop();
         self.thumbs.stop();
+        // First: a frame it finishes tells the settler.
+        self.in_flight.stop();
+        self.settler.stop();
         let worker = self.worker.get_mut().ok().and_then(Option::take);
         if let Some(handle) = worker {
             self.prefetch.stop();

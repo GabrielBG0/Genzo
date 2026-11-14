@@ -336,7 +336,10 @@ pub enum Command {
     },
     /// Changes to the photo's edit in a gesture's `phase`. A delta without
     /// a gesture is an *end*; each *end* records one step (DEV-01,
-    /// *Inputs*; APP-10). Answers [`CommandResult::Edit`].
+    /// *Inputs*; APP-10). Answers [`CommandResult::Edit`]: a *start* or an
+    /// *update* at once, its frame following as [`Event::RenderFinished`]
+    /// unless a newer render replaces it; an *end* once its settled frame
+    /// is kept.
     ApplyEditDelta {
         photo: u64,
         changes: Vec<Change>,

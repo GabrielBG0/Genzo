@@ -9,7 +9,8 @@ import {
 /** One decoded tile: its header and a view onto its pixels (no copy). */
 export interface Tile {
   header: TileHeader;
-  pixels: Uint8Array;
+  /** Over the fetched frame's own buffer, which is never a shared one. */
+  pixels: Uint8Array<ArrayBuffer>;
 }
 
 export class TileDecodeError extends Error {}

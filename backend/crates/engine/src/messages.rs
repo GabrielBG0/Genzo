@@ -110,7 +110,16 @@ impl Engine {
                 photo,
                 changes,
                 phase,
-            } => self.edited(photo, self.apply_to(photo, &changes, phase)),
+            } => {
+                // A gesture's step answers at once; its frame follows
+                // (`crate::in_flight`). Its end waits for the settled frame.
+                let applied = if phase.interactive() {
+                    self.submit_to(photo, &changes, phase)
+                } else {
+                    self.apply_to(photo, &changes, phase)
+                };
+                self.edited(photo, applied)
+            }
             Command::ResetParam { photo, param } => {
                 let change = param.map_or(Change::ResetAll, Change::Reset);
                 self.edited(photo, self.apply_to(photo, &[change], Phase::End))
