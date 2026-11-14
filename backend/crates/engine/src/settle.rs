@@ -12,7 +12,7 @@
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use genzo_jobs::Generations;
 use genzo_pipeline::gpu::thread::RenderThread;
@@ -53,16 +53,26 @@ impl Settler {
             let handle = std::thread::Builder::new()
                 .name("genzo-settle".into())
                 .spawn(move || {
-                    let mut waiting: Option<u64> = None;
+                    // The newest frame told of, and when it settles.
+                    let mut waiting: Option<(u64, Instant)> = None;
                     loop {
                         let next = match waiting {
                             None => rx.recv().map_err(|_| RecvTimeoutError::Disconnected),
-                            Some(_) => rx.recv_timeout(rest),
+                            Some((_, at)) => {
+                                rx.recv_timeout(at.saturating_duration_since(Instant::now()))
+                            }
                         };
                         match next {
-                            Ok(generation) => waiting = Some(generation),
+                            // Two renders can tell of their frames out of
+                            // order: an older one neither replaces the
+                            // newer nor restarts its wait.
+                            Ok(generation) => {
+                                if waiting.is_none_or(|(newest, _)| generation > newest) {
+                                    waiting = Some((generation, Instant::now() + rest));
+                                }
+                            }
                             Err(RecvTimeoutError::Timeout) => {
-                                if let Some(generation) = waiting.take() {
+                                if let Some((generation, _)) = waiting.take() {
                                     parts.settle(generation);
                                 }
                             }

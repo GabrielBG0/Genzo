@@ -182,6 +182,19 @@ fn the_counts_are_the_frames() {
     assert_eq!((h.highlights.pixels, h.shadows.pixels), (3, 2));
     assert_eq!((h.highlights.channels, h.shadows.channels), (0b111, 0b011));
     assert_eq!(h.pixels, 6);
+
+    // Asked for before the frame's readback, whose wait then brings them.
+    view.output(&gpu, Target::Srgb, false, false);
+    view.map_histogram();
+    let frame = view.read_frame(&gpu).unwrap();
+    assert_eq!(view.read_histogram(&gpu).unwrap(), count(&frame));
+    // Asked for and never read (a readback that failed): the next output
+    // copies into the buffer all the same, and its counts are read.
+    view.output(&gpu, Target::Srgb, false, false);
+    view.map_histogram();
+    view.output(&gpu, Target::Srgb, false, false);
+    let frame = view.read_frame(&gpu).unwrap();
+    assert_eq!(view.read_histogram(&gpu).unwrap(), count(&frame));
 }
 
 #[test]

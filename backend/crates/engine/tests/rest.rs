@@ -17,8 +17,9 @@ const REST: Duration = Duration::from_millis(40);
 
 type Rendered = Arc<Mutex<Vec<u64>>>;
 
-/// An engine that settles after [`REST`], and the generations it rendered.
-fn engine(rest: bool) -> Option<(Engine, Rendered)> {
+/// An engine that settles after `rest`, if any, and the generations it
+/// rendered.
+fn engine(rest: Option<Duration>) -> Option<(Engine, Rendered)> {
     let rendered = Rendered::default();
     let sink = rendered.clone();
     let mut engine = Engine::new().with_event_sink(Arc::new(move |e| {
@@ -26,8 +27,8 @@ fn engine(rest: bool) -> Option<(Engine, Rendered)> {
             sink.lock().unwrap().push(generation);
         }
     }));
-    if rest {
-        engine = engine.with_rest_settle_after(REST);
+    if let Some(rest) = rest {
+        engine = engine.with_rest_settle_after(rest);
     }
     if engine.info().adapter.name == "none" {
         if std::env::var("GENZO_REQUIRE_GPU").as_deref() == Ok("1") {
@@ -59,7 +60,7 @@ fn frame_after(rendered: &Rendered, generation: u64) -> Option<u64> {
 #[test]
 fn a_gesture_at_rest_settles_and_goes_on() {
     let _lock = ONE_DEVICE.lock().unwrap_or_else(|e| e.into_inner());
-    let Some((engine, rendered)) = engine(true) else {
+    let Some((engine, rendered)) = engine(Some(REST)) else {
         return;
     };
     engine
@@ -110,38 +111,41 @@ fn a_gesture_at_rest_settles_and_goes_on() {
 #[test]
 fn a_moving_gesture_does_not_settle() {
     let _lock = ONE_DEVICE.lock().unwrap_or_else(|e| e.into_inner());
-    let Some((engine, rendered)) = engine(true) else {
+    // A rest no test run stalls for between two moves.
+    let Some((engine, rendered)) = engine(Some(Duration::from_secs(30))) else {
         return;
     };
     engine
         .open_source(with_camera_profile(scene_raw(1030, 777)), 1)
         .unwrap();
-    engine
-        .set_view(ViewSpec::Fit((600, 450)), Target::Srgb)
-        .unwrap();
-    engine
-        .apply(&[Change::Exposure(0.1)], Phase::Start)
-        .unwrap();
-    // Moves closer together than the rest: every frame is the drag's.
-    let mut last = 0;
+    let mut asked = vec![
+        engine
+            .set_view(ViewSpec::Fit((600, 450)), Target::Srgb)
+            .unwrap(),
+        engine
+            .apply(&[Change::Exposure(0.1)], Phase::Start)
+            .unwrap(),
+    ];
     for i in 2..12 {
-        let a = engine
-            .apply(&[Change::Exposure(0.1 * i as f32)], Phase::Update)
-            .unwrap();
-        last = a.frame.unwrap().generation;
+        asked.push(
+            engine
+                .apply(&[Change::Exposure(0.1 * i as f32)], Phase::Update)
+                .unwrap(),
+        );
     }
-    let seen = rendered.lock().unwrap().clone();
-    assert!(
-        seen.iter().all(|g| *g <= last),
-        "no frame but the drag's: {seen:?}, last {last}"
-    );
-    engine.apply(&[], Phase::End).unwrap();
+    asked.push(engine.apply(&[], Phase::End).unwrap());
+    // Every frame is one that was asked for: none came on its own.
+    let asked: Vec<u64> = asked
+        .into_iter()
+        .map(|a| a.frame.unwrap().generation)
+        .collect();
+    assert_eq!(*rendered.lock().unwrap(), asked);
 }
 
 #[test]
 fn without_it_a_gesture_settles_only_on_its_release() {
     let _lock = ONE_DEVICE.lock().unwrap_or_else(|e| e.into_inner());
-    let Some((engine, rendered)) = engine(false) else {
+    let Some((engine, rendered)) = engine(None) else {
         return;
     };
     engine
