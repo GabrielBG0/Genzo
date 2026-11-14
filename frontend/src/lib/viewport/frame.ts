@@ -14,7 +14,7 @@ export async function putFrame(viewport: Viewport, bytes: ArrayBuffer): Promise<
   const images = await Promise.all(
     tiles.map(async ({ header, pixels }) => ({
       header,
-      image: await createImageBitmap(new Blob([pixels.slice()], { type: 'image/jpeg' }), {
+      image: await createImageBitmap(new Blob([pixels], { type: 'image/jpeg' }), {
         colorSpaceConversion: 'none',
       }),
     })),

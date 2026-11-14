@@ -110,11 +110,17 @@
       if (generation === null || !viewport) return;
       if (generation < viewport.generation) return;
       if (photo !== undefined && 'photo' in event && event.photo !== photo) return;
-      const bytes = await eng.fetchFrame(generation);
-      if (!viewport) return;
-      if (await putFrame(viewport, bytes)) {
-        hasFrame = true;
-        schedule(generation);
+      try {
+        const bytes = await eng.fetchFrame(generation);
+        if (!viewport) return;
+        if (await putFrame(viewport, bytes)) {
+          hasFrame = true;
+          schedule(generation);
+        }
+      } catch (e) {
+        // The engine keeps only its newest frames: one replaced before its
+        // fetch is gone, and a newer frame is on its way. The frame shown stays.
+        console.debug(`frame ${generation} not drawn`, e);
       }
     });
   });
