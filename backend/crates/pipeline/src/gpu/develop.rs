@@ -824,6 +824,20 @@ pub enum Readback {
 }
 
 impl Develop {
+    /// Asks for the last render's counts and GPU time now, so the wait of
+    /// [`Develop::read_back`] brings them with the frame and
+    /// [`Develop::histogram`] and [`Develop::gpu_ms`] do not wait again:
+    /// one wait on the device per render, not three. Call it between the
+    /// render and its readback; without it each waits on its own.
+    pub fn map_readbacks(&mut self) {
+        if self.shown.as_ref().is_some_and(|s| s.counting) {
+            self.view.map_histogram();
+        }
+        if let Some(t) = self.timer.as_mut() {
+            t.map();
+        }
+    }
+
     /// Reads back what the last render sends: at 1:1 only the visible
     /// tiles, otherwise the frame.
     pub fn read_back(&self, gpu: &Gpu) -> Result<Readback, GpuError> {

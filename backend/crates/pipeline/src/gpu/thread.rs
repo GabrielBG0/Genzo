@@ -1027,6 +1027,7 @@ fn develop_render(
             Err(DevelopError::NeedsSource) => return Ok(None),
             reran => reran.map_err(develop_error)?,
         };
+        d.map_readbacks();
         Ok(Some(DevelopFrame {
             generation: r.generation,
             readback: d.read_back(gpu)?,

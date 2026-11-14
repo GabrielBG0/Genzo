@@ -20,7 +20,13 @@ pub struct SpanTimer {
     period_ns: f64,
     /// Whether a stopped span waits to be read.
     stopped: bool,
+    /// The stopped span's readback, asked for and not read yet
+    /// ([`SpanTimer::map`]).
+    mapping: Option<Mapping>,
 }
+
+/// A buffer's mapping on its way: its callback's answer.
+type Mapping = mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>;
 
 impl SpanTimer {
     /// A timer, if the device has timestamp queries.
@@ -46,12 +52,18 @@ impl SpanTimer {
             }),
             period_ns: f64::from(gpu.queue.get_timestamp_period()),
             stopped: false,
+            mapping: None,
         })
     }
 
     /// Starts a span; a span stopped and not read is dropped.
     pub fn start(&mut self, gpu: &Gpu) {
         self.stopped = false;
+        // A span mapped and never read: its buffer must not be mapped when
+        // the next span's time is copied into it.
+        if self.mapping.take().is_some() {
+            self.readback.unmap();
+        }
         self.mark(gpu, 0, false);
     }
 
@@ -78,22 +90,44 @@ impl SpanTimer {
         gpu.queue.submit([encoder.finish()]);
     }
 
-    /// The stopped span's GPU time in ms, waiting for it; `None` when no
-    /// span was stopped since the last read.
-    pub fn read(&mut self, gpu: &Gpu) -> Result<Option<f64>, GpuError> {
-        if !std::mem::take(&mut self.stopped) {
-            return Ok(None);
+    /// Asks for the stopped span's readback now, so the next wait on the
+    /// device (the frame's readback) brings it too and [`SpanTimer::read`]
+    /// does not wait again.
+    pub fn map(&mut self) {
+        if self.stopped && self.mapping.is_none() {
+            self.mapping = Some(self.map_readback());
         }
+    }
+
+    fn map_readback(&self) -> Mapping {
         let (tx, rx) = mpsc::channel();
         self.readback.map_async(wgpu::MapMode::Read, .., move |r| {
             let _ = tx.send(r);
         });
-        gpu.device
-            .poll(wgpu::PollType::wait_indefinitely())
-            .map_err(|e| GpuError::Readback(e.to_string()))?;
-        rx.recv()
-            .map_err(|e| GpuError::Readback(e.to_string()))?
-            .map_err(|e| GpuError::Readback(e.to_string()))?;
+        rx
+    }
+
+    /// The stopped span's GPU time in ms, waiting for it unless a wait
+    /// since [`SpanTimer::map`] brought it; `None` when no span was stopped
+    /// since the last read.
+    pub fn read(&mut self, gpu: &Gpu) -> Result<Option<f64>, GpuError> {
+        if !std::mem::take(&mut self.stopped) {
+            return Ok(None);
+        }
+        let rx = match self.mapping.take() {
+            Some(rx) => rx,
+            None => self.map_readback(),
+        };
+        let answer = match rx.try_recv() {
+            Ok(answer) => answer,
+            Err(_) => {
+                gpu.device
+                    .poll(wgpu::PollType::wait_indefinitely())
+                    .map_err(|e| GpuError::Readback(e.to_string()))?;
+                rx.recv().map_err(|e| GpuError::Readback(e.to_string()))?
+            }
+        };
+        answer.map_err(|e| GpuError::Readback(e.to_string()))?;
         // Mapped from here: unmapped on every path, or the next span's copy
         // into it fails.
         let ms = self

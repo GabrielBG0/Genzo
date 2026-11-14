@@ -8,7 +8,7 @@
 //! Stage 9 also counts the frame's histogram and draws the J overlay or the
 //! Alt preview over it (DEV-03, [`crate::histogram`]), each off until set.
 
-use std::sync::mpsc;
+use std::sync::{Mutex, mpsc};
 
 use bytemuck::{Pod, Zeroable};
 use genzo_color::Mat3;
@@ -193,6 +193,9 @@ pub struct ViewStages {
     /// is copied to for reading, never left mapped across an output.
     histogram: wgpu::Buffer,
     histogram_read: wgpu::Buffer,
+    /// The readback buffer's mapping, asked for and not read yet
+    /// ([`Self::map_histogram`]).
+    histogram_mapping: Mutex<Option<Mapping>>,
     /// Whether the next outputs count, and what they draw over the photo.
     counting: bool,
     overlay: Overlay,
@@ -311,6 +314,7 @@ impl ViewStages {
                 usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
                 mapped_at_creation: false,
             }),
+            histogram_mapping: Mutex::new(None),
             counting: false,
             overlay: Overlay::default(),
         }
@@ -332,24 +336,53 @@ impl ViewStages {
     /// The histogram of the last output that counted. Empty before one.
     pub fn read_histogram(&self, gpu: &Gpu) -> Result<Histogram, GpuError> {
         let buffer = &self.histogram_read;
-        let (tx, rx) = mpsc::channel();
-        buffer.map_async(wgpu::MapMode::Read, .., move |r| {
-            let _ = tx.send(r);
-        });
-        gpu.device
-            .poll(wgpu::PollType::wait_indefinitely())
-            .map_err(|e| GpuError::Readback(e.to_string()))?;
-        rx.recv()
-            .map_err(|e| GpuError::Readback(e.to_string()))?
-            .map_err(|e| GpuError::Readback(e.to_string()))?;
-        let words: Vec<u32> = {
-            let mapped = buffer
-                .get_mapped_range(..)
-                .map_err(|e| GpuError::Readback(e.to_string()))?;
-            bytemuck::cast_slice(&mapped).to_vec()
+        let rx = match self.histogram_mapping.lock().expect("mapping").take() {
+            Some(rx) => rx,
+            None => map_to_read(buffer),
         };
+        // Answered already when a wait since `map_histogram` covered it:
+        // the frame's readback.
+        let answer = match rx.try_recv() {
+            Ok(answer) => answer,
+            Err(_) => {
+                gpu.device
+                    .poll(wgpu::PollType::wait_indefinitely())
+                    .map_err(|e| GpuError::Readback(e.to_string()))?;
+                rx.recv().map_err(|e| GpuError::Readback(e.to_string()))?
+            }
+        };
+        answer.map_err(|e| GpuError::Readback(e.to_string()))?;
+        let words = buffer
+            .get_mapped_range(..)
+            .map(|mapped| bytemuck::cast_slice::<u8, u32>(&mapped).to_vec())
+            .map_err(|e| GpuError::Readback(e.to_string()));
         buffer.unmap();
-        Ok(Histogram::from_words(&words))
+        Ok(Histogram::from_words(&words?))
+    }
+
+    /// Asks for the counts' readback now, so the next wait on the device
+    /// (the frame's readback) brings them too and [`Self::read_histogram`]
+    /// does not wait again. Call it after the output that counted.
+    pub fn map_histogram(&self) {
+        let mut mapping = self.histogram_mapping.lock().expect("mapping");
+        if mapping.is_none() {
+            *mapping = Some(map_to_read(&self.histogram_read));
+        }
+    }
+
+    /// Gives up a mapping asked for and never read (a render that failed
+    /// before its counts were read): the next output copies into the buffer,
+    /// which must not be mapped then.
+    fn drop_histogram_mapping(&self) {
+        if self
+            .histogram_mapping
+            .lock()
+            .expect("mapping")
+            .take()
+            .is_some()
+        {
+            self.histogram_read.unmap();
+        }
     }
 
     /// The bytes of the histogram and its readback buffer, inside DEV-01's
@@ -928,6 +961,7 @@ impl ViewStages {
         // One submit: the counts cleared, the pass, and the copy to read.
         let mut encoder = gpu.device.create_command_encoder(&Default::default());
         if self.counting {
+            self.drop_histogram_mapping();
             encoder.clear_buffer(&self.histogram, 0, None);
         }
         {
@@ -998,8 +1032,11 @@ impl ViewStages {
             width,
             height,
         };
-        let bytes = self.read(gpu, &[whole])?.remove(0);
-        Ok(bytes.as_chunks::<4>().0.to_vec())
+        let frame = self.frame.as_ref().expect("output first");
+        self.staging
+            .as_ref()
+            .expect("made with the frame")
+            .read_pixels(gpu, frame, whole)
     }
 
     /// `rects` of the frame, each RGBA8 row by row: at 1:1, the tiles to
@@ -1110,4 +1147,17 @@ pub(crate) fn map(
         .get_mapped_range(..)
         .map_err(|e| GpuError::Readback(e.to_string()))?;
     Ok(mapped.to_vec())
+}
+
+/// A buffer's mapping on its way: its callback's answer.
+type Mapping = mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>;
+
+/// Asks for `buffer` mapped for reading; the answer comes at a later wait on
+/// the device.
+fn map_to_read(buffer: &wgpu::Buffer) -> Mapping {
+    let (tx, rx) = mpsc::channel();
+    buffer.map_async(wgpu::MapMode::Read, .., move |r| {
+        let _ = tx.send(r);
+    });
+    rx
 }

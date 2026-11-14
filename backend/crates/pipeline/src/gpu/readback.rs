@@ -135,6 +135,34 @@ impl Staging {
         frame: &wgpu::Texture,
         rects: &[Rect],
     ) -> Result<Vec<Vec<u8>>, GpuError> {
+        self.read_as(gpu, frame, rects, |out: &mut Vec<u8>, row| {
+            out.extend_from_slice(row)
+        })
+    }
+
+    /// `rect` of `frame` as its pixels, row by row: copied once, from the
+    /// mapped buffer into what the caller keeps.
+    pub(crate) fn read_pixels(
+        &self,
+        gpu: &Gpu,
+        frame: &wgpu::Texture,
+        rect: Rect,
+    ) -> Result<Vec<[u8; 4]>, GpuError> {
+        let mut read = self.read_as(gpu, frame, &[rect], |out: &mut Vec<[u8; 4]>, row| {
+            out.extend_from_slice(row.as_chunks::<4>().0)
+        })?;
+        Ok(read.remove(0))
+    }
+
+    /// [`Self::read`], each rectangle's rows added to its `Vec` by `push`
+    /// (a row is `4 * width` bytes).
+    fn read_as<T>(
+        &self,
+        gpu: &Gpu,
+        frame: &wgpu::Texture,
+        rects: &[Rect],
+        push: impl Fn(&mut Vec<T>, &[u8]),
+    ) -> Result<Vec<Vec<T>>, GpuError> {
         let mut out = Vec::with_capacity(rects.len());
         let mut rest = rects;
         while !rest.is_empty() {
@@ -198,10 +226,11 @@ impl Staging {
                 for (rect, &(b, at)) in rest.iter().zip(&placed) {
                     let row = padded_row(rect.width, 4) as usize;
                     let line = rect.width as usize * 4;
-                    let mut pixels = Vec::with_capacity(line * rect.height as usize);
+                    let mut pixels =
+                        Vec::with_capacity(line * rect.height as usize / size_of::<T>().max(1));
                     for y in 0..rect.height as usize {
                         let start = at as usize + y * row;
-                        pixels.extend_from_slice(&mapped[b][start..start + line]);
+                        push(&mut pixels, &mapped[b][start..start + line]);
                     }
                     out.push(pixels);
                 }
