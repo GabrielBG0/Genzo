@@ -34,6 +34,7 @@ pub mod history;
 mod messages;
 mod prefetch;
 pub mod preview;
+pub mod settle;
 pub mod strip;
 pub mod thumbs;
 
@@ -161,6 +162,11 @@ pub struct Engine {
     exports: Arc<export::Exports>,
     /// Where events go.
     events: Option<EventSink>,
+    /// How long a gesture's input rests before its frame settles
+    /// ([`Self::with_rest_settle`]); `None`: only on its release.
+    rest: Option<std::time::Duration>,
+    /// Renders those frames.
+    settler: settle::Settler,
 }
 
 /// Receives every event, on the thread that produced it: a command's own,
@@ -273,6 +279,8 @@ impl Engine {
             preview_sink: None,
             histograms: Arc::default(),
             events: None,
+            rest: None,
+            settler: settle::Settler::default(),
         }
     }
 
@@ -287,6 +295,23 @@ impl Engine {
     /// [`Self::with_event_sink`] or [`Self::with_thumb_sink`].
     pub fn with_cache_dir(mut self, dir: PathBuf) -> Self {
         self.thumbs = Arc::new(Self::thumbs_in(Some(dir), &self.prefetch));
+        self
+    }
+
+    /// This engine, settling a gesture's frame once its input has rested
+    /// for [`settle::REST`], without waiting for its release (DEV-01,
+    /// *Re-runs, quality levels and generations*): a slider held still shows full quality.
+    /// The frame comes as any other, by `RenderFinished`. Off by default,
+    /// so a caller that steps through a gesture itself (a test, a
+    /// benchmark) gets no render it did not ask for.
+    pub fn with_rest_settle(self) -> Self {
+        self.with_rest_settle_after(settle::REST)
+    }
+
+    /// [`Self::with_rest_settle`] with another wait: for the tests.
+    #[doc(hidden)]
+    pub fn with_rest_settle_after(mut self, rest: std::time::Duration) -> Self {
+        self.rest = Some(rest);
         self
     }
 
@@ -434,6 +459,7 @@ impl Drop for Engine {
     fn drop(&mut self) {
         self.exports.stop();
         self.thumbs.stop();
+        self.settler.stop();
         let worker = self.worker.get_mut().ok().and_then(Option::take);
         if let Some(handle) = worker {
             self.prefetch.stop();

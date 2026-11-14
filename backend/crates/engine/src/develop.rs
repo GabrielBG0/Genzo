@@ -121,7 +121,7 @@ impl Session {
     }
 
     /// Whether the open photo's gesture is in progress.
-    fn in_gesture(&self) -> bool {
+    pub(crate) fn in_gesture(&self) -> bool {
         self.open
             .and_then(|id| self.edits.get(&id))
             .is_some_and(PhotoEdits::in_gesture)
@@ -488,7 +488,23 @@ impl Engine {
             frames: &self.frames,
             events: self.events.as_ref(),
         };
-        render_when(&to, recorded, phase, |_| true).map(|a| a.expect("always rendered"))
+        let a = render_when(&to, recorded, phase, |_| true).map(|a| a.expect("always rendered"))?;
+        // A gesture's frame settles once its input rests (`crate::settle`).
+        if phase.interactive()
+            && let Some(rest) = self.rest
+            && let (Some(f), Some(gpu)) = (&a.frame, &self.gpu)
+        {
+            self.settler
+                .rested(f.generation, rest, || crate::settle::Parts {
+                    gpu: gpu.clone(),
+                    session: self.session.clone(),
+                    generations: self.generations.clone(),
+                    histograms: self.histograms.clone(),
+                    frames: self.frames.clone(),
+                    events: self.events.clone(),
+                });
+        }
+        Ok(a)
     }
 }
 
@@ -517,6 +533,28 @@ pub(crate) fn render_when(
     phase: Phase,
     when: impl FnOnce(&Session) -> bool,
 ) -> Result<Option<Applied>, EngineError> {
+    render(to, recorded, phase, false, when)
+}
+
+/// Renders the open photo settled while its gesture goes on, its input at
+/// rest since interactive frame `generation` (`crate::settle`): only if
+/// that frame is still the last one issued and the gesture still in
+/// progress. The gesture's Alt preview stays, and nothing is recorded.
+pub(crate) fn render_at_rest(to: &To<'_>, generation: u64) -> Result<Option<Applied>, EngineError> {
+    render(to, false, Phase::End, true, |s| {
+        s.issued == generation && s.in_gesture()
+    })
+}
+
+/// [`render_when`]; `at_rest` is [`render_at_rest`]'s render, settled
+/// within a gesture.
+fn render(
+    to: &To<'_>,
+    recorded: bool,
+    phase: Phase,
+    at_rest: bool,
+    when: impl FnOnce(&Session) -> bool,
+) -> Result<Option<Applied>, EngineError> {
     let To {
         gpu,
         session,
@@ -533,8 +571,9 @@ pub(crate) fn render_when(
         }
         let generation = generations.next();
         s.issued = generation;
-        // A settled render shows no preview, whatever was set.
-        if phase == Phase::End || !s.in_gesture() {
+        // A settled render shows no preview, whatever was set, but the one
+        // of a gesture at rest: its Alt is still held.
+        if !at_rest && (phase == Phase::End || !s.in_gesture()) {
             s.overlay.preview = Preview::None;
         }
         let p = &s.edits[&id];
