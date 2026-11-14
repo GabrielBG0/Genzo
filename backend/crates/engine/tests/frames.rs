@@ -1,7 +1,7 @@
 //! Develop's frames in the binary tile protocol (DEV-01, *Readback*), as
 //! `Engine::frame` hands them to the frontend.
 //!
-//! - At Fit, settled: lossless 256 px tiles that put the read-back frame
+//! - At Fit, settled: one lossless tile that puts the read-back frame
 //!   together again, bit for bit, in the target's format.
 //! - At Fit, during a gesture: the half-size preview as JPEG bands, which
 //!   cover it.
@@ -57,7 +57,7 @@ fn assemble(tiles: &[(TileHeader, Vec<u8>)]) -> Vec<u8> {
 }
 
 #[test]
-fn a_fit_frame_goes_as_lossless_tiles_or_as_jpeg_bands() {
+fn a_fit_frame_goes_as_one_lossless_tile_or_as_jpeg_bands() {
     let _lock = ONE_DEVICE.lock().unwrap_or_else(|e| e.into_inner());
     let Some(engine) = engine() else { return };
     engine
@@ -72,11 +72,10 @@ fn a_fit_frame_goes_as_lossless_tiles_or_as_jpeg_bands() {
             panic!("a frame at Fit")
         };
         let t = tiles(&engine, &a);
-        assert!(t.len() > 1, "split in 256 px tiles");
+        assert_eq!(t.len(), 1, "one tile, the whole frame");
         assert!(t.iter().all(|(h, _)| h.format == format
             && (h.image_width, h.image_height) == *size
-            && h.rect.width <= 256
-            && h.rect.height <= 256));
+            && (h.rect.width, h.rect.height) == *size));
         let refs: Vec<_> = t.iter().map(|(h, p)| (*h, p.as_slice())).collect();
         assert_eq!(covered_area(&refs), u64::from(size.0 * size.1));
         assert_eq!(assemble(&t), pixels.as_flattened(), "bit for bit");

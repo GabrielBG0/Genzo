@@ -2,7 +2,7 @@
 //! *Readback*; `api::TileHeader`), kept by generation for the frontend to
 //! fetch.
 //!
-//! - **At Fit** the frame goes whole, in 256 px tiles, lossless. During a
+//! - **At Fit** the frame goes whole, as one lossless tile. During a
 //!   gesture it is the half-size preview, as JPEG bands (quality 80): the
 //!   frontend scales it into the viewport, as the frame's own size says.
 //! - **At 1:1** each visible tile goes on its own, placed by its rect in the
@@ -14,7 +14,7 @@
 use rayon::prelude::*;
 
 use genzo_color::output::Target;
-use genzo_model::frame::{PixelFormat, Rect, TILE_HEADER_LEN, TILE_SIZE, TileHeader};
+use genzo_model::frame::{PixelFormat, Rect, TILE_HEADER_LEN, TileHeader};
 use genzo_pipeline::gpu::develop::Readback;
 
 use crate::{PROXY_JPEG_QUALITY, PROXY_MAX_BANDS};
@@ -87,34 +87,30 @@ pub(crate) fn encode(
     Some((message, count))
 }
 
-/// A `size` RGBA8 frame for `target` as lossless 256 px tile messages,
-/// concatenated, and their count.
+/// A `size` RGBA8 frame for `target` as one lossless tile message, the whole
+/// frame, and the count: 1. A Fit frame is always sent whole, so cutting it
+/// into 256 px tiles only cost a copy here and an upload per tile in the
+/// frontend.
 pub(crate) fn whole(
     generation: u64,
     rgba: &[u8],
     size: (u32, u32),
     target: Target,
 ) -> (Vec<u8>, u32) {
-    let row = size.0 as usize * 4;
-    let rects = genzo_pipeline::tiles::grid(size.0, size.1, TILE_SIZE);
-    let mut message = Vec::with_capacity(rgba.len() + rects.len() * TILE_HEADER_LEN);
-    for rect in &rects {
-        let mut out = Vec::with_capacity(rect.width as usize * rect.height as usize * 4);
-        for y in rect.y..rect.y + rect.height {
-            let start = y as usize * row + rect.x as usize * 4;
-            out.extend_from_slice(&rgba[start..start + rect.width as usize * 4]);
-        }
-        let header = TileHeader {
-            generation,
-            rect: *rect,
-            mip_level: 0,
-            format: format(target),
-            image_width: size.0,
-            image_height: size.1,
-        };
-        message.extend_from_slice(&header.encode(&out));
-    }
-    (message, rects.len() as u32)
+    let header = TileHeader {
+        generation,
+        rect: Rect {
+            x: 0,
+            y: 0,
+            width: size.0,
+            height: size.1,
+        },
+        mip_level: 0,
+        format: format(target),
+        image_width: size.0,
+        image_height: size.1,
+    };
+    (header.encode(rgba), 1)
 }
 
 /// A `size` frame as horizontal JPEG bands, each a multiple of the 16-row
