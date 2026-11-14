@@ -103,25 +103,42 @@
   $effect(() => {
     const eng = engine;
     if (!eng) return;
-    return eng.onEvent(async (event) => {
+    // One fetch at a time, and of the frames that came meanwhile only the
+    // newest: a gesture's steps answer before their frames (DEV-01), so
+    // frames can come faster than the webview takes them in.
+    let wanted: number | null = null;
+    let fetching = false;
+    const take = async () => {
+      fetching = true;
+      try {
+        while (wanted !== null && viewport) {
+          const generation = wanted;
+          wanted = null;
+          try {
+            const bytes = await eng.fetchFrame(generation);
+            if (viewport && (await putFrame(viewport, bytes))) {
+              hasFrame = true;
+              schedule(generation);
+            }
+          } catch (e) {
+            // The engine keeps only its newest frames: one replaced before its
+            // fetch is gone, and a newer frame is on its way. The frame shown stays.
+            console.debug(`frame ${generation} not drawn`, e);
+          }
+        }
+      } finally {
+        fetching = false;
+      }
+    };
+    return eng.onEvent((event) => {
       // A render's frame, or a photo's embedded preview while it opens (DEV-01).
       const generation =
         event.type === 'renderFinished' ? event.generation : event.type === 'previewShown' ? event.generation : null;
       if (generation === null || !viewport) return;
       if (generation < viewport.generation) return;
       if (photo !== undefined && 'photo' in event && event.photo !== photo) return;
-      try {
-        const bytes = await eng.fetchFrame(generation);
-        if (!viewport) return;
-        if (await putFrame(viewport, bytes)) {
-          hasFrame = true;
-          schedule(generation);
-        }
-      } catch (e) {
-        // The engine keeps only its newest frames: one replaced before its
-        // fetch is gone, and a newer frame is on its way. The frame shown stays.
-        console.debug(`frame ${generation} not drawn`, e);
-      }
+      if (wanted === null || generation > wanted) wanted = generation;
+      if (!fetching) void take();
     });
   });
 
