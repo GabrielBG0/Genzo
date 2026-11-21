@@ -481,7 +481,9 @@ impl ViewStages {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::R32Uint,
-            usage: wgpu::TextureUsages::STORAGE_BINDING | wgpu::TextureUsages::COPY_SRC,
+            usage: wgpu::TextureUsages::STORAGE_BINDING
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         }));
         self.staging = Some(Staging::new(gpu, size));
@@ -980,6 +982,14 @@ impl ViewStages {
             );
         }
         gpu.queue.submit([encoder.finish()]);
+    }
+
+    /// The frame texture (packed RGBA8, one `R32Uint` texel per pixel) and
+    /// the size of what it holds, for presenting it natively
+    /// ([`super::surface::NativeSurface`]). The texture may be larger than
+    /// the frame; the frame is its top left.
+    pub fn presentable(&self) -> Option<(&wgpu::Texture, (u32, u32))> {
+        self.frame.as_ref().map(|f| (f, self.frame_size()))
     }
 
     /// The size of what the frame holds: the view's, or half of it rounded

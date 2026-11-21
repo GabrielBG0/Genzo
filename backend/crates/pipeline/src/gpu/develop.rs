@@ -205,6 +205,9 @@ pub struct Develop {
     overlay: Overlay,
     /// Times each render on the GPU, with timestamp queries.
     timer: Option<SpanTimer>,
+    /// The frame goes to a native surface: a drag renders at full size, not
+    /// the half-size preview that exists to shrink the readback.
+    native: bool,
 }
 
 #[derive(Debug)]
@@ -248,6 +251,7 @@ impl Develop {
             reran: Reran::default(),
             overlay: Overlay::default(),
             timer: SpanTimer::new(gpu),
+            native: false,
         }
     }
 
@@ -623,7 +627,7 @@ impl Develop {
         }
 
         let counting = matches!(view, ViewSpec::Fit(_));
-        let half = interactive && counting;
+        let half = interactive && counting && !self.native;
         let dither = dithers(pyramid, edited);
         let provisional =
             p.src.is_none() && plan_view(size, &pyramid.level_sizes(), frame, view).level == 0;
@@ -824,6 +828,16 @@ pub enum Readback {
 }
 
 impl Develop {
+    /// Whether renders go to a native surface ([`super::surface`]).
+    pub fn set_native(&mut self, native: bool) {
+        self.native = native;
+    }
+
+    /// The last render's frame texture and size, for presenting it.
+    pub fn presentable(&self) -> Option<(&wgpu::Texture, (u32, u32))> {
+        self.view.presentable()
+    }
+
     /// Asks for the last render's counts and GPU time now, so the wait of
     /// [`Develop::read_back`] brings them with the frame and
     /// [`Develop::histogram`] and [`Develop::gpu_ms`] do not wait again:

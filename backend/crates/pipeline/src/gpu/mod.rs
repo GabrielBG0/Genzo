@@ -12,6 +12,7 @@ pub mod level0;
 pub mod raw_stages;
 pub mod readback;
 pub mod spike;
+pub mod surface;
 pub mod synthetic;
 pub mod thread;
 pub mod timer;
@@ -115,6 +116,10 @@ pub struct Gpu {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
     pub info: GpuInfo,
+    /// What a native surface is made from and configured against
+    /// ([`surface::NativeSurface`]).
+    pub instance: wgpu::Instance,
+    pub adapter: wgpu::Adapter,
 }
 
 impl Gpu {
@@ -181,6 +186,8 @@ impl Gpu {
         let gpu = Self {
             device,
             queue,
+            instance: instance.clone(),
+            adapter,
             info: GpuInfo {
                 name: raw.name.clone(),
                 backend: format!("{:?}", raw.backend),
