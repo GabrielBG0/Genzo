@@ -1,0 +1,22 @@
+<!doctype html><html><body style="margin:0;background:transparent;font:14px sans-serif;overflow:hidden">
+<div id="hole" style="position:fixed;top:60px;right:60px;bottom:60px;background:transparent;outline:2px solid #fff"></div>
+<div style="position:fixed;left:0;right:0;top:0;height:60px;background:#202020"></div>
+<div style="position:fixed;left:0;right:0;bottom:0;height:60px;background:#202020"></div>
+<div style="position:fixed;right:0;top:0;bottom:0;width:60px;background:#202020"></div>
+<div id="panel" style="position:fixed;left:0;top:0;bottom:0;background:#303030;color:#fff;padding:12px;box-sizing:border-box">panel (animated)</div>
+<script>
+ // The left panel's width swings between 200 and 360 px, 1.5 s a cycle, as a
+ // user dragging a splitter would; the hole follows, and its rect goes to the
+ // engine on every frame it changes.
+ const hole = document.getElementById('hole'), panel = document.getElementById('panel');
+ let last = '';
+ function frame(now) {
+   const w = Math.round(200 + 80 * (1 + Math.sin(now / 1500 * 2 * Math.PI)));
+   panel.style.width = w + 'px'; hole.style.left = w + 'px';
+   const r = hole.getBoundingClientRect(), d = devicePixelRatio;
+   const k = [r.left * d, r.top * d, r.width * d, r.height * d].map(Math.round).join(',');
+   if (k !== last) { last = k; window.__TAURI__.core.invoke('hole_rect', { x: Math.round(r.left * d), y: Math.round(r.top * d), w: Math.round(r.width * d), h: Math.round(r.height * d) }); }
+   requestAnimationFrame(frame);
+ }
+ requestAnimationFrame(frame);
+</script></body></html>

@@ -43,6 +43,7 @@ use super::develop::{Develop, DevelopError, Photo, PhotoInfo, Readback, Reran};
 use super::export::{ExportInputs, ExportStages, REGION, Stage9, resized};
 use super::raw_stages::{Level1, Level1Build, TileConfig};
 use super::spike::{BayerImage, Frame, SpikeParams, SpikePipeline};
+use super::surface::{NativeSurface, Pacing, Presented};
 use super::{AdapterChoice, Gpu, GpuError, GpuInfo};
 use crate::camera_color::CameraTransform;
 use crate::histogram::{Histogram, Overlay};
@@ -117,6 +118,25 @@ enum Request {
     CancelExport {
         job: u64,
         reply: Reply<()>,
+    },
+    /// Makes a native surface on the window and presents Develop frames to
+    /// it from now on (docs/native-surface-spike.md).
+    AttachSurface {
+        surface: Box<wgpu::Surface<'static>>,
+        size: (u32, u32),
+        pacing: Pacing,
+        color_space: wgpu::SurfaceColorSpace,
+        reply: Reply<String>,
+    },
+    /// Drops the surface, before its window is destroyed.
+    DetachSurface {
+        reply: Reply<()>,
+    },
+    /// The window's size and where the photo's frame goes in it, in device
+    /// pixels.
+    SurfaceLayout {
+        size: (u32, u32),
+        origin: (i32, i32),
     },
 }
 
@@ -254,6 +274,9 @@ pub struct DevelopFrame {
     pub provisional: bool,
     /// Its GPU time in ms ([`Develop::gpu_ms`]), with timestamp queries.
     pub gpu_ms: Option<f64>,
+    /// Set when the frame went to the native surface: `readback` then holds
+    /// the frame's size and no pixels.
+    pub presented: Option<Presented>,
 }
 
 /// What the white balance picker found ([`RenderThread::pick`]).
@@ -277,9 +300,27 @@ pub type Pending = Receiver<Result<Option<DevelopFrame>, GpuError>>;
 pub struct RenderThread {
     tx: Option<Sender<Request>>,
     info: GpuInfo,
+    /// The instance the device was opened from, for making surfaces.
+    instance: wgpu::Instance,
     handle: Option<JoinHandle<()>>,
     /// Photo switches in progress: no export region starts meanwhile.
     exports_paused: Arc<AtomicUsize>,
+}
+
+/// Makes surfaces from the render thread's instance, on whichever thread
+/// holds it ([`RenderThread::surface_maker`]).
+#[derive(Debug, Clone)]
+pub struct SurfaceMaker(wgpu::Instance);
+
+impl SurfaceMaker {
+    pub fn create(
+        &self,
+        target: wgpu::SurfaceTarget<'static>,
+    ) -> Result<wgpu::Surface<'static>, GpuError> {
+        self.0
+            .create_surface(target)
+            .map_err(|e| GpuError::Device(format!("surface: {e}")))
+    }
 }
 
 /// Held while a photo switch runs: [`RenderThread::pause_exports`].
@@ -303,7 +344,7 @@ impl RenderThread {
             .name("genzo-render".into())
             .spawn(move || match Gpu::open(choice) {
                 Ok(gpu) => {
-                    let _ = ready_tx.send(Ok(gpu.info.clone()));
+                    let _ = ready_tx.send(Ok((gpu.info.clone(), gpu.instance.clone())));
                     run(gpu, rx, paused);
                 }
                 Err(e) => {
@@ -311,10 +352,11 @@ impl RenderThread {
                 }
             })
             .map_err(|e| GpuError::Device(e.to_string()))?;
-        let info = ready_rx.recv().map_err(|_| GpuError::ThreadGone)??;
+        let (info, instance) = ready_rx.recv().map_err(|_| GpuError::ThreadGone)??;
         Ok(Self {
             tx: Some(tx),
             info,
+            instance,
             handle: Some(handle),
             exports_paused,
         })
@@ -517,6 +559,55 @@ impl RenderThread {
     }
 
     /// [`Self::submit`] and wait.
+    /// Makes a surface on `target`, a window the shell holds. Call it on the
+    /// thread the platform wants: on macOS (Metal) wgpu panics anywhere but
+    /// the main thread, so the shell calls it from its setup, and gives the
+    /// surface to [`Self::attach_surface`].
+    pub fn create_surface(
+        &self,
+        target: wgpu::SurfaceTarget<'static>,
+    ) -> Result<wgpu::Surface<'static>, GpuError> {
+        self.surface_maker().create(target)
+    }
+
+    /// What makes surfaces, to carry to the thread that must make them.
+    pub fn surface_maker(&self) -> SurfaceMaker {
+        SurfaceMaker(self.instance.clone())
+    }
+
+    /// Presents Develop frames to `surface` from now on, without reading
+    /// them back. Fails if the device cannot present to it. Returns what the
+    /// surface offers and what it was asked for.
+    pub fn attach_surface(
+        &self,
+        surface: wgpu::Surface<'static>,
+        size: (u32, u32),
+        pacing: Pacing,
+        color_space: wgpu::SurfaceColorSpace,
+    ) -> Result<String, GpuError> {
+        let (reply, rx) = mpsc::channel();
+        self.send(Request::AttachSurface {
+            surface: Box::new(surface),
+            size,
+            pacing,
+            color_space,
+            reply,
+        })?;
+        rx.recv().map_err(|_| GpuError::ThreadGone)?
+    }
+
+    /// Drops the surface. Call it before the window is destroyed.
+    pub fn detach_surface(&self) -> Result<(), GpuError> {
+        let (reply, rx) = mpsc::channel();
+        self.send(Request::DetachSurface { reply })?;
+        rx.recv().map_err(|_| GpuError::ThreadGone)?
+    }
+
+    /// The window's size and the photo frame's place in it, in device pixels.
+    pub fn layout_surface(&self, size: (u32, u32), origin: (i32, i32)) -> Result<(), GpuError> {
+        self.send(Request::SurfaceLayout { size, origin })
+    }
+
     pub fn develop(&self, request: DevelopRequest) -> Result<Option<DevelopFrame>, GpuError> {
         self.submit(request)?
             .recv()
@@ -673,6 +764,8 @@ fn run(gpu: Gpu, rx: Receiver<Request>, exports_paused: Arc<AtomicUsize>) {
     let mut last: Option<(u64, u64)> = None;
     // Exports, first asked first rendered.
     let mut exports: VecDeque<Exporting> = VecDeque::new();
+    // The native surface, if the shell made one ([`RenderThread::attach_surface`]).
+    let mut surface: Option<NativeSurface> = None;
     // The stages the last export used, for the next (`budget::EXPORT`).
     let mut spare_stages: Option<ExportStages> = None;
     loop {
@@ -882,7 +975,7 @@ fn run(gpu: Gpu, rx: Receiver<Request>, exports_paused: Arc<AtomicUsize>) {
                         if result.is_ok()
                             && let Some(h) = held.take()
                         {
-                            held = develop_render(&gpu, d, h, &mut last);
+                            held = develop_render(&gpu, d, h, &mut last, &mut surface);
                         }
                     }
                     let _ = reply.send(result);
@@ -986,13 +1079,55 @@ fn run(gpu: Gpu, rx: Receiver<Request>, exports_paused: Arc<AtomicUsize>) {
                     open = Some(id);
                     let _ = reply.send(result.map(|()| true));
                 }
+                Request::AttachSurface {
+                    surface: new_surface,
+                    size,
+                    pacing,
+                    color_space,
+                    reply,
+                } => {
+                    let made = guarded(&gpu, || {
+                        NativeSurface::new(&gpu, *new_surface, size, pacing, color_space)
+                    });
+                    let _ = reply.send(made.map(|s| {
+                        let info = s.info.clone();
+                        surface = Some(s);
+                        info
+                    }));
+                }
+                Request::DetachSurface { reply } => {
+                    surface = None;
+                    let _ = reply.send(Ok(()));
+                }
+                Request::SurfaceLayout { size, origin } => {
+                    if let Some(s) = surface.as_mut() {
+                        // A layout change repaints at once, from the frame
+                        // held, so the window never shows an empty swapchain
+                        // while the next render is on its way. Guarded: a
+                        // failed swapchain allocation must not end the thread.
+                        let repainted = guarded(&gpu, || {
+                            s.resize(&gpu, size);
+                            s.origin = origin;
+                            if let Some((texture, frame_size)) =
+                                develop.as_ref().and_then(Develop::presentable)
+                            {
+                                s.present(&gpu, texture, frame_size)?;
+                            }
+                            Ok(())
+                        });
+                        if repainted.is_err() && s.lost {
+                            surface = None;
+                        }
+                    }
+                }
                 Request::Develop { request, reply } => {
                     drop_held(&mut held);
                     let Some(d) = develop.as_mut() else {
                         let _ = reply.send(Ok(None));
                         continue;
                     };
-                    held = develop_render(&gpu, d, Held { request, reply }, &mut last);
+                    held =
+                        develop_render(&gpu, d, Held { request, reply }, &mut last, &mut surface);
                 }
             }
         }
@@ -1019,8 +1154,10 @@ fn develop_render(
     d: &mut Develop,
     h: Held,
     last: &mut Option<(u64, u64)>,
+    surface: &mut Option<NativeSurface>,
 ) -> Option<Held> {
     let r = &*h.request;
+    d.set_native(surface.is_some());
     let result = guarded(gpu, || {
         d.set_overlay(r.overlay);
         let reran = match d.render(gpu, &r.edit, r.view, r.target, r.phase) {
@@ -1028,13 +1165,39 @@ fn develop_render(
             reran => reran.map_err(develop_error)?,
         };
         d.map_readbacks();
+        // The counts and the GPU time first, so a failed present cannot leave
+        // their mappings open for the next render.
+        let histogram = d.histogram(gpu)?;
+        let gpu_ms = d.gpu_ms(gpu)?;
+        // With a native surface the frame is drawn where it is: no readback.
+        let (readback, presented) = match surface.as_mut() {
+            Some(s) => {
+                let (texture, size) = d
+                    .presentable()
+                    .ok_or_else(|| GpuError::Request("no frame to present".into()))?;
+                let presented = s.present(gpu, texture, size);
+                if s.lost {
+                    *surface = None;
+                }
+                (
+                    Readback::Frame {
+                        size,
+                        half: false,
+                        pixels: Vec::new(),
+                    },
+                    Some(presented?),
+                )
+            }
+            None => (d.read_back(gpu)?, None),
+        };
         Ok(Some(DevelopFrame {
             generation: r.generation,
-            readback: d.read_back(gpu)?,
-            histogram: d.histogram(gpu)?,
+            readback,
+            histogram,
             reran,
             provisional: d.provisional(),
-            gpu_ms: d.gpu_ms(gpu)?,
+            gpu_ms,
+            presented,
         }))
     });
     match result {

@@ -1,0 +1,17 @@
+# Throwaway probe for docs/native-surface-spike.md, probe 1: does a wgpu
+# swapchain on the window's HWND show through a transparent WebView2 hosted
+# the way Tauri hosts it (tao window, wry child HWND)? Its own workspace;
+# versions match shell/Cargo.lock so the answer carries over.
+[package]
+name = "surface-probe"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+tao = "=0.37.1"
+wry = "=0.57.0"
+wgpu = { version = "=30.0.1", default-features = false, features = ["wgsl", "dx12", "vulkan", "std"] }
+pollster = "0.4"
+
+[workspace]

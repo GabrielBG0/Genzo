@@ -1,0 +1,96 @@
+name: Surface kit
+
+# Builds the native-surface kit (scripts/surface-kit, docs/native-surface-spike.md)
+# for a tester with a Mac. Run it from the Actions tab. The build is unsigned;
+# run.sh clears the download flag on its own folder so it starts.
+#
+# With "publish" ticked, the kit is attached to a pre-release tagged
+# surface-<commit>: a link the tester can download from without a GitHub
+# account. Otherwise it is only a workflow artifact.
+
+on:
+  # TEMPORARY: a dispatch workflow only runs once it is on main, so while the
+  # spike's branch is open a push to it builds and publishes the kit. Remove
+  # this trigger (and the push case in the release job) before merging.
+  push:
+    branches: [native-surface-spike]
+    paths:
+      - scripts/surface-kit/**
+      - spikes/tauri-surface-probe/**
+      - backend/crates/pipeline/**
+      - .github/workflows/surface-kit.yml
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish the kit as a pre-release (surface-<commit>)
+        type: boolean
+        default: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  kit:
+    name: Kit (macos-15)
+    runs-on: macos-15
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "13.0"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: spikes/tauri-surface-probe
+      - run: ./scripts/surface-kit/make-kit.sh
+      # The runner has no usable display, so the app is only checked to exist.
+      - name: Smoke test
+        run: |
+          kit="$(ls -d dist/genzo-surface-*/ | head -1)"
+          test -x "$kit/bin/tauri-surface-probe"
+          file "$kit/bin/tauri-surface-probe"
+          bash -n "$kit/run.sh"
+          cat "$kit/VERSION"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kit-macos
+          path: dist/genzo-surface-*.tar.gz
+          if-no-files-found: error
+
+  release:
+    name: Pre-release
+    if: inputs.publish || github.event_name == 'push'
+    needs: kit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: kits
+          merge-multiple: true
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -l kits
+          commit="$(git rev-parse --short=7 HEAD)"
+          tag="surface-$commit"
+          {
+            echo "Native-surface kit for commit \`$commit\`. A test build, unsigned, not a Genzo release."
+            echo
+            echo "Runs on macOS 13 or newer on Apple silicon. Unpack it, then run \`./run.sh\` in Terminal."
+            echo "It takes 6 to 8 minutes and writes \`genzo-surface-results-macos-$commit-<time>.tar.gz\` to send back."
+            echo
+            echo '```'
+            cat scripts/surface-kit/README.txt
+            echo '```'
+          } > notes.md
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" kits/* --clobber
+          else
+            gh release create "$tag" kits/* --target "$GITHUB_SHA" --prerelease \
+              --title "Surface kit $commit" --notes-file notes.md
+          fi

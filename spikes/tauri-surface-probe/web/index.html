@@ -1,0 +1,12 @@
+<!doctype html><html><body style="margin:0;background:transparent;font:14px sans-serif">
+<div id="hole" style="position:fixed;left:200px;top:60px;right:60px;bottom:60px;background:transparent;outline:2px solid #fff"></div>
+<div style="position:fixed;left:0;right:0;top:0;height:60px;background:#202020"></div>
+<div style="position:fixed;left:0;right:0;bottom:0;height:60px;background:#202020"></div>
+<div style="position:fixed;right:0;top:0;bottom:0;width:60px;background:#202020"></div>
+<div style="position:fixed;left:0;top:0;width:200px;bottom:0;background:#303030;color:#fff;padding:12px">panel (opaque)</div>
+<button id="b" style="position:fixed;left:240px;top:100px;padding:10px 16px;background:#e05;color:#fff;border:0">over the hole</button>
+<div style="position:fixed;left:240px;bottom:100px;width:300px;height:60px;background:rgba(255,255,255,.35);color:#000;padding:8px">half-transparent over the hole</div>
+<script>
+ let n = 0;
+ document.getElementById('b').onclick = () => window.__TAURI__.core.invoke('clicked', { n: ++n });
+</script></body></html>
