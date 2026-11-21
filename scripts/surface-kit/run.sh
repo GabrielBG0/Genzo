@@ -127,12 +127,16 @@ capture() {
   if [ -n "$scale" ] && [ -n "$x" ] && [ -n "$w" ]; then
     region="$(perl -e 'printf("%d,%d,%d,%d", $ARGV[0]/$ARGV[4], $ARGV[1]/$ARGV[4], $ARGV[2]/$ARGV[4], $ARGV[3]/$ARGV[4])' "$x" "$y" "$w" "$h" "$scale")"
   fi
-  if [ -n "$region" ]; then
-    screencapture -x -R"$region" "$png" 2>/dev/null || screencapture -x "$png" 2>/dev/null
+  # Only ever the test window: with no usable position, no screenshot is taken
+  # (a whole-screen one could show other windows).
+  if [ -z "$region" ]; then
+    echo "no screenshot: the window's position was not printed ($png)" | tee -a "$OUT/screenshot-errors.txt"
+    return
+  fi
+  if screencapture -x -R"$region" "$png" 2>>"$OUT/screenshot-errors.txt"; then
     echo "screenshot of region $region"
   else
-    screencapture -x "$png" 2>/dev/null
-    echo "screenshot of the whole screen"
+    echo "no screenshot: screencapture failed for region $region ($png)" | tee -a "$OUT/screenshot-errors.txt"
   fi
 }
 
@@ -169,7 +173,14 @@ scrub < "$OUT/d-follow-layout.txt" > "$OUT/d-follow-layout.s" && mv "$OUT/d-foll
 # ---------------------------------------------------------------- 4. pack
 say "Packing"
 ARCHIVE="$KIT/genzo-surface-results-macos-$COMMIT-$STAMP.tar.gz"
-COPYFILE_DISABLE=1 tar -czf "$ARCHIVE" -C "$KIT" "$(basename "$OUT")"
+if ! COPYFILE_DISABLE=1 tar -czf "$ARCHIVE" -C "$KIT" "$(basename "$OUT")"; then
+  echo
+  echo "Packing failed (is the disk full?). The results are in this folder:"
+  echo "  $OUT"
+  echo "Free some space and run this to pack them again:"
+  echo "  tar -czf results.tar.gz -C \"$KIT\" \"$(basename "$OUT")\""
+  exit 1
+fi
 echo
 echo "Done. Please send this file back:"
 echo "  $ARCHIVE"

@@ -14,14 +14,10 @@ tauri-build = "2.7"
 # macos-private-api: a transparent webview on macOS needs it (and the matching
 # macOSPrivateApi in tauri.conf.json); the feature does nothing elsewhere.
 tauri = { version = "=2.12.3", features = ["unstable", "macos-private-api"] }
-wgpu = { version = "=30.0.1", default-features = false, features = ["wgsl", "dx12", "vulkan", "std"] }
+wgpu = { version = "=30.0.1", default-features = false, features = ["wgsl", "dx12", "metal", "vulkan", "std"] }
 pollster = "0.4"
 genzo-pipeline = { path = "../../backend/crates/pipeline" }
 genzo-model = { path = "../../backend/crates/model" }
 genzo-color = { path = "../../backend/crates/color" }
 
 [workspace]
-
-# As in shell/Cargo.toml.
-[patch.crates-io]
-rawler = { path = "../../backend/vendor/rawler" }

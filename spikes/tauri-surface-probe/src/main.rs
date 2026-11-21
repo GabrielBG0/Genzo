@@ -5,8 +5,7 @@
 //! real render thread on a synthetic RAW and drags the exposure, either
 //! presenting each frame to the window's surface (`HARNESS=native`, the
 //! default) or reading it back as today (`HARNESS=readback`), and prints the
-//! time per step. `HARNESS=clear` is probe 1b's cycling clear color alone.
-//!
+//! time per step. //!
 //! Env: HARNESS, STEPS (default 300), PHOTO_MP (default 24),
 //! GENZO_PRESENT=fifo|mailbox|immediate, GENZO_ADAPTER=software,
 //! WEBVIEW2_USER_DATA_FOLDER (a fresh folder if 0x800700AA appears).
@@ -92,9 +91,6 @@ fn percentile(v: &mut [f64], p: f64) -> f64 {
 
 fn harness(window: tauri::Window) {
     let mode = std::env::var("HARNESS").unwrap_or_else(|_| "native".into());
-    if mode == "clear" {
-        return clear_loop(window);
-    }
     if mode == "color" {
         return color_test(window);
     }
@@ -292,20 +288,6 @@ fn harness(window: tauri::Window) {
     std::process::exit(0);
 }
 
-/// Probe 1b's loop: a cycling clear color on the window's own surface.
-fn clear_loop(window: tauri::Window) {
-    let t = RenderThread::spawn(AdapterChoice::from_env()).expect("render thread");
-    let inner = window.inner_size().unwrap();
-    t.attach_surface(
-        surface_on_main(&window, &t),
-        (inner.width, inner.height),
-        Pacing::from_env(),
-        color_space_from_env(),
-    )
-    .expect("attach");
-    println!("clear loop is not part of the harness any more; use probe 1b's results");
-    std::thread::sleep(Duration::from_secs(5));
-}
 
 /// `COLORSPACE=auto|srgb|p3`: how the swapchain is tagged.
 fn color_space_from_env() -> wgpu::SurfaceColorSpace {

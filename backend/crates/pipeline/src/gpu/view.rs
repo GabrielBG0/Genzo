@@ -181,6 +181,10 @@ pub struct ViewStages {
     /// What the frame holds: 1 for the view, 2 for the half-size drag
     /// preview in its top left ([`Self::output_half`]).
     frame_scale: u32,
+    /// The size of what the frame texture last held, set only when an output
+    /// writes it: a whole-photo count at another size changes [`Self::size`]
+    /// but not the frame.
+    written: (u32, u32),
     size: (u32, u32),
     /// How the view samples the pyramid (the anchored view's sampling,
     /// [`ViewSpec::anchored`]), for placing the base layer, and the view's
@@ -296,6 +300,7 @@ impl ViewStages {
             frame: None,
             staging: None,
             frame_scale: 1,
+            written: (0, 0),
             size: (0, 0),
             sampling: None,
             offset: (0, 0),
@@ -901,10 +906,11 @@ impl ViewStages {
         write: bool,
     ) {
         assert!(self.sampled.is_some(), "sample first");
+        let out = (self.size.0.div_ceil(scale), self.size.1.div_ceil(scale));
         if write {
             self.frame_scale = scale;
+            self.written = out;
         }
-        let out = (self.size.0.div_ceil(scale), self.size.1.div_ceil(scale));
         let from = target.from_xyz_oklab();
         let c = target.compression();
         let lms = genzo_color::mat_mul(&genzo_color::output::OKLAB_M1, &target.to_xyz());
@@ -989,7 +995,7 @@ impl ViewStages {
     /// ([`super::surface::NativeSurface`]). The texture may be larger than
     /// the frame; the frame is its top left.
     pub fn presentable(&self) -> Option<(&wgpu::Texture, (u32, u32))> {
-        self.frame.as_ref().map(|f| (f, self.frame_size()))
+        self.frame.as_ref().map(|f| (f, self.written))
     }
 
     /// The size of what the frame holds: the view's, or half of it rounded

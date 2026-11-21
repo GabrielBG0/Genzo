@@ -75,6 +75,10 @@ pub struct Presented {
     pub acquire_ms: f64,
     /// Recording, submitting and handing the image to the display.
     pub submit_ms: f64,
+    /// False when nothing was shown this time (the swapchain was outdated and
+    /// is configured again, or the window is hidden or the wait timed out):
+    /// the next frame or layout shows.
+    pub shown: bool,
 }
 
 #[repr(C)]
@@ -96,6 +100,8 @@ pub struct NativeSurface {
     pub origin: (i32, i32),
     /// What the surface offers and what it was asked for, for reports.
     pub info: String,
+    /// The surface was lost: drop it and attach a new one.
+    pub lost: bool,
 }
 
 impl NativeSurface {
@@ -240,7 +246,16 @@ impl NativeSurface {
             uniforms,
             origin: (0, 0),
             info,
+            lost: false,
         })
+    }
+
+    fn skipped(&self, since: Instant) -> Presented {
+        Presented {
+            acquire_ms: since.elapsed().as_secs_f64() * 1e3,
+            submit_ms: 0.0,
+            shown: false,
+        }
     }
 
     /// The window's size changed.
@@ -264,13 +279,31 @@ impl NativeSurface {
     ) -> Result<Presented, GpuError> {
         let t0 = Instant::now();
         let image = match self.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(t)
-            | wgpu::CurrentSurfaceTexture::Suboptimal(t) => t,
-            // Lost, outdated, timed out: configure again and let the next
-            // frame show.
-            _ => {
+            wgpu::CurrentSurfaceTexture::Success(t) => t,
+            // Usable, but the window changed under it: show this one, and
+            // configure again for the next.
+            wgpu::CurrentSurfaceTexture::Suboptimal(t) => {
                 self.surface.configure(&gpu.device, &self.config);
-                return Err(GpuError::Request("surface not ready".into()));
+                t
+            }
+            // The configuration is out of date (a resize the layout has not
+            // caught up with): configure again, nothing to show now.
+            wgpu::CurrentSurfaceTexture::Outdated => {
+                self.surface.configure(&gpu.device, &self.config);
+                return Ok(self.skipped(t0));
+            }
+            // Hidden or slow: nothing to show, nothing to repair.
+            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
+                return Ok(self.skipped(t0));
+            }
+            // Reconfiguring does not bring a lost surface back: the shell
+            // makes a new one ([`super::thread::SurfaceMaker`]) and attaches it.
+            wgpu::CurrentSurfaceTexture::Lost => {
+                self.lost = true;
+                return Err(GpuError::Device("the surface was lost".into()));
+            }
+            wgpu::CurrentSurfaceTexture::Validation => {
+                return Err(GpuError::Request("surface validation error".into()));
             }
         };
         let acquire_ms = t0.elapsed().as_secs_f64() * 1e3;
@@ -324,6 +357,7 @@ impl NativeSurface {
         Ok(Presented {
             acquire_ms,
             submit_ms: t1.elapsed().as_secs_f64() * 1e3,
+            shown: true,
         })
     }
 }

@@ -1101,15 +1101,22 @@ fn run(gpu: Gpu, rx: Receiver<Request>, exports_paused: Arc<AtomicUsize>) {
                 }
                 Request::SurfaceLayout { size, origin } => {
                     if let Some(s) = surface.as_mut() {
-                        s.resize(&gpu, size);
-                        s.origin = origin;
                         // A layout change repaints at once, from the frame
                         // held, so the window never shows an empty swapchain
-                        // while the next render is on its way.
-                        if let Some((texture, frame_size)) =
-                            develop.as_ref().and_then(Develop::presentable)
-                        {
-                            let _ = s.present(&gpu, texture, frame_size);
+                        // while the next render is on its way. Guarded: a
+                        // failed swapchain allocation must not end the thread.
+                        let repainted = guarded(&gpu, || {
+                            s.resize(&gpu, size);
+                            s.origin = origin;
+                            if let Some((texture, frame_size)) =
+                                develop.as_ref().and_then(Develop::presentable)
+                            {
+                                s.present(&gpu, texture, frame_size)?;
+                            }
+                            Ok(())
+                        });
+                        if repainted.is_err() && s.lost {
+                            surface = None;
                         }
                     }
                 }
@@ -1158,20 +1165,27 @@ fn develop_render(
             reran => reran.map_err(develop_error)?,
         };
         d.map_readbacks();
+        // The counts and the GPU time first, so a failed present cannot leave
+        // their mappings open for the next render.
+        let histogram = d.histogram(gpu)?;
+        let gpu_ms = d.gpu_ms(gpu)?;
         // With a native surface the frame is drawn where it is: no readback.
         let (readback, presented) = match surface.as_mut() {
             Some(s) => {
                 let (texture, size) = d
                     .presentable()
                     .ok_or_else(|| GpuError::Request("no frame to present".into()))?;
-                let presented = s.present(gpu, texture, size)?;
+                let presented = s.present(gpu, texture, size);
+                if s.lost {
+                    *surface = None;
+                }
                 (
                     Readback::Frame {
                         size,
                         half: false,
                         pixels: Vec::new(),
                     },
-                    Some(presented),
+                    Some(presented?),
                 )
             }
             None => (d.read_back(gpu)?, None),
@@ -1179,10 +1193,10 @@ fn develop_render(
         Ok(Some(DevelopFrame {
             generation: r.generation,
             readback,
-            histogram: d.histogram(gpu)?,
+            histogram,
             reran,
             provisional: d.provisional(),
-            gpu_ms: d.gpu_ms(gpu)?,
+            gpu_ms,
             presented,
         }))
     });

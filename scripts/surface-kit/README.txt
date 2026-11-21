@@ -47,5 +47,6 @@ What is collected: macOS version, CPU model, RAM size, GPU and display model
 and resolution, whether Low Power Mode is on, the timings, screenshots of the
 test window only, and the test program's own text output. No user name, host
 name, other windows, files or network information. (The screenshots cover only
-the test window's area, but anything that lies over it at that moment would be
-in it: please keep other windows away from it.)
+the test window's area (no screenshot is taken if its position is unknown),
+but anything that lies over it at that moment would be in it: please keep
+other windows away from it.)
